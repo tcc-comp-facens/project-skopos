@@ -1,0 +1,63 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# .gitignore — projeto-skopos (monorepo backend + frontend)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Ambiente / Credenciais ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Pastas ocultas (ferramentas, cache, config local) ─────────────────────────
+.hypothesis/
+.pytest_cache/
+.vscode/
+.kiro/
+
+# ── Sistema operacional ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editores / IDEs ──────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+
+# ── Python (backend) ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+htmlcov/
+.coverage
+coverage.xml
+dist/
+build/
+*.egg-info/
+*.egg
+
+# ── Node.js (frontend) ───────────────────────────────────────────────────────
+node_modules/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Cache DataSUS (dados baixados pelo download_pysus.py) ────────────────────
+datasus_cache/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+neo4j_data/
+neo4j_logs/
+neo4j_import/
+neo4j_plugins/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
