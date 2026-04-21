@@ -2,44 +2,145 @@
 
 ## Sumário
 
-1. [Modelo BDI](#modelo-bdi-belief-desire-intention)
-2. [Classe Base AgenteBDI](#classe-base-agentebdi)
-3. [Agentes Especializados](#agentes-especializados-8-por-topologia)
-4. [Arquitetura Estrela](#arquitetura-estrela)
-5. [Arquitetura Hierárquica](#arquitetura-hierárquica)
-6. [Regras de Negócio](#regras-de-negócio)
+1. [O que é um Agente?](#o-que-é-um-agente)
+2. [Modelo BDI](#modelo-bdi-belief-desire-intention)
+3. [Classe Base AgenteBDI](#classe-base-agentebdi)
+4. [Agentes de Domínio (4)](#agentes-de-domínio-4)
+5. [Agentes Analíticos (3)](#agentes-analíticos-3)
+6. [Agente de Contexto (1)](#agente-de-contexto-1)
+7. [Arquitetura Estrela](#arquitetura-estrela)
+8. [Arquitetura Hierárquica](#arquitetura-hierárquica)
+9. [Regras de Negócio](#regras-de-negócio)
+
+---
+
+## O que é um Agente?
+
+Um **agente** é um programa autônomo que percebe o ambiente, toma decisões e age para atingir objetivos. Diferente de uma função comum que recebe input e retorna output, um agente tem:
+
+- **Autonomia** — decide sozinho o que fazer
+- **Reatividade** — responde a mudanças no ambiente
+- **Proatividade** — age para atingir objetivos, não só reage
+- **Estado interno** — mantém crenças, desejos e planos
+
+```
+┌─────────────────────────────────────────────┐
+│              AGENTE                          │
+│                                             │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│   │ Crenças  │  │ Desejos  │  │ Intenções│ │
+│   │ (o que   │  │ (o que   │  │ (como    │ │
+│   │  sei)    │  │  quero)  │  │  farei)  │ │
+│   └────┬─────┘  └────┬─────┘  └────┬─────┘ │
+│        │             │             │        │
+│        └──────┬──────┘             │        │
+│               ▼                    ▼        │
+│         Deliberação           Execução      │
+│                                             │
+│   Percepção ◄──── Ambiente ────► Ação       │
+└─────────────────────────────────────────────┘
+```
+
+Neste projeto, cada agente é uma classe Python que herda de `AgenteBDI` e se especializa em uma tarefa: consultar dados, calcular correlações, detectar anomalias, etc.
 
 ---
 
 ## Modelo BDI (Belief-Desire-Intention)
 
-O modelo BDI é uma arquitetura cognitiva para agentes racionais baseada em três componentes mentais:
+O modelo **BDI** é uma arquitetura cognitiva inspirada na filosofia da mente humana. Ele organiza o raciocínio do agente em três componentes:
 
-| Conceito | Descrição | Implementação no sistema |
-|----------|-----------|--------------------------|
-| **Beliefs** (Crenças) | Estado do ambiente percebido pelo agente | `dict[str, Any]` com dados do Neo4j, parâmetros da análise, resultados parciais |
-| **Desires** (Desejos) | Objetivos que o agente quer alcançar | `list[dict]` de goals (ex: `"consultar_despesas"`, `"calcular_correlacoes"`) |
-| **Intentions** (Intenções) | Planos de ação selecionados para execução | `list[dict]` com status (`pending` / `completed` / `failed`) |
-
-### Ciclo BDI
-
-Todos os agentes executam o mesmo ciclo:
+### Os três componentes
 
 ```
-perceive() → update_beliefs() → deliberate() → plan() → execute()
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│   BELIEFS (Crenças)          "O que eu sei sobre o mundo"   │
+│   ─────────────────                                         │
+│   • Dados do Neo4j (despesas, indicadores)                  │
+│   • Parâmetros da análise (período, tipo)                   │
+│   • Resultados parciais de outros agentes                   │
+│                                                             │
+│   DESIRES (Desejos)          "O que eu quero alcançar"      │
+│   ─────────────────                                         │
+│   • "Quero consultar despesas da subfunção 305"             │
+│   • "Quero calcular correlações"                            │
+│   • "Quero detectar anomalias"                              │
+│                                                             │
+│   INTENTIONS (Intenções)     "Como vou fazer"               │
+│   ──────────────────────                                    │
+│   • Plano: consultar Neo4j com query X                      │
+│   • Plano: aplicar Spearman nos dados cruzados              │
+│   • Plano: comparar com mediana                             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-O método de conveniência `run_cycle()` executa o ciclo completo em sequência.
+### O Ciclo BDI
+
+Todo agente executa o mesmo ciclo de raciocínio:
+
+```
+    ┌──────────┐
+    │ PERCEBER │ ◄─── Observa o ambiente (lê crenças, consulta Neo4j)
+    └────┬─────┘
+         ▼
+    ┌──────────┐
+    │ ATUALIZAR│ ◄─── Incorpora novas informações às crenças
+    │ CRENÇAS  │
+    └────┬─────┘
+         ▼
+    ┌──────────┐
+    │ DELIBERAR│ ◄─── Decide quais objetivos perseguir
+    └────┬─────┘      (dado o que sei, o que devo fazer?)
+         ▼
+    ┌──────────┐
+    │ PLANEJAR │ ◄─── Cria planos concretos para cada objetivo
+    └────┬─────┘
+         ▼
+    ┌──────────┐
+    │ EXECUTAR │ ◄─── Executa cada plano (consulta, calcula, gera texto)
+    └──────────┘
+```
+
+**Exemplo concreto** — AgenteVigilanciaEpidemiologica:
+
+```
+1. PERCEBER:   "Tenho analysis_id=abc, período 2019-2021"
+2. ATUALIZAR:  beliefs = {analysis_id: "abc", date_from: 2019, date_to: 2021}
+3. DELIBERAR:  "Tenho os parâmetros → quero consultar despesas E indicadores"
+               desires = [{goal: "consultar_despesas"}, {goal: "consultar_indicadores"}]
+4. PLANEJAR:   intentions = [{desire: consultar_despesas, status: pending},
+                             {desire: consultar_indicadores, status: pending}]
+5. EXECUTAR:   → Query Neo4j: DespesaSIOPS subfunção 305
+               → Query Neo4j: IndicadorDataSUS tipo IN [dengue, covid]
+               → beliefs["despesas"] = [...]
+               → beliefs["indicadores"] = [...]
+```
 
 ### Recuperação de Falhas
 
-Quando uma intenção falha durante a execução:
+Quando algo dá errado durante a execução de um plano:
 
-1. A exceção `IntentionFailure` é levantada com a intenção e o motivo
-2. A intenção é marcada como `failed` e movida para `_failed_intentions`
-3. O agente tenta `_recover_intention()` para encontrar uma alternativa
-4. Se a recuperação falhar, o erro é propagado ao orquestrador/supervisor
-5. O agente nunca fica em estado indefinido
+```
+    Executando intenção "consultar_despesas"
+              │
+              ▼
+    ┌─────────────────┐
+    │  Neo4j offline!  │ ──► IntentionFailure levantada
+    └────────┬────────┘
+             ▼
+    ┌─────────────────┐
+    │ _recover_        │ ──► Tenta alternativa:
+    │  intention()     │     "Retornar lista vazia em vez de falhar"
+    └────────┬────────┘
+             ▼
+    ┌─────────────────┐
+    │ Agente continua  │ ──► beliefs["despesas"] = []
+    │ em estado válido │     (orquestrador recebe dados parciais)
+    └─────────────────┘
+```
+
+O agente **nunca fica em estado indefinido**. Se a recuperação também falhar, o erro é propagado ao orquestrador/supervisor, que decide como continuar.
 
 ---
 
@@ -47,73 +148,395 @@ Quando uma intenção falha durante a execução:
 
 **Arquivo:** `backend/agents/base.py`
 
+Todos os 8 agentes herdam desta classe. Ela fornece o esqueleto do ciclo BDI:
+
 ```python
 class AgenteBDI:
-    agent_id: str              # Identificador único
-    beliefs: dict[str, Any]    # Base de crenças
-    desires: list[dict]        # Objetivos
-    intentions: list[dict]     # Planos selecionados
-    _failed_intentions: list[dict]  # Intenções que falharam
+    agent_id: str                    # ID único (ex: "star-vigilancia-a1b2c3d4")
+    beliefs: dict[str, Any]          # Base de crenças
+    desires: list[dict]              # Lista de objetivos
+    intentions: list[dict]           # Planos selecionados
+    _failed_intentions: list[dict]   # Intenções que falharam
 ```
 
-### Métodos que subclasses sobrescrevem
+### Métodos que cada agente sobrescreve
 
-| Método | Responsabilidade |
-|--------|------------------|
-| `perceive()` | Perceber o ambiente (consultar Neo4j ou ler crenças) |
-| `deliberate()` | Selecionar desejos alcançáveis dadas as crenças |
-| `plan(desires)` | Gerar intenções (planos) para cada desejo |
-| `_execute_intention(intention)` | Executar uma intenção específica |
-| `_recover_intention(failed)` | Encontrar alternativa para intenção falha |
+| Método | O que faz | Exemplo |
+|--------|-----------|---------|
+| `perceive()` | Observa o ambiente | Lê parâmetros das crenças |
+| `deliberate()` | Decide objetivos | "Tenho dados → quero calcular correlações" |
+| `plan(desires)` | Cria planos | Converte cada desejo em intenção pendente |
+| `_execute_intention(intention)` | Executa um plano | Roda query no Neo4j |
+| `_recover_intention(failed)` | Trata falha | Retorna lista vazia como fallback |
 
-### Padrão de IDs de Agentes
+### Padrão de IDs
 
 Formato: `{topologia}-{papel}-{uuid_hex[:8]}`
 
-Exemplos:
-- `star-vigilancia-a1b2c3d4`
-- `star-correlacao-e5f6g7h8`
-- `hier-coord-i9j0k1l2`
-- `hier-sup-dominio-m3n4o5p6`
+```
+star-vigilancia-a1b2c3d4     ← agente de vigilância na topologia estrela
+hier-sup-dominio-m3n4o5p6    ← supervisor de domínio na hierárquica
+star-correlacao-e5f6g7h8     ← agente de correlação na estrela
+```
 
 ---
 
-## Agentes Especializados (8 por topologia)
+## Agentes de Domínio (4)
 
-O sistema usa 8 agentes especializados organizados em 3 categorias:
+Os agentes de domínio são os "coletores de dados". Cada um consulta o Neo4j para buscar despesas de uma subfunção específica e indicadores de saúde correspondentes.
 
-### Agentes de Domínio (4) — `backend/agents/domain/`
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AGENTES DE DOMÍNIO                           │
+│                                                                 │
+│  ┌─────────────────┐  ┌─────────────────┐                      │
+│  │ Vigilância       │  │ Saúde           │                      │
+│  │ Epidemiológica   │  │ Hospitalar      │                      │
+│  │                  │  │                 │                      │
+│  │ Subfunção: 305   │  │ Subfunção: 302  │                      │
+│  │ Indicadores:     │  │ Indicadores:    │                      │
+│  │ • dengue         │  │ • internações   │                      │
+│  │ • covid          │  │                 │                      │
+│  └─────────────────┘  └─────────────────┘                      │
+│                                                                 │
+│  ┌─────────────────┐  ┌─────────────────┐                      │
+│  │ Atenção          │  │ Mortalidade     │                      │
+│  │ Primária         │  │                 │                      │
+│  │                  │  │ Subfunção: TODAS│                      │
+│  │ Subfunção: 301   │  │ (transversal)   │                      │
+│  │ Indicadores:     │  │ Indicadores:    │                      │
+│  │ • vacinação      │  │ • mortalidade   │                      │
+│  └─────────────────┘  └─────────────────┘                      │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-Consultam o Neo4j para sua subfunção e tipo de indicador específicos.
+### Como funciona um agente de domínio
 
-| Agente | Arquivo | Subfunção | Indicadores | `__init__` | Método público |
-|--------|---------|-----------|-------------|------------|----------------|
-| `AgenteVigilanciaEpidemiologica` | `vigilancia_epidemiologica.py` | 305 | dengue, covid | `(agent_id, neo4j_client)` | `query(analysis_id, date_from, date_to)` |
-| `AgenteSaudeHospitalar` | `saude_hospitalar.py` | 302 | internacoes | `(agent_id, neo4j_client)` | `query(analysis_id, date_from, date_to)` |
-| `AgenteAtencaoPrimaria` | `atencao_primaria.py` | 301 | vacinacao | `(agent_id, neo4j_client)` | `query(analysis_id, date_from, date_to)` |
-| `AgenteMortalidade` | `mortalidade.py` | todas (301,302,303,305) | mortalidade | `(agent_id, neo4j_client)` | `query(analysis_id, date_from, date_to)` |
+Todos seguem o mesmo padrão. Vamos usar o **AgenteVigilanciaEpidemiologica** como exemplo:
+
+```
+Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021)
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │  1. update_beliefs()  │
+              │  beliefs = {          │
+              │    analysis_id: "abc" │
+              │    date_from: 2019    │
+              │    date_to: 2021      │
+              │  }                    │
+              └──────────┬────────────┘
+                         ▼
+              ┌───────────────────────┐
+              │  2. perceive()        │
+              │  "Tenho analysis_id,  │
+              │   date_from, date_to" │
+              └──────────┬────────────┘
+                         ▼
+              ┌───────────────────────┐
+              │  3. deliberate()      │
+              │  "Quero:              │
+              │   - consultar_despesas│
+              │   - consultar_        │
+              │     indicadores"      │
+              └──────────┬────────────┘
+                         ▼
+              ┌───────────────────────┐
+              │  4. plan()            │
+              │  intentions = [       │
+              │   {consultar_despesas,│
+              │    status: pending},  │
+              │   {consultar_         │
+              │    indicadores,       │
+              │    status: pending}   │
+              │  ]                    │
+              └──────────┬────────────┘
+                         ▼
+              ┌───────────────────────┐
+              │  5. execute()         │
+              │                       │
+              │  Intenção 1:          │
+              │  Neo4j ──► despesas   │
+              │  WHERE subfuncao=305  │
+              │  AND ano >= 2019      │
+              │  AND ano <= 2021      │
+              │                       │
+              │  Intenção 2:          │
+              │  Neo4j ──► indicadores│
+              │  WHERE tipo IN        │
+              │  ["dengue", "covid"]  │
+              └──────────┬────────────┘
+                         ▼
+              ┌───────────────────────┐
+              │  Retorna:             │
+              │  {                    │
+              │   despesas: [         │
+              │    {subfuncao: 305,   │
+              │     ano: 2019,        │
+              │     valor: 28350000}  │
+              │   ],                  │
+              │   indicadores: [      │
+              │    {tipo: "dengue",   │
+              │     ano: 2019,        │
+              │     valor: 12847}     │
+              │   ]                   │
+              │  }                    │
+              └───────────────────────┘
+```
+
+### Tabela dos 4 agentes de domínio
+
+| Agente | Arquivo | Subfunção | Indicadores | Particularidade |
+|--------|---------|-----------|-------------|-----------------|
+| `AgenteVigilanciaEpidemiologica` | `domain/vigilancia_epidemiologica.py` | 305 | dengue, covid | Filtra subfunção 305 das despesas |
+| `AgenteSaudeHospitalar` | `domain/saude_hospitalar.py` | 302 | internacoes | Filtra subfunção 302 |
+| `AgenteAtencaoPrimaria` | `domain/atencao_primaria.py` | 301 | vacinacao | Filtra subfunção 301 |
+| `AgenteMortalidade` | `domain/mortalidade.py` | TODAS | mortalidade | **Transversal** — retorna despesas de todas as subfunções |
 
 **Comportamento comum:**
-- Retornam `{"despesas": [...], "indicadores": [...]}`
-- Retornam listas vazias sem exceção quando não há dados (degradação graciosa)
-- `AgenteMortalidade` é transversal — cruza mortalidade com todas as subfunções
-- Cada agente filtra apenas sua subfunção das despesas retornadas pelo Neo4j
+- Recebem `(agent_id, neo4j_client)` no construtor
+- Método público: `query(analysis_id, date_from, date_to)` → `{"despesas": [...], "indicadores": [...]}`
+- Retornam listas vazias (sem exceção) quando não há dados
+- Se o Neo4j falhar: `_recover_intention()` retorna listas vazias
 
-### Agentes Analíticos (3) — `backend/agents/analytical/`
+---
 
-Operam sobre dados em memória — sem dependência de Neo4j.
+## Agentes Analíticos (3)
 
-| Agente | Arquivo | `__init__` | Método público | Entrada | Saída |
-|--------|---------|------------|----------------|---------|-------|
-| `AgenteCorrelacao` | `correlacao.py` | `(agent_id)` | `compute(dados_cruzados)` | CrossedDataPoint[] | CorrelacaoResult[] |
-| `AgenteAnomalias` | `anomalias.py` | `(agent_id)` | `detect(dados_cruzados)` | CrossedDataPoint[] | AnomaliaResult[] |
-| `AgenteSintetizador` | `sintetizador.py` | `(agent_id)` | `synthesize(correlacoes, anomalias, contexto, analysis_id, ws_queue, architecture, data_coverage)` | Resultados dos demais | texto (str) |
+Os agentes analíticos processam dados **em memória** — não acessam Neo4j. Recebem dados já coletados pelos agentes de domínio e produzem análises.
 
-### Agente de Contexto (1) — `backend/agents/context/`
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   AGENTES ANALÍTICOS                            │
+│                                                                 │
+│  Dados dos agentes     ┌──────────────┐                        │
+│  de domínio ──────────►│ Correlação   │──► Pearson, Spearman,  │
+│  (dados cruzados)      │              │    Kendall por par     │
+│                        └──────────────┘                        │
+│                                                                 │
+│  Dados dos agentes     ┌──────────────┐                        │
+│  de domínio ──────────►│ Anomalias    │──► alto_gasto +        │
+│  (dados cruzados)      │              │    baixo_resultado     │
+│                        └──────────────┘                        │
+│                                                                 │
+│  Correlações +         ┌──────────────┐                        │
+│  Anomalias +  ────────►│ Sintetizador │──► Texto via LLM       │
+│  Contexto              │              │    (streaming chunks)  │
+│                        └──────────────┘                        │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-| Agente | Arquivo | `__init__` | Método público | Entrada | Saída |
-|--------|---------|------------|----------------|---------|-------|
-| `AgenteContextoOrcamentario` | `contexto_orcamentario.py` | `(agent_id)` | `analyze_trends(despesas)` | DespesaRecord[] | dict[int, TendenciaResult] |
+### AgenteCorrelacao — Correlação Estatística
+
+**Arquivo:** `agents/analytical/correlacao.py`
+
+Calcula a força da relação entre gastos e indicadores de saúde usando três métodos estatísticos:
+
+```
+Entrada: dados cruzados (despesa × indicador por subfunção e ano)
+┌──────────────────────────────────────────────────────┐
+│  subfunção 305 × dengue:                             │
+│    2019: despesa=28.3M, indicador=12847              │
+│    2020: despesa=45.6M, indicador=5231               │
+│    2021: despesa=4.9M,  indicador=3412               │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│  Calcula 3 coeficientes para cada par:               │
+│                                                      │
+│  Pearson  = -0.85  (relação linear)                  │
+│  Spearman = -0.87  (relação monotônica, por ranks)   │
+│  Kendall  = -0.82  (concordância entre pares)        │
+│                                                      │
+│  Classificação (baseada em |Spearman|):              │
+│  |0.87| = 0.87 ≥ 0.7 → "alta"                       │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+Saída:
+{
+  subfuncao: 305,
+  tipo_indicador: "dengue",
+  pearson: -0.85,
+  spearman: -0.87,
+  kendall: -0.82,
+  classificacao: "alta",
+  n_pontos: 3
+}
+```
+
+**Classificação (baseada no Spearman):**
+
+```
+|r| ≥ 0.7  ──►  "alta"     (relação forte)
+|r| ≥ 0.4  ──►  "média"    (relação moderada)
+|r| < 0.4  ──►  "baixa"    (relação fraca)
+```
+
+**Regras especiais:**
+- Pares com < 2 pontos de dados → retorna 0.0 para tudo (não é possível calcular correlação)
+- Arrays constantes (todos os valores iguais) → retorna 0.0 (NaN tratado)
+- Resultado sempre clamped a [-1, 1]
+
+### AgenteAnomalias — Detecção de Ineficiências
+
+**Arquivo:** `agents/analytical/anomalias.py`
+
+Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada:
+
+```
+Entrada: dados cruzados (subfunção 301 × vacinação)
+┌──────────────────────────────────────────────────────┐
+│  2019: despesa=185M, indicador=485320                │
+│  2020: despesa=199M, indicador=412100                │
+│  2021: despesa=23M,  indicador=892450                │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│  Calcula medianas:                                   │
+│  mediana_despesa    = 185M                           │
+│  mediana_indicador  = 485320                         │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│  Compara cada ano com as medianas:                   │
+│                                                      │
+│  2019: despesa=185M (= mediana), indicador=485320    │
+│        → Sem anomalia (na mediana)                   │
+│                                                      │
+│  2020: despesa=199M (> mediana), indicador=412100    │
+│        indicador < mediana                           │
+│        → ⚠ ALTO GASTO + BAIXO RESULTADO             │
+│          (possível ineficiência)                     │
+│                                                      │
+│  2021: despesa=23M (< mediana), indicador=892450     │
+│        indicador > mediana                           │
+│        → ✓ BAIXO GASTO + ALTO RESULTADO             │
+│          (possível eficiência)                       │
+└──────────────────────────────────────────────────────┘
+```
+
+**Tipos de anomalia:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│  alto_gasto_baixo_resultado                                 │
+│  ─────────────────────────                                  │
+│  Despesa ACIMA da mediana + Indicador ABAIXO da mediana     │
+│  → "Gastou muito mas o resultado foi ruim"                  │
+│  → Possível ineficiência na alocação de recursos            │
+│                                                             │
+│  baixo_gasto_alto_resultado                                 │
+│  ──────────────────────────                                 │
+│  Despesa ABAIXO da mediana + Indicador ACIMA da mediana     │
+│  → "Gastou pouco mas o resultado foi bom"                   │
+│  → Possível eficiência ou fatores externos positivos        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Regra:** Pares com < 2 pontos de dados são ignorados (não faz sentido calcular mediana com 1 valor).
+
+### AgenteSintetizador — Geração de Texto
+
+**Arquivo:** `agents/analytical/sintetizador.py`
+
+Recebe todos os resultados dos outros agentes e gera um texto de análise em português:
+
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Correlações  │  │  Anomalias   │  │  Contexto    │
+│ (do agente   │  │ (do agente   │  │ Orçamentário │
+│  correlação) │  │  anomalias)  │  │ (do agente   │
+│              │  │              │  │  contexto)   │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                 │
+       └────────┬────────┘                 │
+                ▼                          │
+       ┌─────────────────┐                 │
+       │  Monta prompt   │◄────────────────┘
+       │  em português   │
+       └────────┬────────┘
+                ▼
+       ┌─────────────────┐
+       │  Tenta LLM:     │
+       │  1º Groq        │──► Sucesso? → Texto do LLM
+       │  2º Gemini      │
+       │  (3 tentativas) │──► Falhou?  → Texto estruturado (fallback)
+       └────────┬────────┘
+                ▼
+       ┌─────────────────┐
+       │  Streaming:      │
+       │  Divide texto em │
+       │  chunks de ~80   │──► ws_queue ──► WebSocket ──► Frontend
+       │  caracteres      │
+       └─────────────────┘
+```
+
+**Seções do texto gerado (fallback):**
+1. Resumo Executivo
+2. Cobertura de Dados (gaps detectados)
+3. Análise das Correlações (Pearson/Spearman/Kendall por par)
+4. Discussão das Anomalias (com descrições em português)
+5. Contexto Orçamentário (tendências por subfunção)
+
+---
+
+## Agente de Contexto (1)
+
+### AgenteContextoOrcamentario — Tendências de Gasto
+
+**Arquivo:** `agents/context/contexto_orcamentario.py`
+
+Analisa como o gasto de cada subfunção evoluiu ao longo dos anos:
+
+```
+Entrada: despesas agregadas por subfunção
+┌──────────────────────────────────────────────────────┐
+│  Subfunção 305 (Vigilância Epidemiológica):          │
+│    2019: R$ 28.350.000                               │
+│    2020: R$ 45.600.000                               │
+│    2021: R$ 4.886.620                                │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│  Calcula variação ano a ano (YoY):                   │
+│                                                      │
+│  2019→2020: ((45.6M - 28.3M) / 28.3M) × 100         │
+│           = +60.9%  (crescimento)                    │
+│                                                      │
+│  2020→2021: ((4.9M - 45.6M) / 45.6M) × 100          │
+│           = -89.3%  (corte drástico)                 │
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────────────────┐
+│  Classifica tendência:                               │
+│                                                      │
+│  +60.9% seguido de -89.3%                            │
+│  → Não há 2+ anos consecutivos na mesma direção      │
+│  → Variação média: (60.9 + (-89.3)) / 2 = -14.2%    │
+│  → Tendência: "corte" (média negativa > 5%)          │
+└──────────────────────────────────────────────────────┘
+```
+
+**Classificação de tendências:**
+
+```
+┌────────────────┬──────────────────────────────────────────┐
+│ Tendência      │ Condição                                 │
+├────────────────┼──────────────────────────────────────────┤
+│ "crescimento"  │ Variação positiva consecutiva ≥ 2 anos   │
+│ "corte"        │ Variação negativa consecutiva ≥ 2 anos   │
+│ "estagnacao"   │ Todas as variações com |valor| < 5%      │
+│ "insuficiente" │ Menos de 2 anos de dados                 │
+└────────────────┴──────────────────────────────────────────┘
+```
 
 ---
 
@@ -121,37 +544,57 @@ Operam sobre dados em memória — sem dependência de Neo4j.
 
 **Arquivo:** `backend/agents/star/orchestrator.py`
 
+Na topologia estrela, um único agente central (OrquestradorEstrela) coordena todos os 8 agentes. Nenhum agente periférico se comunica diretamente com outro — tudo passa pelo hub.
+
 ```
-                    OrquestradorEstrela (Hub)
-                           │
-        ┌──────┬───────┬───┴───┬───────┬──────┬──────┬──────┐
+                         OrquestradorEstrela
+                              (Hub)
+                               │
+        ┌──────┬───────┬───────┼───────┬──────┬──────┬──────┐
         ▼      ▼       ▼       ▼       ▼      ▼      ▼      ▼
-   Vigilância Hospitalar Primária Mortalidade Contexto Correlação Anomalias Sintetizador
+      Vigil. Hospit. Primár. Mortal. Contex. Correl. Anomal. Sintet.
+      (305)  (302)   (301)   (todas)  (YoY)  (stats) (median) (LLM)
+        │      │       │       │       │      │      │      │
+        └──────┴───────┴───────┘       │      │      │      │
+               │                       │      │      │      │
+          despesas +                   │      │      │      │
+          indicadores                  │      │      │      │
+               │                       │      │      │      │
+               ├───────────────────────┘      │      │      │
+               │  (despesas)                  │      │      │
+               │                              │      │      │
+               ├──── cross_domain_data() ─────┤      │      │
+               │     (dados cruzados)         │      │      │
+               │                              │      │      │
+               │                              │      │      │
+               └──────────────────────────────┴──────┘      │
+                                                            │
+                    correlações + anomalias + contexto ──────┘
+                                                            │
+                                                     texto (streaming)
+```
+
+### Pipeline (10 passos)
+
+```
+Passo 1:  Instancia 8 agentes com IDs únicos
+Passo 2:  Cria MessageCounter
+Passo 3:  Executa 4 agentes de domínio em SEQUÊNCIA
+          Vigilância → Hospitalar → Primária → Mortalidade
+Passo 4:  Deduplica despesas (mortalidade retorna todas as subfunções)
+Passo 5:  Cruza dados: cross_domain_data(despesas, indicadores)
+Passo 6:  Detecta lacunas: detect_data_gaps()
+Passo 7:  AgenteContextoOrcamentario.analyze_trends(despesas)
+Passo 8:  AgenteCorrelacao.compute(dados_cruzados)
+Passo 9:  AgenteAnomalias.detect(dados_cruzados)
+Passo 10: AgenteSintetizador.synthesize(correlações, anomalias, contexto)
 ```
 
 **Características:**
-- Hub central intermedia TODA comunicação — nenhum agente periférico chama outro diretamente
-- Ponto único de falha (se o orquestrador falhar, toda a análise falha)
-- Comunicação simples: orquestrador → agente → orquestrador
-- Contagem de mensagens esperada: ~16 (8 agentes × 2 mensagens ida+volta)
-
-### Pipeline Estrela (10 passos)
-
-1. Instancia 8 agentes com IDs únicos (`star-{papel}-{uuid_hex[:8]}`)
-2. Cria `MessageCounter` para contagem de mensagens
-3. Executa 4 agentes de domínio em sequência → agrega despesas + indicadores
-4. Deduplica despesas (mortalidade retorna todas as subfunções, pode sobrepor)
-5. Cruza dados via `cross_domain_data()` → produz CrossedDataPoints
-6. Detecta lacunas de dados via `detect_data_gaps()`
-7. Passa despesas ao `AgenteContextoOrcamentario.analyze_trends()`
-8. Passa dados cruzados ao `AgenteCorrelacao.compute()`
-9. Passa dados cruzados ao `AgenteAnomalias.detect()`
-10. Passa correlações, anomalias, contexto e data_coverage ao `AgenteSintetizador.synthesize()`
-
-Em cada passo:
-- `MetricsCollector` registra tempo, CPU e memória do agente
-- `MessageCounter` incrementa 2 por chamada (ida + volta)
-- Em falha: envia evento `error` via `ws_queue` e continua com resultados parciais
+- Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
+- Ponto único de falha: se o orquestrador falhar, toda a análise falha
+- Mensagens esperadas: ~16 (8 agentes × 2)
+- Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
 
 ---
 
@@ -159,54 +602,72 @@ Em cada passo:
 
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `supervisors.py`
 
-```
-            CoordenadorGeral (Nível 0)
-                    │
-        ┌───────────┼───────────┐
-        ▼           ▼           ▼
-  SupervisorDominio  SupervisorContexto  SupervisorAnalitico
-   (Nível 1)         (Nível 1)           (Nível 1)
-        │                │                    │
-   ┌────┼────┐           │              ┌─────┼─────┐
-   ▼    ▼    ▼    ▼      ▼              ▼     ▼     ▼
-  Vig  Hosp Prim Mort  CtxOrç         Corr  Anom  Sint
-  (Nível 2)            (Nível 2)       (Nível 2)
+Na topologia hierárquica, os agentes são organizados em 3 níveis com supervisores intermediários que podem se comunicar lateralmente:
 
-Comunicação lateral (sem intermediação do Coordenador):
-  SupervisorDominio ──→ SupervisorAnalitico (despesas + indicadores)
-  SupervisorDominio ──→ SupervisorContexto  (despesas)
-  SupervisorContexto ──→ SupervisorAnalitico (contexto orçamentário)
+```
+                    CoordenadorGeral
+                      (Nível 0)
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+    SupervisorDominio  SupervisorContexto  SupervisorAnalitico
+      (Nível 1)         (Nível 1)           (Nível 1)
+          │                │                    │
+    ┌─────┼─────┐         │              ┌─────┼─────┐
+    ▼     ▼     ▼    ▼    ▼              ▼     ▼     ▼
+  Vigil. Hosp. Prim. Mort. CtxOrç.     Corr. Anom. Sint.
+  (Nível 2)                (Nível 2)    (Nível 2)
+
+
+  Comunicação lateral (sem passar pelo Coordenador):
+  ─────────────────────────────────────────────────
+  SupervisorDominio ───────► SupervisorAnalitico
+                              (despesas + indicadores)
+  SupervisorDominio ───────► SupervisorContexto
+                              (despesas)
+  SupervisorContexto ──────► SupervisorAnalitico
+                              (contexto orçamentário)
+```
+
+### Pipeline
+
+```
+Passo 1:  Coordenador instancia 3 supervisores
+Passo 2:  SupervisorDominio.run()
+          → Executa 4 agentes de domínio em sequência
+          → Agrega despesas + indicadores
+Passo 3:  Comunicação lateral: Domínio → Analítico (despesas + indicadores)
+Passo 4:  Comunicação lateral: Domínio → Contexto (despesas)
+Passo 5:  SupervisorContexto.run()
+          → Executa AgenteContextoOrcamentario
+Passo 6:  Comunicação lateral: Contexto → Analítico (contexto orçamentário)
+Passo 7:  SupervisorAnalitico.run()
+          → Cruza dados, executa correlação, anomalias, sintetizador
+Passo 8:  Persiste métricas para 8 agentes + 3 supervisores
 ```
 
 **Características:**
-- Hierarquia de 3 níveis com comunicação lateral entre supervisores
-- Degradação graciosa: se um supervisor falha, o coordenador continua com resultados parciais
-- Supervisores expõem `_collectors: list[MetricsCollector]` para persistência de métricas dos subordinados
-- Contagem de mensagens esperada: ~24+ (agentes + supervisores + comunicação lateral)
-
-### Pipeline Hierárquico
-
-1. `CoordenadorGeral` instancia 3 supervisores com IDs únicos
-2. Delega para `SupervisorDominio.run()` → coordena 4 agentes de domínio
-3. Comunicação lateral: `SupervisorDominio` → `SupervisorAnalitico` (despesas + indicadores)
-4. Comunicação lateral: `SupervisorDominio` → `SupervisorContexto` (despesas)
-5. Delega para `SupervisorContexto.run()` → coordena `AgenteContextoOrcamentario`
-6. Comunicação lateral: `SupervisorContexto` → `SupervisorAnalitico` (contexto orçamentário)
-7. Delega para `SupervisorAnalitico.run()` → coordena correlação, anomalias, sintetizador
-8. Persiste métricas para 8 agentes + 3 supervisores
-9. Em falha de supervisor: envia evento `error`, continua com dados parciais
-
-### Comunicação Lateral (`receive_from_peer`)
-
-Os supervisores trocam dados diretamente via `receive_from_peer(data: dict)` sem intermediação do coordenador. Isso reduz o gargalo no nível 0 mas aumenta o acoplamento entre supervisores.
+- Degradação graciosa: se um supervisor falha, o coordenador continua com dados parciais
+- Comunicação lateral via `receive_from_peer()` — supervisores trocam dados diretamente
+- Mensagens esperadas: ~24+ (agentes + supervisores + comunicação lateral)
+- Métricas coletadas para 11 entidades (8 agentes + 3 supervisores)
 
 ### Degradação Graciosa
 
-Se um supervisor falha:
-- O coordenador captura a exceção
-- Envia evento `error` via `ws_queue`
-- Continua com dados vazios para aquele supervisor
-- O resultado final é parcial mas válido
+```
+    SupervisorDominio falha!
+              │
+              ▼
+    CoordenadorGeral:
+    ├── Captura exceção
+    ├── Envia evento "error" via WebSocket
+    ├── Define dominio_data = {despesas: [], indicadores: []}
+    └── CONTINUA com SupervisorContexto e SupervisorAnalitico
+              │
+              ▼
+    Resultado final: parcial mas válido
+    (correlações e anomalias vazias, mas texto gerado com fallback)
+```
 
 ---
 
@@ -214,105 +675,76 @@ Se um supervisor falha:
 
 ### Mapeamento Subfunção → Indicador
 
-| Subfunção | Código | Nome | Indicador correlacionado | Sistema DataSUS |
-|-----------|--------|------|--------------------------|-----------------|
-| 301 | Atenção Básica | Cobertura vacinal | SI-PNI |
-| 302 | Assistência Hospitalar | Internações | SIH |
-| 303 | Suporte Profilático | — (sem indicador direto) | — |
-| 305 | Vigilância Epidemiológica | Dengue, COVID-19 | SINAN |
-| — | Mortalidade (transversal) | Mortalidade | SIM |
-
-### Cruzamento de Dados (`cross_domain_data`)
-
-**Arquivo:** `backend/agents/data_crossing.py`
-
-Para cada subfunção no mapeamento, encontra indicadores do tipo correspondente no mesmo ano:
-- 301 → vacinacao (mesmo ano)
-- 302 → internacoes (mesmo ano)
-- 305 → dengue, covid (mesmo ano)
-- Mortalidade → transversal, cruza com TODAS as subfunções (301, 302, 303, 305)
-
-Produz `CrossedDataPoint`:
-```python
-{
-    "subfuncao": 305,
-    "subfuncao_nome": "Vigilância Epidemiológica",
-    "tipo_indicador": "dengue",
-    "ano": 2020,
-    "valor_despesa": 45600000.0,
-    "valor_indicador": 5231.0,
-}
+```
+┌──────────┬──────────────────────────┬─────────────────┬──────────┐
+│ Código   │ Nome                     │ Indicador       │ DataSUS  │
+├──────────┼──────────────────────────┼─────────────────┼──────────┤
+│ 301      │ Atenção Básica           │ Vacinação       │ SI-PNI   │
+│ 302      │ Assistência Hospitalar   │ Internações     │ SIH      │
+│ 303      │ Suporte Profilático      │ — (sem par)     │ —        │
+│ 305      │ Vigilância Epidemiológica│ Dengue, COVID   │ SINAN    │
+│ (todas)  │ Mortalidade (transversal)│ Mortalidade     │ SIM      │
+└──────────┴──────────────────────────┴─────────────────┴──────────┘
 ```
 
-### Correlações Estatísticas (`AgenteCorrelacao`)
-
-Três métodos implementados para cada par subfunção-indicador:
-
-| Método | Tipo | Uso |
-|--------|------|-----|
-| **Pearson** | Relação linear | Detecta relações proporcionais diretas |
-| **Spearman** | Baseado em ranks | Robusto a outliers, monotônico não-linear |
-| **Kendall Tau-b** | Concordância entre pares | Ideal para amostras pequenas |
-
-**Classificação** (baseada no coeficiente de Spearman):
-- `|r| >= 0.7` → **"alta"**
-- `|r| >= 0.4` → **"média"**
-- `|r| < 0.4` → **"baixa"**
-
-**Regras:**
-- Pares com < 2 pontos de dados retornam 0.0 para todas as métricas
-- Valores NaN (arrays constantes) são tratados como 0.0
-- Resultado clamped a [-1, 1]
-
-### Detecção de Anomalias (`AgenteAnomalias`)
-
-Compara despesas e indicadores com suas medianas por par subfunção-indicador:
-
-| Tipo de anomalia | Condição | Interpretação |
-|------------------|----------|---------------|
-| `alto_gasto_baixo_resultado` | despesa > mediana E indicador < mediana | Possível ineficiência |
-| `baixo_gasto_alto_resultado` | despesa < mediana E indicador > mediana | Possível eficiência ou fator externo |
-
-**Regras:**
-- Pares com < 2 pontos de dados são ignorados
-- Mediana calculada separadamente para despesas e indicadores de cada par
-- Descrição textual gerada em português com valores formatados
-
-### Tendências Orçamentárias (`AgenteContextoOrcamentario`)
-
-Calcula variação percentual ano a ano: `((valor_n - valor_n-1) / valor_n-1) × 100`
-
-**Classificação de tendências:**
-
-| Tendência | Condição |
-|-----------|----------|
-| `crescimento` | Variação positiva consecutiva por ≥ 2 anos |
-| `corte` | Variação negativa consecutiva por ≥ 2 anos |
-| `estagnacao` | Todas as variações com `|variação| < 5%` |
-| `insuficiente` | Menos de 2 anos de dados |
-
-**Tratamento de edge cases:**
-- Divisão por zero (valor anterior = 0): retorna ±∞ conforme sinal do valor atual
-- Valores infinitos: classificados pela direção (positivo = crescimento, negativo = corte)
-
-### Detecção de Lacunas de Dados (`detect_data_gaps`)
+### Cruzamento de Dados
 
 **Arquivo:** `backend/agents/data_crossing.py`
 
-Identifica para o período solicitado:
-- Anos faltantes por subfunção (despesas)
-- Anos faltantes por tipo (indicadores)
-- Cruzamentos impossíveis (despesa sem indicador correspondente ou vice-versa)
-- Cobertura percentual por dimensão
+```
+Despesas (por subfunção e ano)     Indicadores (por tipo e ano)
+┌────────────────────────┐         ┌────────────────────────┐
+│ subfunção=305, ano=2020│         │ tipo=dengue, ano=2020  │
+│ valor=45.600.000       │         │ valor=5231             │
+└───────────┬────────────┘         └───────────┬────────────┘
+            │                                  │
+            └──────────┬───────────────────────┘
+                       ▼
+              CrossedDataPoint:
+              {
+                subfuncao: 305,
+                tipo_indicador: "dengue",
+                ano: 2020,
+                valor_despesa: 45600000,
+                valor_indicador: 5231
+              }
+```
 
-O resultado é passado ao sintetizador para transparência no texto gerado — o LLM é instruído a mencionar explicitamente quais dados estão faltando e como isso limita as conclusões.
+### Detecção de Lacunas (`detect_data_gaps`)
 
-### Contagem de Mensagens (`MessageCounter`)
+**Arquivo:** `backend/agents/data_crossing.py`
 
-**Arquivo:** `backend/message_counter.py`
+Identifica dados faltantes para transparência na análise:
 
-Cada chamada de método entre agentes conta como 2 mensagens (ida + volta):
-- **Estrela**: ~16 mensagens (8 agentes × 2)
-- **Hierárquica**: ~24+ mensagens (8 agentes × 2 + 3 supervisores × 2 + 4 comunicações laterais × 2)
+```
+Período solicitado: 2019-2023
 
-O total é persistido no Neo4j e enviado via WebSocket para comparação quantitativa.
+Despesas subfunção 305:  2019 ✓  2020 ✓  2021 ✓  2022 ✗  2023 ✗
+Indicador dengue:        2019 ✓  2020 ✓  2021 ✓  2022 ✓  2023 ✓
+
+Gaps detectados:
+  ⚠ Despesa subfunção 305: sem dados para 2022, 2023
+  ⚠ Cruzamento Vigilância × dengue: despesa sem indicador em 2022, 2023
+
+Cobertura: despesas 60%, indicadores 100%
+```
+
+O resultado é passado ao sintetizador para que o texto mencione explicitamente quais dados estão faltando.
+
+### Contagem de Mensagens
+
+**Arquivo:** `backend/core/message_counter.py`
+
+Cada chamada entre agentes = 2 mensagens (ida + volta):
+
+```
+Estrela:                          Hierárquica:
+Orquestrador → Agente (ida)       Coordenador → Supervisor (ida)
+Agente → Orquestrador (volta)     Supervisor → Coordenador (volta)
+= 2 mensagens por chamada         Supervisor → Agente (ida)
+                                  Agente → Supervisor (volta)
+8 agentes × 2 = ~16 mensagens    + comunicação lateral entre supervisores
+                                  = ~24+ mensagens
+```
+
+A diferença na contagem de mensagens é uma das métricas comparativas entre as topologias.

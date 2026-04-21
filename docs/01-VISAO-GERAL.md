@@ -344,10 +344,10 @@ O projeto usa PBT para validar propriedades formais de correção:
 ## Estrutura de Diretórios
 
 ```
-TCC/
+project-skopos/
 ├── docker-compose.yml                # Orquestração: Neo4j + Backend + Frontend
 ├── download_pysus.py                 # Script standalone de download FTP DataSUS
-├── DOCUMENTATION.md                  # Documentação legada (substituída por docs/)
+├── README.md                         # Este projeto
 ├── docs/                             # Documentação modular
 │   ├── 01-VISAO-GERAL.md            # Este arquivo
 │   ├── 02-AGENTES.md                # Sistema multiagente BDI
@@ -360,14 +360,17 @@ TCC/
 │   ├── entrypoint.sh                # ETL automático + uvicorn
 │   ├── requirements.txt             # 16 dependências Python
 │   ├── .env.example                 # Template de variáveis de ambiente
-│   ├── main.py                      # FastAPI — 5 endpoints REST + WebSocket
-│   ├── metrics.py                   # MetricsCollector (psutil)
-│   ├── message_counter.py           # MessageCounter (thread-safe)
-│   ├── llm_client.py                # Cliente LLM centralizado (Groq + Gemini)
-│   ├── quality_metrics.py           # Métricas de qualidade (3 eixos) + relatório
+│   ├── main.py                      # Entry point — cria app, CORS, registra routers
 │   ├── conftest.py                  # Configuração pytest (sys.path)
 │   │
-│   ├── agents/
+│   ├── api/                         # Camada de API
+│   │   ├── routes.py                # 5 endpoints REST
+│   │   ├── websocket.py             # WebSocket handler (streaming)
+│   │   ├── models.py                # Pydantic models + validação
+│   │   ├── runners.py               # Thread runners (star, hierarchical)
+│   │   └── state.py                 # Estado compartilhado (queues, threads, results)
+│   │
+│   ├── agents/                      # Sistema multiagente BDI
 │   │   ├── base.py                  # AgenteBDI (modelo BDI base)
 │   │   ├── data_crossing.py         # cross_domain_data() + detect_data_gaps()
 │   │   ├── domain/
@@ -387,19 +390,25 @@ TCC/
 │   │       ├── coordinator.py                # CoordenadorGeral (nível 0)
 │   │       └── supervisors.py                # 3 supervisores (nível 1)
 │   │
+│   ├── core/                        # Utilitários
+│   │   ├── llm_client.py            # Cliente LLM (Groq + Gemini, rate limit, retry)
+│   │   ├── metrics.py               # MetricsCollector (psutil)
+│   │   ├── message_counter.py       # MessageCounter (thread-safe)
+│   │   └── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
+│   │
 │   ├── db/
 │   │   └── neo4j_client.py          # Driver Neo4j + queries Cypher
 │   │
 │   ├── etl/
-│   │   ├── siops_loader.py          # Ingestão SIOPS (.xls/.xlsx/.csv)
+│   │   ├── siops_loader.py          # Ingestão planilhas FNS (.xls/.xlsx)
 │   │   ├── datasus_loader.py        # Ingestão DataSUS (PySUS + cache)
 │   │   ├── seed_data.py             # Dados fallback Sorocaba 2019-2021
-│   │   └── detect_years.py          # Auto-detecção de anos SIOPS
+│   │   └── detect_years.py          # Auto-detecção de anos
 │   │
-│   ├── data/                        # Planilhas SIOPS + cache DataSUS
+│   ├── data/                        # Planilhas FNS + cache DataSUS
 │   │   └── datasus/                 # Cache local Parquet
 │   │
-│   └── tests/                       # 19 arquivos de teste
+│   └── tests/                       # 19 arquivos de teste (322 testes)
 │       ├── test_agent_base.py
 │       ├── test_anomalias.py
 │       ├── test_anomalias_properties.py

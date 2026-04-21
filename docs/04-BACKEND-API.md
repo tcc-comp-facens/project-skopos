@@ -14,7 +14,9 @@
 
 ## API REST
 
-**Arquivo:** `backend/main.py`
+**Arquivo:** `backend/api/routes.py`, `backend/api/websocket.py`
+
+O `main.py` é o entry point que cria o app FastAPI, configura CORS e registra os routers de `api/routes.py` (REST) e `api/websocket.py` (WebSocket). A lógica de endpoints, modelos, estado compartilhado e thread runners está organizada em `backend/api/`.
 
 ### Endpoints
 
@@ -73,12 +75,12 @@ Computa métricas de qualidade em três eixos após ambas as topologias completa
 
 Retorna relatório comparativo textual. Requer que `/quality` tenha sido computado primeiro.
 
-### Estado Compartilhado (em memória)
+### Estado Compartilhado (`backend/api/state.py`)
 
 ```python
 active_queues: dict[str, Queue]                    # analysisId → fila WS
 active_threads: dict[str, list[Thread]]            # analysisId → [thread_star, thread_hier]
-active_results: dict[str, dict[str, Any]]          # analysisId → {"star": result, "hierarchical": result, "quality_metrics": ..., "comparative_report": ...}
+active_results: dict[str, dict[str, Any]]          # analysisId → {"star": result, "hierarchical": result, ...}
 active_agent_metrics: dict[str, dict[str, list]]   # analysisId → {"star": [...], "hierarchical": [...]}
 ```
 
@@ -134,7 +136,7 @@ Streaming de eventos em tempo real das duas arquiteturas.
 
 ## Integração com LLM
 
-**Arquivo:** `backend/llm_client.py`
+**Arquivo:** `backend/core/llm_client.py`
 
 ### Providers
 
@@ -181,7 +183,7 @@ Cada análise consome **2 chamadas LLM** (1 sintetizador estrela + 1 sintetizado
 
 ## Métricas de Execução
 
-### MetricsCollector (`backend/metrics.py`)
+### MetricsCollector (`backend/core/metrics.py`)
 
 Coleta por agente:
 
@@ -202,7 +204,7 @@ mc.persist(neo4j_client, analysis_id, "star")
 
 Também suporta context manager: `with MetricsCollector(...) as mc:`
 
-### MessageCounter (`backend/message_counter.py`)
+### MessageCounter (`backend/core/message_counter.py`)
 
 Contador atômico thread-safe (`threading.Lock`):
 - `increment(n=2)` — cada chamada entre agentes = 2 mensagens (ida + volta)
@@ -214,7 +216,7 @@ Contador atômico thread-safe (`threading.Lock`):
 
 ## Métricas de Qualidade
 
-**Arquivo:** `backend/quality_metrics.py`
+**Arquivo:** `backend/core/quality_metrics.py`
 
 Calculadas após ambas as topologias completarem, organizadas em 3 eixos:
 
