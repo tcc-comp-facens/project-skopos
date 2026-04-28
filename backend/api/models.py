@@ -21,6 +21,7 @@ class AnalysisRequest(BaseModel):
     dateFrom: int = 2019
     dateTo: int = 2021
     healthParams: HealthParams
+    useLlm: bool = True
 
 
 class AnalysisResponse(BaseModel):

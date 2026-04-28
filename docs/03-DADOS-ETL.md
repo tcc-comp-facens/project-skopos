@@ -121,7 +121,7 @@ Os grupos de repasse do FNS são mapeados para subfunções orçamentárias de s
 | Código subfunção | Nome | Grupos do FNS (planilha) |
 |------------------|------|--------------------------|
 | 301 | Atenção Básica | "Atenção Primária", "Atenção Básica" |
-| 302 | Assistência Hospitalar | "Atenção de Média e Alta Complexidade", "MAC", "Atenção Especializada" |
+| 302 | Assistência Hospitalar | "Atenção de Média e Alta Complexidade", "MAC", "Atenção Especializada", "Coronavírus (COVID-19)" |
 | 303 | Suporte Profilático | "Assistência Farmacêutica", "Suporte Profilático" |
 | 305 | Vigilância Epidemiológica | "Vigilância em Saúde", "Vigilância Epidemiológica" |
 
@@ -314,7 +314,7 @@ Auto-detecta anos disponíveis nos arquivos de repasses FNS em `backend/data/` p
 | `Analise` | `id` (UUID) | dateFrom, dateTo, healthParams (JSON), starStatus, hierStatus, starTextAnalysis, hierTextAnalysis, starMessageCount, hierMessageCount, starCompletedAt, hierCompletedAt, createdAt |
 | `DespesaSIOPS` | `subfuncao + ano` | id (UUID), subfuncao (int), subfuncaoNome (str), ano (int), valor (float), fonte ("siops"), importedAt (ISO 8601). **Nota:** apesar do nome, os dados vêm do portal FNS (repasses federais), não do SIOPS. |
 | `IndicadorDataSUS` | `sistema + tipo + ano` | id (UUID), sistema (str), tipo (str), ano (int), valor (float), fonte ("datasus"), importedAt (ISO 8601) |
-| `MetricaExecucao` | `id` (UUID) | architecture (str), agentId (str), agentType (str), executionTimeMs (float), cpuPercent (float), memoryMb (float), recordedAt (ISO 8601) |
+| `MetricaExecucao` | `id` (UUID) | architecture (str), agentId (str), agentType (str), executionTimeMs (float), cpuPercent (float), recordedAt (ISO 8601) |
 
 ### Relacionamentos
 

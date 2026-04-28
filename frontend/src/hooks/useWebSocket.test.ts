@@ -190,7 +190,7 @@ describe('useWebSocket', () => {
       architecture: 'star',
       totalExecutionTimeMs: 1500,
       agentMetrics: [
-        { agentName: 'consultor', executionTimeMs: 500, cpuPercent: 12, memoryMb: 64 },
+        { agentName: 'consultor', executionTimeMs: 500, cpuPercent: 12 },
       ],
     };
 
@@ -209,7 +209,7 @@ describe('useWebSocket', () => {
       architecture: 'hierarchical',
       totalExecutionTimeMs: 2000,
       agentMetrics: [
-        { agentName: 'coordenador', executionTimeMs: 800, cpuPercent: 20, memoryMb: 128 },
+        { agentName: 'coordenador', executionTimeMs: 800, cpuPercent: 20 },
       ],
     };
 

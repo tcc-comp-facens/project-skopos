@@ -120,6 +120,10 @@ class OrquestradorEstrela(AgenteBDI):
         date_from = params.get("date_from")
         date_to = params.get("date_to")
 
+        # Measure orchestrator coordination overhead
+        import time as _time
+        _orch_start = _time.time()
+
         # -- 1. Instanciar 8 agentes com IDs únicos (Req 9.1) --
         vig_id = f"star-vigilancia-{uuid.uuid4().hex[:8]}"
         hosp_id = f"star-hospitalar-{uuid.uuid4().hex[:8]}"
@@ -308,6 +312,7 @@ class OrquestradorEstrela(AgenteBDI):
                 ws_queue=ws_queue,
                 architecture="star",
                 data_coverage=data_coverage,
+                use_llm=params.get("use_llm", True),
             )
             mc_sint.stop()
             counter.increment(2)
@@ -344,7 +349,7 @@ class OrquestradorEstrela(AgenteBDI):
 
         # Send benchmark metrics event (Req 11.2)
         agent_metrics = []
-        total_time_ms = 0.0
+        workers_time_ms = 0.0
         for _, agent_type, mc in collectors:
             try:
                 m = mc.collect()
@@ -352,18 +357,31 @@ class OrquestradorEstrela(AgenteBDI):
                     "agentName": agent_type,
                     "executionTimeMs": m["executionTimeMs"],
                     "cpuPercent": m["cpuPercent"],
-                    "memoryMb": m["memoryMb"],
                 })
-                total_time_ms += m["executionTimeMs"]
+                workers_time_ms += m["executionTimeMs"]
             except Exception:
                 pass
+
+        # Wall-clock total time (what the user perceives)
+        _orch_end = _time.time()
+        wall_clock_ms = round((_orch_end - _orch_start) * 1000, 2)
+        overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
+
+        agent_metrics.append({
+            "agentName": "orquestrador_estrela",
+            "executionTimeMs": overhead_ms,
+            "cpuPercent": 0.0,
+        })
+
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "star",
             "type": "metric",
             "payload": {
                 "architecture": "star",
-                "totalExecutionTimeMs": round(total_time_ms, 2),
+                "totalExecutionTimeMs": wall_clock_ms,
+                "workersTimeMs": round(workers_time_ms, 2),
+                "overheadTimeMs": overhead_ms,
                 "agentMetrics": agent_metrics,
                 "messageCount": counter.count,
             },

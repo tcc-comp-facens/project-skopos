@@ -8,19 +8,20 @@ export interface AnalysisRequest {
     internacoes: boolean;
     mortalidade: boolean;
   };
+  useLlm: boolean;
 }
 
 export interface AgentMetric {
   agentName: string;
   executionTimeMs: number;
   cpuPercent: number;
-  memoryMb: number;
 }
 
 export interface BenchmarkMetrics {
   architecture: 'star' | 'hierarchical';
   totalExecutionTimeMs: number;
   agentMetrics: AgentMetric[];
+  messageCount?: number;
 }
 
 export interface WSEvent {

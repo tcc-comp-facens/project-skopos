@@ -7,8 +7,8 @@ const baseBenchmarks: BenchmarkMetrics = {
   architecture: 'star',
   totalExecutionTimeMs: 1500,
   agentMetrics: [
-    { agentName: 'consultor', executionTimeMs: 600, cpuPercent: 12.3, memoryMb: 45.6 },
-    { agentName: 'analisador', executionTimeMs: 900, cpuPercent: 25.1, memoryMb: 78.2 },
+    { agentName: 'consultor', executionTimeMs: 600, cpuPercent: 12.3 },
+    { agentName: 'analisador', executionTimeMs: 900, cpuPercent: 25.1 },
   ],
 };
 

@@ -222,7 +222,7 @@ class TestGetBenchmarks:
         mock_result = MagicMock()
         mock_result.__iter__ = MagicMock(return_value=iter([
             {"analysisId": "a-1", "architecture": "star", "agentId": "ag-1",
-             "executionTimeMs": 100, "cpuPercent": 5.0, "memoryMb": 50.0},
+             "executionTimeMs": 100, "cpuPercent": 5.0},
         ]))
         mock_session.run.return_value = mock_result
         mock_client._driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)

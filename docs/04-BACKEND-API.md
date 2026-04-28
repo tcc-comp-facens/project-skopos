@@ -191,7 +191,6 @@ Coleta por agente:
 |---------|-------|-----------|
 | `executionTimeMs` | `time.time()` | Tempo de execução em milissegundos |
 | `cpuPercent` | `psutil.Process.cpu_percent()` | Uso de CPU do processo |
-| `memoryMb` | `psutil.Process.memory_info().rss` | Memória RSS em MB |
 
 **Uso:**
 ```python
@@ -259,11 +258,10 @@ Gerado após ambas as topologias completarem, consolida todas as métricas em te
 
 ### Seções do relatório
 
-1. **Cobertura de Dados** — completude das despesas e indicadores, lacunas detectadas
-2. **Eficiência Operacional** — tempo total, overhead de coordenação, latency breakdown, comunicação, métricas por agente
-3. **Qualidade da Resposta** — consistência determinística, fidelidade, completude, qualidade estrutural
-4. **Resiliência** — cobertura de resultados parciais por topologia
-5. **Conclusão** — vencedor por eixo (eficiência, qualidade, consistência) e veredicto geral
+1. **Eficiência Operacional** — tempo total, overhead de coordenação, comunicação (mensagens por agente)
+2. **Qualidade da Resposta** — consistência determinística, fidelidade, completude e qualidade estrutural por topologia
+3. **Resiliência** — cobertura de resultados parciais por topologia
+4. **Conclusão** — vencedor por eixo (eficiência, qualidade, consistência) e veredicto geral
 
 O relatório é transmitido via WebSocket em chunks de 80 chars com `architecture: "both"`.
 

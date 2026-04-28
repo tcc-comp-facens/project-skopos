@@ -136,7 +136,7 @@ class Neo4jClient:
         MATCH (a:Analise {id: $analysisId})-[:GEROU_METRICA]->(m:MetricaExecucao)
         RETURN m.architecture AS architecture, m.agentId AS agentId,
                m.executionTimeMs AS executionTimeMs,
-               m.cpuPercent AS cpuPercent, m.memoryMb AS memoryMb
+               m.cpuPercent AS cpuPercent
         ORDER BY m.architecture, m.agentId
         """
         with self._driver.session() as session:
@@ -204,7 +204,7 @@ class Neo4jClient:
 
         Campos esperados em `metrica`:
           id, architecture, agentId, agentType,
-          executionTimeMs, cpuPercent, memoryMb, recordedAt (opcional)
+          executionTimeMs, cpuPercent, recordedAt (opcional)
 
         Requisitos: 11.4, 12.4
         """
@@ -217,7 +217,6 @@ class Neo4jClient:
             m.agentType       = $agentType,
             m.executionTimeMs = $executionTimeMs,
             m.cpuPercent      = $cpuPercent,
-            m.memoryMb        = $memoryMb,
             m.recordedAt      = $recordedAt
         WITH m
         MATCH (a:Analise {id: $analysisId})
@@ -232,7 +231,6 @@ class Neo4jClient:
                 agentType=metrica.get("agentType"),
                 executionTimeMs=metrica.get("executionTimeMs"),
                 cpuPercent=metrica.get("cpuPercent"),
-                memoryMb=metrica.get("memoryMb"),
                 recordedAt=recorded_at,
                 analysisId=analysis_id,
             )

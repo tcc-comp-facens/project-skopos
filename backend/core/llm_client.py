@@ -1,9 +1,9 @@
 """
-Cliente LLM centralizado com rate limiting e retry.
+Cliente LLM centralizado com rate limiting, retry e contabilização de tokens.
 
-Suporta Groq (prioridade) e Google Gemini (fallback).
+Usa Groq (llama-3.3-70b-versatile) como provider único.
 Serializa chamadas para evitar estouro de cota,
-com retry automático em caso de 429 (RESOURCE_EXHAUSTED / rate limit).
+com retry automático em caso de 429 (rate limit).
 """
 
 import logging
@@ -19,23 +19,22 @@ _lock = threading.Lock()
 
 # Timestamp da última chamada
 _last_call_time = 0.0
-_MIN_INTERVAL = 2.0  # Groq free tier é mais generoso: 30 RPM
+_MIN_INTERVAL = 2.0  # Groq free tier: 30 RPM
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10.0  # segundos
 
+# Acumulador global de tokens (thread-safe via _lock)
+_token_usage: dict[str, int] = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "call_count": 0,
+}
 
-def _get_provider() -> str:
-    """Detecta qual provider usar baseado nas variáveis de ambiente."""
-    if os.environ.get("GROQ_API_KEY", "").strip():
-        return "groq"
-    if os.environ.get("GEMINI_API_KEY", "").strip():
-        return "gemini"
-    return "none"
 
-
-def _generate_groq(prompt: str, model: str) -> Optional[str]:
-    """Chama a API do Groq."""
+def _generate_groq(prompt: str, model: str) -> tuple[Optional[str], dict[str, int]]:
+    """Chama a API do Groq e retorna (texto, token_usage)."""
     from groq import Groq
 
     client = Groq(api_key=os.environ["GROQ_API_KEY"])
@@ -45,47 +44,46 @@ def _generate_groq(prompt: str, model: str) -> Optional[str]:
         temperature=0.7,
         max_tokens=4096,
     )
-    return response.choices[0].message.content or ""
+
+    usage: dict[str, int] = {}
+    if hasattr(response, "usage") and response.usage:
+        usage = {
+            "prompt_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
+        }
+
+    text = response.choices[0].message.content or ""
+    return text, usage
 
 
-def _generate_gemini(prompt: str, model: str) -> Optional[str]:
-    """Chama a API do Google Gemini."""
-    from google import genai
-
-    client = genai.Client()
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-    )
-    return response.text or ""
+def _accumulate_tokens(usage: dict[str, int]) -> None:
+    """Acumula tokens no contador global (chamado dentro do _lock)."""
+    if not usage:
+        return
+    _token_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+    _token_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+    _token_usage["total_tokens"] += usage.get("total_tokens", 0)
+    _token_usage["call_count"] += 1
 
 
 def generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
-    """Chama o LLM com rate limiting e retry.
-
-    Detecta automaticamente o provider (Groq ou Gemini) baseado
-    nas variáveis de ambiente.
+    """Chama o LLM (Groq) com rate limiting, retry e contabilização de tokens.
 
     Returns:
-        Texto gerado, ou None se falhar após retries.
+        Texto gerado, ou None se falhar após retries ou API key ausente.
     """
     global _last_call_time
 
-    provider = _get_provider()
-    if provider == "none":
-        logger.warning("LLM: nenhuma API key configurada (GROQ_API_KEY ou GEMINI_API_KEY)")
+    if not os.environ.get("GROQ_API_KEY", "").strip():
+        logger.warning("LLM: GROQ_API_KEY não configurada")
         return None
 
-    # Modelo padrão por provider
     if model is None:
-        if provider == "groq":
-            model = "llama-3.3-70b-versatile"
-        else:
-            model = "gemini-2.0-flash"
+        model = "llama-3.3-70b-versatile"
 
     with _lock:
         for attempt in range(MAX_RETRIES):
-            # Rate limit: espera intervalo mínimo entre chamadas
             elapsed = time.time() - _last_call_time
             if elapsed < _MIN_INTERVAL:
                 wait = _MIN_INTERVAL - elapsed
@@ -94,17 +92,22 @@ def generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
 
             try:
                 _last_call_time = time.time()
+                text, usage = _generate_groq(prompt, model)
+                _accumulate_tokens(usage)
 
-                if provider == "groq":
-                    text = _generate_groq(prompt, model)
-                else:
-                    text = _generate_gemini(prompt, model)
+                if usage:
+                    logger.info(
+                        "LLM (groq): tokens — prompt=%d, completion=%d, total=%d",
+                        usage.get("prompt_tokens", 0),
+                        usage.get("completion_tokens", 0),
+                        usage.get("total_tokens", 0),
+                    )
 
                 if text:
-                    logger.info("LLM (%s): resposta gerada com sucesso", provider)
+                    logger.info("LLM (groq): resposta gerada com sucesso")
                     return text
 
-                logger.warning("LLM (%s): resposta vazia", provider)
+                logger.warning("LLM (groq): resposta vazia")
                 return None
 
             except Exception as exc:
@@ -112,13 +115,28 @@ def generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
                 if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str or "rate_limit" in exc_str.lower():
                     delay = RETRY_BASE_DELAY * (attempt + 1)
                     logger.warning(
-                        "LLM (%s): cota excedida (tentativa %d/%d), aguardando %.0fs",
-                        provider, attempt + 1, MAX_RETRIES, delay,
+                        "LLM (groq): cota excedida (tentativa %d/%d), aguardando %.0fs",
+                        attempt + 1, MAX_RETRIES, delay,
                     )
                     time.sleep(delay)
                 else:
-                    logger.error("LLM (%s): erro inesperado — %s", provider, exc)
+                    logger.error("LLM (groq): erro inesperado — %s", exc)
                     return None
 
-    logger.error("LLM (%s): falhou apos %d tentativas", provider, MAX_RETRIES)
+    logger.error("LLM (groq): falhou apos %d tentativas", MAX_RETRIES)
     return None
+
+
+def get_token_usage() -> dict[str, int]:
+    """Retorna o acumulado de tokens consumidos (thread-safe)."""
+    with _lock:
+        return dict(_token_usage)
+
+
+def reset_token_usage() -> None:
+    """Reseta o acumulador de tokens (útil entre análises)."""
+    with _lock:
+        _token_usage["prompt_tokens"] = 0
+        _token_usage["completion_tokens"] = 0
+        _token_usage["total_tokens"] = 0
+        _token_usage["call_count"] = 0

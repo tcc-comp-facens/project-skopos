@@ -102,6 +102,7 @@ async def create_analysis(req: AnalysisRequest):
         "date_from": req.dateFrom,
         "date_to": req.dateTo,
         "health_params": health_list,
+        "use_llm": req.useLlm,
     }
 
     t_star = threading.Thread(
@@ -151,8 +152,7 @@ async def get_benchmarks():
                m.architecture AS architecture,
                m.agentId AS agentId,
                m.executionTimeMs AS executionTimeMs,
-               m.cpuPercent AS cpuPercent,
-               m.memoryMb AS memoryMb
+               m.cpuPercent AS cpuPercent
         ORDER BY a.createdAt DESC, m.architecture, m.agentId
         """
         with neo4j_client._driver.session() as session:

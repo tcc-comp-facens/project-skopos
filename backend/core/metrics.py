@@ -1,7 +1,7 @@
 """
 Coletor de métricas de execução por agente.
 
-Usa psutil para capturar CPU e memória, e time para medir duração.
+Usa psutil para capturar CPU e time para medir duração.
 Cada agente instancia um MetricsCollector no início do seu trabalho
 e chama persist() ao finalizar para salvar um nó MetricaExecucao no Neo4j.
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 class MetricsCollector:
-    """Coleta métricas de execução (tempo, CPU, memória) para um agente.
+    """Coleta métricas de execução (tempo, CPU) para um agente.
 
     Pode ser usado como context manager::
 
@@ -73,7 +73,7 @@ class MetricsCollector:
         """Retorna as métricas coletadas como dicionário.
 
         Returns:
-            Dict com agentId, agentType, executionTimeMs, cpuPercent e memoryMb.
+            Dict com agentId, agentType, executionTimeMs e cpuPercent.
 
         Raises:
             RuntimeError: Se start() não foi chamado.
@@ -88,7 +88,6 @@ class MetricsCollector:
             "agentType": self.agent_type,
             "executionTimeMs": int((end - self._start_time) * 1000),
             "cpuPercent": self._process.cpu_percent(),
-            "memoryMb": round(self._process.memory_info().rss / (1024 * 1024), 2),
         }
 
     # -- persist --------------------------------------------------------

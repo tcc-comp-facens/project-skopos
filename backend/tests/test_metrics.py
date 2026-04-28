@@ -24,8 +24,8 @@ class TestMetricsCollector:
         assert isinstance(result["executionTimeMs"], int)
         assert result["executionTimeMs"] >= 10
         assert isinstance(result["cpuPercent"], float)
-        assert isinstance(result["memoryMb"], float)
-        assert result["memoryMb"] > 0
+        
+        
 
     def test_collect_without_start_raises(self):
         mc = MetricsCollector("agent-1", "consultor")
@@ -72,7 +72,7 @@ class TestMetricsCollector:
         assert "recordedAt" in metrica
         assert "executionTimeMs" in metrica
         assert "cpuPercent" in metrica
-        assert "memoryMb" in metrica
+        
 
         # persist returns the same dict
         assert result is metrica

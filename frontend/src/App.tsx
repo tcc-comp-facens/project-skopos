@@ -9,17 +9,18 @@ export function App() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [useLlm, setUseLlm] = useState(true);
 
   const ws = useWebSocket(analysisId);
 
-  const handleSubmit = useCallback(async (request: AnalysisRequest) => {
+  const handleSubmit = useCallback(async (request: Omit<AnalysisRequest, 'useLlm'>) => {
     setApiError(null);
     setSubmitting(true);
     try {
       const res = await fetch(`${API_URL}/api/analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+        body: JSON.stringify({ ...request, useLlm }),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -32,13 +33,27 @@ export function App() {
     } finally {
       setSubmitting(false);
     }
-  }, []);
+  }, [useLlm]);
 
   return (
     <div className="app" data-testid="app">
       <header className="app-header">
-        <h1>Análise Multiagente</h1>
-        <p>Comparação de arquiteturas BDI — Gastos em Saúde de Sorocaba-SP</p>
+        <div className="header-content">
+          <div>
+            <h1>Análise Multiagente</h1>
+            <p>Comparação de arquiteturas BDI — Gastos em Saúde de Sorocaba-SP</p>
+          </div>
+          <label className="llm-toggle" data-testid="llm-toggle">
+            <span className="llm-toggle-label">LLM</span>
+            <input
+              type="checkbox"
+              checked={useLlm}
+              onChange={(e) => setUseLlm(e.target.checked)}
+              data-testid="llm-toggle-input"
+            />
+            <span className="llm-toggle-slider" />
+          </label>
+        </div>
       </header>
 
       <AnalysisControls onSubmit={handleSubmit} />

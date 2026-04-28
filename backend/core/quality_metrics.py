@@ -51,6 +51,8 @@ FASE_SUPERVISORES = {
     "supervisor_dominio",
     "supervisor_analitico",
     "supervisor_contexto",
+    "orquestrador_estrela",
+    "coordenador_geral",
 }
 
 
@@ -814,49 +816,18 @@ def generate_comparative_report(
     sections.append("=" * 60)
     sections.append("")
 
-    # ── 1. Eficiência Operacional ──
-    sections.append("━━━ 1. Cobertura de Dados ━━━")
-    sections.append("")
-
-    if data_coverage:
-        summary = data_coverage.get("summary", {})
-        gaps = data_coverage.get("gaps", [])
-        desp_pct = summary.get("despesas_completeness", 1.0)
-        ind_pct = summary.get("indicadores_completeness", 1.0)
-        period = summary.get("period", "?")
-
-        sections.append(f"  Período analisado: {period}")
-        sections.append(f"  Completude das despesas SIOPS:     {desp_pct:.0%}")
-        sections.append(f"  Completude dos indicadores DataSUS: {ind_pct:.0%}")
-        sections.append("")
-
-        if gaps:
-            sections.append(f"  Lacunas detectadas ({len(gaps)}):")
-            for g in gaps:
-                sections.append(f"    ⚠ {g['description']}")
-            sections.append("")
-            sections.append(
-                "  Nota: Correlações e anomalias foram calculadas apenas com"
-            )
-            sections.append(
-                "  dados disponíveis. Anos sem dados foram excluídos."
-            )
-        else:
-            sections.append("  ✓ Todos os dados esperados estão disponíveis.")
-    else:
-        sections.append("  Informação de cobertura não disponível.")
-    sections.append("")
-
-    sections.append("━━━ 2. Eficiência Operacional ━━━")
-    sections.append("")
-
     eff = quality.get("efficiency", {})
+    qual = quality.get("quality", {})
+    resil = quality.get("resilience", {})
 
-    # Tempo total
     star_eff = eff.get("star", {})
     hier_eff = eff.get("hierarchical", {})
     star_total = star_eff.get("latency_breakdown", {}).get("total_ms", 0)
     hier_total = hier_eff.get("latency_breakdown", {}).get("total_ms", 0)
+
+    # ── 1. Eficiência ──
+    sections.append("━━━ 1. Eficiência Operacional ━━━")
+    sections.append("")
 
     sections.append(f"  Tempo total de execução:")
     sections.append(f"    Estrela:      {star_total:,.0f} ms")
@@ -869,128 +840,64 @@ def generate_comparative_report(
         )
     sections.append("")
 
-    # Overhead de coordenação
     star_overhead = star_eff.get("coordination_overhead", {})
     hier_overhead = hier_eff.get("coordination_overhead", {})
     sections.append(f"  Overhead de coordenação:")
     sections.append(
-        f"    Estrela:      {star_overhead.get('overhead_percent', 0):.1f}% "
-        f"({star_overhead.get('supervisor_time_ms', 0):,.0f} ms em supervisores)"
+        f"    Estrela:      {star_overhead.get('overhead_percent', 0):.1f}%"
     )
     sections.append(
-        f"    Hierárquica:  {hier_overhead.get('overhead_percent', 0):.1f}% "
-        f"({hier_overhead.get('supervisor_time_ms', 0):,.0f} ms em supervisores)"
+        f"    Hierárquica:  {hier_overhead.get('overhead_percent', 0):.1f}%"
     )
     sections.append("")
 
-    # Latency breakdown
-    sections.append(f"  Distribuição de tempo por fase:")
-    for arch_name, arch_eff in [("Estrela", star_eff), ("Hierárquica", hier_eff)]:
-        lb = arch_eff.get("latency_breakdown", {})
-        sections.append(f"    {arch_name}:")
-        for phase in ["dominio", "analitico", "contexto", "supervisores"]:
-            phase_data = lb.get(phase, {})
-            sections.append(
-                f"      {phase.capitalize():15s} "
-                f"{phase_data.get('time_ms', 0):>8,.0f} ms "
-                f"({phase_data.get('percent', 0):>5.1f}%)"
-            )
-    sections.append("")
-
-    # Comunicação
     star_comm = star_eff.get("communication_efficiency", {})
     hier_comm = hier_eff.get("communication_efficiency", {})
-    sections.append(f"  Eficiência de comunicação:")
+    sections.append(f"  Comunicação:")
     sections.append(
         f"    Estrela:      {star_message_count} mensagens "
-        f"({star_comm.get('messages_per_agent', 0):.1f} por agente)"
+        f"({star_comm.get('messages_per_agent', 0):.1f}/agente)"
     )
     sections.append(
         f"    Hierárquica:  {hier_message_count} mensagens "
-        f"({hier_comm.get('messages_per_agent', 0):.1f} por agente)"
+        f"({hier_comm.get('messages_per_agent', 0):.1f}/agente)"
     )
     sections.append("")
 
-    # Métricas por agente
-    sections.append(f"  Métricas por agente:")
-    for arch_name, metrics_list in [
-        ("Estrela", star_agent_metrics),
-        ("Hierárquica", hier_agent_metrics),
-    ]:
-        sections.append(f"    {arch_name}:")
-        for m in metrics_list:
-            sections.append(
-                f"      {m.get('agentName', '?'):30s} "
-                f"{m.get('executionTimeMs', 0):>7,.0f} ms  "
-                f"CPU {m.get('cpuPercent', 0):>5.1f}%  "
-                f"Mem {m.get('memoryMb', 0):>6.1f} MB"
-            )
+    # ── 2. Qualidade ──
+    sections.append("━━━ 2. Qualidade da Resposta ━━━")
     sections.append("")
 
-    # ── 2. Qualidade da Resposta ──
-    sections.append("━━━ 3. Qualidade da Resposta ━━━")
-    sections.append("")
-
-    qual = quality.get("quality", {})
-
-    # Consistência determinística
     consistency = qual.get("deterministic_consistency", {})
-    sections.append(f"  Consistência determinística:")
     if consistency.get("all_identical"):
         sections.append(
-            "    ✓ Ambas as topologias produziram resultados numéricos idênticos"
+            "  ✓ Resultados numéricos idênticos entre topologias"
         )
         sections.append(
             f"    ({consistency.get('star_correlacoes_count', 0)} correlações, "
             f"{consistency.get('star_anomalias_count', 0)} anomalias)"
         )
     else:
-        sections.append(
-            "    ✗ Divergências detectadas entre as topologias:"
-        )
+        sections.append("  ✗ Divergências detectadas:")
         for d in consistency.get("divergences", []):
-            sections.append(f"      - {d}")
+            sections.append(f"    - {d}")
     sections.append("")
 
-    # Faithfulness e Completeness
     for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
         arch_qual = qual.get(arch_key, {})
-        faith = arch_qual.get("faithfulness", {})
-        comp = arch_qual.get("completeness", {})
-        struct = arch_qual.get("structural_quality", {})
-
-        sections.append(f"  {arch_name}:")
+        faith = arch_qual.get("faithfulness", {}).get("score", 0)
+        comp = arch_qual.get("completeness", {}).get("score", 0)
+        struct = arch_qual.get("structural_quality", {}).get("score", 0)
         sections.append(
-            f"    Fidelidade (faithfulness):    {faith.get('score', 0):.0%} "
-            f"({faith.get('hits', 0)}/{faith.get('total_checkpoints', 0)} checkpoints)"
+            f"  {arch_name}: fidelidade {faith:.0%} | "
+            f"completude {comp:.0%} | estrutura {struct:.0%}"
         )
-        sections.append(
-            f"    Completude (completeness):    {comp.get('score', 0):.0%} "
-            f"(correlações {comp.get('correlacoes_coverage', 0):.0%}, "
-            f"anomalias {comp.get('anomalias_coverage', 0):.0%}, "
-            f"contexto {comp.get('contexto_coverage', 0):.0%})"
-        )
-        sections.append(
-            f"    Qualidade estrutural:         {struct.get('score', 0):.0%} "
-            f"({struct.get('sections_found', 0)}/{struct.get('sections_expected', 0)} seções)"
-        )
-    sections.append("")
-
-    # LLM-as-judge (se disponível)
-    for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
-        llm_faith = qual.get(arch_key, {}).get("faithfulness_llm")
-        if llm_faith and llm_faith.get("score", 0) > 0:
-            sections.append(
-                f"  {arch_name} — Avaliação LLM-as-judge: "
-                f"{llm_faith['score']}/5 — {llm_faith.get('justificativa', '')}"
-            )
     sections.append("")
 
     # ── 3. Resiliência ──
-    sections.append("━━━ 4. Resiliência ━━━")
+    sections.append("━━━ 3. Resiliência ━━━")
     sections.append("")
 
-    resil = quality.get("resilience", {})
     for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
         arch_resil = resil.get(arch_key, {})
         sections.append(
@@ -1000,23 +907,22 @@ def generate_comparative_report(
         components = arch_resil.get("components", {})
         missing = [k for k, v in components.items() if not v]
         if missing:
-            sections.append(f"    Componentes ausentes: {', '.join(missing)}")
+            sections.append(f"    Ausentes: {', '.join(missing)}")
     sections.append("")
 
     # ── Conclusão ──
     sections.append("━━━ Conclusão ━━━")
     sections.append("")
 
-    # Determinar vencedor por eixo
     star_wins = 0
     hier_wins = 0
 
     if star_total < hier_total:
         star_wins += 1
-        sections.append("  • Eficiência: Estrela (menor tempo de execução)")
+        sections.append("  • Eficiência: Estrela")
     elif hier_total < star_total:
         hier_wins += 1
-        sections.append("  • Eficiência: Hierárquica (menor tempo de execução)")
+        sections.append("  • Eficiência: Hierárquica")
     else:
         sections.append("  • Eficiência: Empate")
 
@@ -1024,17 +930,15 @@ def generate_comparative_report(
     hier_faith = qual.get("hierarchical", {}).get("faithfulness", {}).get("score", 0)
     if star_faith > hier_faith:
         star_wins += 1
-        sections.append("  • Qualidade: Estrela (maior fidelidade)")
+        sections.append("  • Qualidade: Estrela")
     elif hier_faith > star_faith:
         hier_wins += 1
-        sections.append("  • Qualidade: Hierárquica (maior fidelidade)")
+        sections.append("  • Qualidade: Hierárquica")
     else:
-        sections.append("  • Qualidade: Empate (mesma fidelidade)")
+        sections.append("  • Qualidade: Empate")
 
     if consistency.get("all_identical"):
-        sections.append(
-            "  • Consistência: Idêntica (ambas produzem os mesmos resultados numéricos)"
-        )
+        sections.append("  • Consistência: Idêntica")
 
     sections.append("")
     if star_wins > hier_wins:

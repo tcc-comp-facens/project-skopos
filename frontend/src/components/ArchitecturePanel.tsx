@@ -57,13 +57,17 @@ export function ArchitecturePanel({
           <div className="total-time" data-testid="total-time">
             Tempo total: {benchmarks.totalExecutionTimeMs}ms
           </div>
+          {benchmarks.messageCount != null && (
+            <div className="message-count" data-testid="message-count">
+              Mensagens entre agentes: {benchmarks.messageCount}
+            </div>
+          )}
           <table className="metrics-table" data-testid="agent-metrics-table">
             <thead>
               <tr>
                 <th>Agente</th>
                 <th>Tempo (ms)</th>
                 <th>CPU (%)</th>
-                <th>Memória (MB)</th>
               </tr>
             </thead>
             <tbody>
@@ -72,7 +76,6 @@ export function ArchitecturePanel({
                   <td>{agent.agentName}</td>
                   <td>{agent.executionTimeMs}</td>
                   <td>{agent.cpuPercent.toFixed(1)}</td>
-                  <td>{agent.memoryMb.toFixed(1)}</td>
                 </tr>
               ))}
             </tbody>

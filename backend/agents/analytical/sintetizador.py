@@ -93,6 +93,7 @@ class AgenteSintetizador(AgenteBDI):
         ws_queue: Queue,
         architecture: str,
         data_coverage: dict[str, Any] | None = None,
+        use_llm: bool = True,
     ) -> str:
         """Gera e faz streaming do texto de análise.
 
@@ -120,6 +121,7 @@ class AgenteSintetizador(AgenteBDI):
             "ws_queue": ws_queue,
             "architecture": architecture,
             "data_coverage": data_coverage or {},
+            "use_llm": use_llm,
         })
 
         self.run_cycle()
@@ -143,10 +145,13 @@ class AgenteSintetizador(AgenteBDI):
     def _generate_analysis_text(self) -> str:
         """Build analysis text via LLM or structured fallback (Req 7.1, 7.3).
 
-        Tries LLM (Groq primary, Gemini fallback via llm_client.generate())
-        first. If LLM returns None (unavailable after 3 retries), falls back
-        to structured text.
+        If use_llm is False, skips LLM entirely and uses structured fallback.
+        Otherwise tries Groq first, falls back to structured text on failure.
         """
+        if not self.beliefs.get("use_llm", True):
+            logger.info("Agent %s: LLM disabled, using structured fallback", self.agent_id)
+            return self._generate_structured_text()
+
         try:
             return self._generate_via_llm()
         except Exception:

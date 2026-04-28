@@ -59,7 +59,7 @@ REQUIRED_METRICA_FIELDS = {
     "agentType",
     "executionTimeMs",
     "cpuPercent",
-    "memoryMb",
+
     "recordedAt",
 }
 
@@ -128,7 +128,7 @@ class TestP17RegistroCompletoDeMetricas:
         - agentType: non-empty str
         - executionTimeMs: int >= 0
         - cpuPercent: float >= 0
-        - memoryMb: float > 0
+
         - recordedAt: non-empty str (ISO datetime)
         """
         mock_client = MagicMock()
@@ -145,7 +145,7 @@ class TestP17RegistroCompletoDeMetricas:
         assert isinstance(m["agentType"], str) and len(m["agentType"]) > 0
         assert isinstance(m["executionTimeMs"], int) and m["executionTimeMs"] >= 0
         assert isinstance(m["cpuPercent"], float)
-        assert isinstance(m["memoryMb"], float) and m["memoryMb"] > 0
+        
         assert isinstance(m["recordedAt"], str) and len(m["recordedAt"]) > 0
 
     @given(

@@ -152,7 +152,6 @@ interface AgentMetric {
   agentName: string;
   executionTimeMs: number;
   cpuPercent: number;
-  memoryMb: number;
 }
 
 interface BenchmarkMetrics {

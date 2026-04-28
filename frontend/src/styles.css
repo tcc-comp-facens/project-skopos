@@ -22,6 +22,63 @@ body {
   margin-bottom: 32px;
 }
 
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+
+/* LLM Toggle Switch */
+.llm-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.llm-toggle-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #8b949e;
+  letter-spacing: 0.05em;
+}
+
+.llm-toggle input {
+  display: none;
+}
+
+.llm-toggle-slider {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: #30363d;
+  border-radius: 12px;
+  transition: background 0.2s;
+}
+
+.llm-toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  background: #8b949e;
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.llm-toggle input:checked + .llm-toggle-slider {
+  background: #238636;
+}
+
+.llm-toggle input:checked + .llm-toggle-slider::after {
+  transform: translateX(20px);
+  background: #ffffff;
+}
+
 .app-header h1 {
   font-size: 1.8rem;
   font-weight: 700;

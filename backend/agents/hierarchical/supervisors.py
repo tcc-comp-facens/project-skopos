@@ -276,6 +276,7 @@ class SupervisorAnalitico(AgenteBDI):
         analysis_id: str,
         ws_queue: Queue,
         counter: MessageCounter,
+        use_llm: bool = True,
     ) -> dict[str, Any]:
         """Executa o pipeline analítico via 3 agentes subordinados.
 
@@ -391,6 +392,7 @@ class SupervisorAnalitico(AgenteBDI):
                 ws_queue=ws_queue,
                 architecture="hierarchical",
                 data_coverage=data_coverage,
+                use_llm=use_llm,
             )
             mc_sint.stop()
             counter.increment(2)
@@ -413,6 +415,7 @@ class SupervisorAnalitico(AgenteBDI):
             "anomalias": anomalias,
             "texto_analise": texto_analise,
             "data_coverage": data_coverage,
+            "dados_cruzados": dados_cruzados,
         }
 
         self.beliefs["aggregated"] = result

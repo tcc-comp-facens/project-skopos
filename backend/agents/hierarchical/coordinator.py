@@ -122,6 +122,10 @@ class CoordenadorGeral(AgenteBDI):
         date_from = params.get("date_from")
         date_to = params.get("date_to")
 
+        # Wall-clock timing for fair comparison
+        import time as _time
+        _coord_start = _time.time()
+
         # -- 1. MessageCounter para esta análise (Req 11.1, 11.2) --
         counter = MessageCounter()
 
@@ -239,6 +243,7 @@ class CoordenadorGeral(AgenteBDI):
                 analysis_id=analysis_id,
                 ws_queue=ws_queue,
                 counter=counter,
+                use_llm=params.get("use_llm", True),
             )
             mc_analitico.stop()
             # Req 11.1: coordinator → supervisor call (ida + volta)
@@ -301,7 +306,7 @@ class CoordenadorGeral(AgenteBDI):
 
         # -- 11. Send benchmark metrics event (Req 11.2) --
         agent_metrics = []
-        total_time_ms = 0.0
+        workers_time_ms = 0.0
         # Supervisor metrics
         for mc in metrics_collectors:
             try:
@@ -310,9 +315,8 @@ class CoordenadorGeral(AgenteBDI):
                     "agentName": m["agentType"],
                     "executionTimeMs": m["executionTimeMs"],
                     "cpuPercent": m["cpuPercent"],
-                    "memoryMb": m["memoryMb"],
                 })
-                total_time_ms += m["executionTimeMs"]
+                workers_time_ms += m["executionTimeMs"]
             except Exception:
                 pass
         # Subordinate agent metrics from each supervisor
@@ -324,18 +328,31 @@ class CoordenadorGeral(AgenteBDI):
                         "agentName": m["agentType"],
                         "executionTimeMs": m["executionTimeMs"],
                         "cpuPercent": m["cpuPercent"],
-                        "memoryMb": m["memoryMb"],
                     })
-                    total_time_ms += m["executionTimeMs"]
+                    workers_time_ms += m["executionTimeMs"]
                 except Exception:
                     pass
+
+        # Wall-clock total time (what the user perceives)
+        _coord_end = _time.time()
+        wall_clock_ms = round((_coord_end - _coord_start) * 1000, 2)
+        overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
+
+        agent_metrics.append({
+            "agentName": "coordenador_geral",
+            "executionTimeMs": overhead_ms,
+            "cpuPercent": 0.0,
+        })
+
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "hierarchical",
             "type": "metric",
             "payload": {
                 "architecture": "hierarchical",
-                "totalExecutionTimeMs": round(total_time_ms, 2),
+                "totalExecutionTimeMs": wall_clock_ms,
+                "workersTimeMs": round(workers_time_ms, 2),
+                "overheadTimeMs": overhead_ms,
                 "agentMetrics": agent_metrics,
                 "messageCount": counter.count,
             },
