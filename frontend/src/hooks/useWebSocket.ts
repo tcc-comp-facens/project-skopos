@@ -16,6 +16,8 @@ export interface UseWebSocketState {
   comparativeReport: string;
   comparativeLoading: boolean;
   qualityMetrics: Record<string, unknown> | null;
+  llmJudgeText: string;
+  llmJudgeLoading: boolean;
 }
 
 const INITIAL_STATE: UseWebSocketState = {
@@ -30,6 +32,8 @@ const INITIAL_STATE: UseWebSocketState = {
   comparativeReport: '',
   comparativeLoading: false,
   qualityMetrics: null,
+  llmJudgeText: '',
+  llmJudgeLoading: false,
 };
 
 export function useWebSocket(analysisId: string | null): UseWebSocketState {
@@ -122,6 +126,16 @@ export function useWebSocket(analysisId: string | null): UseWebSocketState {
             ...prev,
             qualityMetrics: event.payload as Record<string, unknown>,
           }));
+          break;
+        case 'llm_judge':
+          setState((prev) => ({
+            ...prev,
+            llmJudgeText: prev.llmJudgeText + (event.payload as string),
+            llmJudgeLoading: true,
+          }));
+          break;
+        case 'llm_judge_done':
+          setState((prev) => ({ ...prev, llmJudgeLoading: false }));
           break;
       }
     }

@@ -103,6 +103,7 @@ async def create_analysis(req: AnalysisRequest):
         "date_to": req.dateTo,
         "health_params": health_list,
         "use_llm": req.useLlm,
+        "use_llm_judge": req.useLlmJudge,
     }
 
     t_star = threading.Thread(
@@ -116,6 +117,7 @@ async def create_analysis(req: AnalysisRequest):
         daemon=True,
     )
     active_threads[analysis_id] = [t_star, t_hier]
+    active_results[analysis_id] = {"use_llm_judge": req.useLlmJudge, "use_llm": req.useLlm}
     t_star.start()
     t_hier.start()
 
@@ -163,14 +165,20 @@ async def get_benchmarks():
 
 
 @router.get("/api/analysis/{analysis_id}/quality")
-async def get_quality_metrics(analysis_id: str):
+async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = None):
     """Return quality and efficiency metrics for a completed analysis."""
     results = active_results.get(analysis_id, {})
     star_result = results.get("star")
     hier_result = results.get("hierarchical")
 
-    if "quality_metrics" in results:
-        return results["quality_metrics"]
+    # If not explicitly passed, use the value from the original analysis request
+    if use_llm_judge is None:
+        use_llm_judge = results.get("use_llm_judge", False)
+
+    # Return cached result only if llm_judge setting matches
+    cached = results.get("quality_metrics")
+    if cached and not use_llm_judge:
+        return cached
 
     if not star_result or not hier_result:
         raise HTTPException(
@@ -181,6 +189,8 @@ async def get_quality_metrics(analysis_id: str):
     star_agent_metrics = results.get("star_agent_metrics", [])
     hier_agent_metrics = results.get("hier_agent_metrics", [])
 
+    use_llm = results.get("use_llm", True)
+
     quality = compute_all_quality_metrics(
         star_result=star_result,
         hier_result=hier_result,
@@ -188,7 +198,8 @@ async def get_quality_metrics(analysis_id: str):
         hier_agent_metrics=hier_agent_metrics,
         star_message_count=star_result.get("message_count", 0),
         hier_message_count=hier_result.get("message_count", 0),
-        use_llm_judge=False,
+        use_llm_judge=use_llm_judge,
+        use_llm=use_llm,
     )
 
     active_results[analysis_id]["quality_metrics"] = quality

@@ -9,6 +9,7 @@ export interface AnalysisRequest {
     mortalidade: boolean;
   };
   useLlm: boolean;
+  useLlmJudge: boolean;
 }
 
 export interface AgentMetric {
@@ -27,6 +28,6 @@ export interface BenchmarkMetrics {
 export interface WSEvent {
   analysisId: string;
   architecture: 'star' | 'hierarchical' | 'both';
-  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics';
+  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'llm_judge' | 'llm_judge_done';
   payload: string | BenchmarkMetrics | Record<string, unknown>;
 }

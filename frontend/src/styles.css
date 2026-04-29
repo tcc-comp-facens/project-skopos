@@ -476,3 +476,111 @@ body {
 .report-spacer {
   height: 6px;
 }
+
+/* LLM Judge Section */
+.llm-judge-body {
+  margin-top: 16px;
+  padding: 16px 20px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  border-left: 3px solid #d2a8ff;
+}
+
+.judge-subtitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.judge-score {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #f0883e;
+  margin: 4px 0;
+  padding: 6px 12px;
+  background: rgba(240, 136, 62, 0.08);
+  border-radius: 6px;
+}
+
+.judge-score.good {
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.judge-arch-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #bc8cff;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+.judge-justification {
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: #c9d1d9;
+  margin: 0;
+  padding-left: 12px;
+  border-left: 2px solid #21262d;
+}
+
+/* Loading indicators for panels */
+.panel-loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  color: #8b949e;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #30363d;
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* LLM Judge loading state in comparative section */
+.judge-loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px 20px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  border-left: 3px solid #d2a8ff;
+  color: #8b949e;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.spinner.purple {
+  border-top-color: #bc8cff;
+}
+
+/* Disabled toggle style */
+.llm-toggle input:disabled + .llm-toggle-slider {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.llm-toggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

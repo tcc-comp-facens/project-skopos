@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AnalysisRequest } from '../types';
 
 interface AnalysisControlsProps {
-  onSubmit: (request: Omit<AnalysisRequest, 'useLlm'>) => void;
+  onSubmit: (request: Omit<AnalysisRequest, 'useLlm' | 'useLlmJudge'>) => void;
 }
 
 export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {

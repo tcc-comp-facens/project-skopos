@@ -49,7 +49,13 @@ export function ArchitecturePanel({
         {text || (!isLoading && !error && (
           <span className="placeholder-text">Aguardando análise...</span>
         ))}
-        {isLoading && <span className="loading-cursor" data-testid="loading-indicator">▍</span>}
+        {!text && isLoading && (
+          <div className="panel-loading-indicator">
+            <div className="spinner" />
+            <span>Gerando análise...</span>
+          </div>
+        )}
+        {text && isLoading && <span className="loading-cursor" data-testid="loading-indicator">▍</span>}
       </div>
 
       {benchmarks && (

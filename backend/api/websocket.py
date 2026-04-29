@@ -88,6 +88,7 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
 
         if star_result and hier_result:
             try:
+                # Compute quality metrics WITHOUT LLM Judge first (fast)
                 quality = compute_all_quality_metrics(
                     star_result=star_result,
                     hier_result=hier_result,
@@ -100,6 +101,7 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                         "hierarchical", 0
                     ),
                     use_llm_judge=False,
+                    use_llm=results.get("use_llm", True),
                 )
                 await websocket.send_json({
                     "analysisId": analysis_id,
@@ -144,6 +146,79 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     analysis_id[:8],
                     len(report),
                 )
+
+                # Run LLM Judge AFTER report is sent (can be slow due to retries)
+                use_llm_judge = results.get("use_llm_judge", False)
+                use_llm = results.get("use_llm", True)
+                if use_llm_judge and use_llm:
+                    logger.info("WS %s: running LLM Judge (post-report)", analysis_id[:8])
+                    # Notify frontend that LLM Judge is starting
+                    await websocket.send_json({
+                        "analysisId": analysis_id,
+                        "architecture": "both",
+                        "type": "llm_judge",
+                        "payload": "",
+                    })
+                    from core.quality_metrics import compute_faithfulness_llm
+
+                    for arch_key, arch_result in [("star", star_result), ("hierarchical", hier_result)]:
+                        judge_result = compute_faithfulness_llm(
+                            arch_result.get("correlacoes", []),
+                            arch_result.get("anomalias", []),
+                            arch_result.get("contexto_orcamentario", {}),
+                            arch_result.get("texto_analise", ""),
+                        )
+                        # Store in active_results
+                        if "quality_metrics" in active_results.get(analysis_id, {}):
+                            qm = active_results[analysis_id]["quality_metrics"]
+                            if arch_key in qm.get("quality", {}):
+                                qm["quality"][arch_key]["faithfulness_llm"] = judge_result
+
+                    # Build combined text for streaming
+                    star_judge = active_results.get(analysis_id, {}).get(
+                        "quality_metrics", {}
+                    ).get("quality", {}).get("star", {}).get("faithfulness_llm", {})
+                    hier_judge = active_results.get(analysis_id, {}).get(
+                        "quality_metrics", {}
+                    ).get("quality", {}).get("hierarchical", {}).get("faithfulness_llm", {})
+
+                    star_score = star_judge.get("score", 0)
+                    hier_score = hier_judge.get("score", 0)
+                    star_just = star_judge.get("justificativa", "")
+                    hier_just = hier_judge.get("justificativa", "")
+
+                    judge_text = (
+                        "━━━ LLM-as-Judge — Avaliação de Fidelidade ━━━\n"
+                        "\n"
+                        "SCORES\n"
+                        f"★ Estrela: {star_score}/5\n"
+                        f"◆ Hierárquica: {hier_score}/5\n"
+                        "\n"
+                        "JUSTIFICATIVAS\n"
+                    )
+                    if star_just:
+                        judge_text += f"★ Estrela\n{star_just}\n\n"
+                    if hier_just:
+                        judge_text += f"◆ Hierárquica\n{hier_just}\n"
+
+                    # Stream judge text in chunks
+                    for i in range(0, len(judge_text), chunk_size):
+                        chunk = judge_text[i : i + chunk_size]
+                        await websocket.send_json({
+                            "analysisId": analysis_id,
+                            "architecture": "both",
+                            "type": "llm_judge",
+                            "payload": chunk,
+                        })
+                    await websocket.send_json({
+                        "analysisId": analysis_id,
+                        "architecture": "both",
+                        "type": "llm_judge_done",
+                        "payload": "",
+                    })
+                    logger.info("WS %s: LLM Judge results sent", analysis_id[:8])
+                    logger.info("WS %s: LLM Judge metrics sent", analysis_id[:8])
+
             except Exception as exc:
                 logger.error(
                     "WS %s: quality metrics computation failed: %s",

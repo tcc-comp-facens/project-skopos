@@ -97,7 +97,7 @@ class TestSynthesizeReturnsText:
         agent = AgenteSintetizador("sint-test-1")
         ws_queue = Queue()
         llm_text = "Análise gerada pelo LLM com detalhes completos."
-        with patch("core.llm_client.generate", return_value=llm_text):
+        with patch("core.llm_client.generate_stream", return_value=iter([llm_text])):
             result = agent.synthesize(
                 correlacoes=_sample_correlacoes(),
                 anomalias=[],
@@ -112,7 +112,7 @@ class TestSynthesizeReturnsText:
         """Req 7.3: Structured fallback when LLM unavailable."""
         agent = AgenteSintetizador("sint-test-1")
         ws_queue = Queue()
-        with patch("core.llm_client.generate", return_value=None):
+        with patch("core.llm_client.generate_stream", return_value=iter([])):
             result = agent.synthesize(
                 correlacoes=_sample_correlacoes(),
                 anomalias=_sample_anomalias(),
@@ -131,7 +131,10 @@ class TestSynthesizeReturnsText:
         """Req 7.3: Fallback when LLM raises exception."""
         agent = AgenteSintetizador("sint-test-1")
         ws_queue = Queue()
-        with patch("core.llm_client.generate", side_effect=Exception("API error")):
+        def _raise():
+            raise Exception("API error")
+            yield  # make it a generator  # noqa: E501
+        with patch("core.llm_client.generate_stream", side_effect=Exception("API error")):
             result = agent.synthesize(
                 correlacoes=[],
                 anomalias=[],
@@ -151,7 +154,7 @@ class TestStreaming:
         """Req 7.2: Text streamed in chunks of ~80 chars."""
         agent = AgenteSintetizador("sint-test-1")
         ws_queue = Queue()
-        with patch("core.llm_client.generate", return_value=None):
+        with patch("core.llm_client.generate_stream", return_value=iter([])):
             agent.synthesize(
                 correlacoes=_sample_correlacoes(),
                 anomalias=_sample_anomalias(),

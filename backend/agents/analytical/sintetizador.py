@@ -136,48 +136,77 @@ class AgenteSintetizador(AgenteBDI):
         analysis_id = self.beliefs.get("analysis_id", "")
         architecture = self.beliefs.get("architecture", "")
 
-        text = self._generate_analysis_text()
-        self.beliefs["texto_analise"] = text
+        if not self.beliefs.get("use_llm", True):
+            logger.info("Agent %s: LLM disabled, using structured fallback", self.agent_id)
+            text = self._generate_structured_text()
+            self.beliefs["texto_analise"] = text
+            if ws_queue is not None:
+                self._stream_text(text, analysis_id, ws_queue, architecture)
+            return
 
+        # Tentar streaming real via LLM
+        try:
+            text = self._stream_via_llm(analysis_id, ws_queue, architecture)
+            if text:
+                self.beliefs["texto_analise"] = text
+                return
+        except Exception:
+            logger.warning(
+                "Agent %s: LLM streaming failed, using structured fallback",
+                self.agent_id,
+            )
+
+        # Fallback
+        text = self._generate_structured_text()
+        self.beliefs["texto_analise"] = text
         if ws_queue is not None:
             self._stream_text(text, analysis_id, ws_queue, architecture)
 
-    def _generate_analysis_text(self) -> str:
-        """Build analysis text via LLM or structured fallback (Req 7.1, 7.3).
-
-        If use_llm is False, skips LLM entirely and uses structured fallback.
-        Otherwise tries Groq first, falls back to structured text on failure.
-        """
-        if not self.beliefs.get("use_llm", True):
-            logger.info("Agent %s: LLM disabled, using structured fallback", self.agent_id)
-            return self._generate_structured_text()
-
-        try:
-            return self._generate_via_llm()
-        except Exception:
-            logger.warning(
-                "Agent %s: LLM generation failed, using structured fallback",
-                self.agent_id,
-            )
-            return self._generate_structured_text()
-
-    def _generate_via_llm(self) -> str:
-        """Generate analysis text using LLM via centralized client (Req 7.1)."""
+    def _stream_via_llm(
+        self,
+        analysis_id: str,
+        ws_queue: Queue | None,
+        architecture: str,
+    ) -> str | None:
+        """Stream LLM response token-by-token to ws_queue."""
         import core.llm_client as llm_client
 
         correlacoes = self.beliefs.get("correlacoes", [])
         anomalias = self.beliefs.get("anomalias", [])
         contexto_orcamentario = self.beliefs.get("contexto_orcamentario", {})
-
         prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario)
 
-        text = llm_client.generate(prompt)
-        if text:
-            logger.info("Agent %s: LLM analysis generated successfully", self.agent_id)
-            return text
+        full_text = ""
+        buffer = ""
 
-        logger.warning("Agent %s: LLM unavailable, using fallback", self.agent_id)
-        return self._generate_structured_text()
+        for token in llm_client.generate_stream(prompt):
+            full_text += token
+            buffer += token
+
+            # Enviar em chunks de ~CHUNK_SIZE para não sobrecarregar o WS
+            if ws_queue is not None and len(buffer) >= CHUNK_SIZE:
+                ws_queue.put({
+                    "analysisId": analysis_id,
+                    "architecture": architecture,
+                    "type": "chunk",
+                    "payload": buffer,
+                })
+                buffer = ""
+
+        # Enviar resto do buffer
+        if ws_queue is not None and buffer:
+            ws_queue.put({
+                "analysisId": analysis_id,
+                "architecture": architecture,
+                "type": "chunk",
+                "payload": buffer,
+            })
+
+        if full_text:
+            logger.info("Agent %s: LLM stream complete (%d chars)", self.agent_id, len(full_text))
+            return full_text
+
+        return None
 
     def _build_prompt(
         self,

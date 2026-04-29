@@ -4,20 +4,20 @@ Métricas de qualidade e eficiência para comparação de topologias multiagente
 Módulo centralizado que calcula métricas complementares às já existentes
 (tempo, CPU, memória, mensagens), cobrindo três eixos:
 
-A. Eficiência dos Agentes:
-   - A6: Overhead de coordenação (tempo supervisores / tempo total)
-   - A7: Latency breakdown por fase (domínio / analítico / síntese)
-   - A8: Communication efficiency (mensagens / agente)
+E. Eficiência dos Agentes:
+   - E1: Overhead de coordenação (tempo supervisores / tempo total)
+   - E2: Latency breakdown por fase (domínio / analítico / síntese)
+   - E3: Communication efficiency (mensagens / agente)
 
-B. Qualidade da Resposta:
-   - B1: Deterministic consistency (outputs numéricos idênticos entre topologias)
-   - B2: Faithfulness (texto reflete dados numéricos)
-   - B3: Completeness (todos os achados relevantes mencionados no texto)
-   - B4: Structural quality (texto contém seções esperadas)
+Q. Qualidade da Resposta:
+   - Q1: Deterministic consistency (outputs numéricos idênticos entre topologias)
+   - Q2: Faithfulness (texto reflete dados numéricos)
+   - Q3: Completeness (todos os achados relevantes mencionados no texto)
+   - Q4: Structural quality (texto contém seções esperadas)
 
-C. Resiliência:
-   - C1: Partial result coverage (agentes que completaram com sucesso)
-   - C2: Graceful degradation score (qualidade sob falha simulada)
+R. Resiliência:
+   - R1: Partial result coverage (agentes que completaram com sucesso)
+   - R2: Graceful degradation score (qualidade sob falha simulada)
 
 Requisitos: 11.1, 11.2, 11.3, 11.4
 """
@@ -62,7 +62,7 @@ FASE_SUPERVISORES = {
 
 
 def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
-    """A6 — Calcula o overhead de coordenação da topologia.
+    """E1 — Calcula o overhead de coordenação da topologia.
 
     Para a arquitetura hierárquica, mede quanto tempo é gasto em
     supervisores vs. agentes de trabalho. Para a estrela, o overhead
@@ -99,7 +99,7 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
 
 
 def compute_latency_breakdown(agent_metrics: list[dict]) -> dict[str, Any]:
-    """A7 — Calcula o breakdown de latência por fase do pipeline.
+    """E2 — Calcula o breakdown de latência por fase do pipeline.
 
     Divide o tempo total em 4 fases: domínio, analítico, contexto
     e supervisores. Retorna tempo absoluto e percentual de cada fase.
@@ -147,7 +147,7 @@ def compute_communication_efficiency(
     message_count: int,
     num_agents: int,
 ) -> dict[str, Any]:
-    """A8 — Calcula a eficiência de comunicação.
+    """E3 — Calcula a eficiência de comunicação.
 
     Mensagens por agente: quanto menor, mais eficiente a topologia
     em termos de overhead de comunicação.
@@ -176,7 +176,7 @@ def compute_deterministic_consistency(
     star_result: dict[str, Any],
     hier_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """B1 — Verifica se ambas as topologias produzem resultados numéricos idênticos.
+    """Q1 — Verifica se ambas as topologias produzem resultados numéricos idênticos.
 
     Como ambas usam os mesmos agentes analíticos com os mesmos dados,
     correlações e anomalias devem ser idênticas. Divergências indicam
@@ -242,7 +242,7 @@ def compute_faithfulness(
     anomalias: list[dict],
     texto: str,
 ) -> dict[str, Any]:
-    """B2 — Verifica se o texto do sintetizador reflete os dados numéricos.
+    """Q2 — Verifica se o texto do sintetizador reflete os dados numéricos.
 
     Checklist automático: para cada correlação forte e cada anomalia,
     verifica se o texto menciona a subfunção e/ou indicador correspondente.
@@ -338,10 +338,10 @@ def compute_faithfulness_llm(
     contexto_orcamentario: dict,
     texto: str,
 ) -> dict[str, Any]:
-    """B2 (LLM-as-judge) — Avalia faithfulness via chamada ao LLM.
+    """Q2 (LLM-as-judge) — Avalia faithfulness via chamada ao LLM.
 
     Envia os dados numéricos e o texto gerado para o LLM e pede
-    uma avaliação de fidelidade numa escala de 1 a 5.
+    uma avaliação de fidelidade estruturada numa escala de 1 a 5.
 
     Args:
         correlacoes: Lista de correlações calculadas.
@@ -354,31 +354,65 @@ def compute_faithfulness_llm(
     """
     import core.llm_client as llm_client
 
+    # Formatar dados de forma legível para o LLM
+    corr_summary = []
+    for c in correlacoes:
+        sf = c.get("subfuncao", "?")
+        tipo = c.get("tipo_indicador", "?")
+        sp = c.get("spearman", 0)
+        cls = c.get("classificacao", "?")
+        corr_summary.append(f"  - Subfunção {sf} × {tipo}: Spearman={sp}, classificação={cls}")
+
+    anom_summary = []
+    for a in anomalias:
+        sf = a.get("subfuncao", "?")
+        tipo = a.get("tipo_indicador", "?")
+        ano = a.get("ano", "?")
+        tipo_a = a.get("tipo_anomalia", "?")
+        anom_summary.append(f"  - {ano}: subfunção {sf} × {tipo} → {tipo_a}")
+
+    ctx_summary = []
+    for sf_key, dados in contexto_orcamentario.items():
+        if isinstance(dados, dict):
+            tend = dados.get("tendencia", "?")
+            var = dados.get("variacao_media_percentual", 0)
+            ctx_summary.append(f"  - Subfunção {sf_key}: tendência={tend}, variação média={var}%")
+
     prompt = (
-        "Você é um avaliador de qualidade de textos analíticos. "
-        "Avalie se o texto abaixo é FIEL aos dados numéricos fornecidos. "
-        "O texto deve refletir corretamente as correlações, anomalias e "
-        "tendências orçamentárias sem inventar informações.\n\n"
-        f"DADOS DE CORRELAÇÃO:\n{correlacoes}\n\n"
-        f"DADOS DE ANOMALIAS:\n{anomalias}\n\n"
-        f"CONTEXTO ORÇAMENTÁRIO:\n{contexto_orcamentario}\n\n"
-        f"TEXTO GERADO:\n{texto}\n\n"
-        "Responda APENAS com um JSON no formato:\n"
-        '{"score": <1-5>, "justificativa": "<explicação breve>"}\n\n'
+        "Você é um avaliador especializado em qualidade de textos analíticos sobre "
+        "gastos públicos em saúde. Sua tarefa é avaliar se o TEXTO GERADO abaixo é "
+        "fiel aos DADOS NUMÉRICOS fornecidos.\n\n"
+        "DADOS NUMÉRICOS:\n\n"
+        f"Correlações ({len(correlacoes)} pares):\n"
+        + ("\n".join(corr_summary) if corr_summary else "  Nenhuma correlação calculada") + "\n\n"
+        f"Anomalias ({len(anomalias)} detectadas):\n"
+        + ("\n".join(anom_summary) if anom_summary else "  Nenhuma anomalia detectada") + "\n\n"
+        f"Contexto Orçamentário ({len(contexto_orcamentario)} subfunções):\n"
+        + ("\n".join(ctx_summary) if ctx_summary else "  Sem contexto orçamentário") + "\n\n"
+        "TEXTO GERADO:\n"
+        f"{texto}\n\n"
+        "INSTRUÇÕES DE AVALIAÇÃO:\n"
+        "Avalie o texto nos seguintes critérios:\n"
+        "1. ACURÁCIA: O texto apresenta os dados corretamente, sem inventar valores?\n"
+        "2. COBERTURA: O texto menciona as correlações fortes, anomalias e tendências?\n"
+        "3. COERÊNCIA: As conclusões do texto são consistentes com os dados?\n\n"
+        "Responda APENAS com um JSON válido no formato abaixo (sem texto antes ou depois):\n"
+        "{\n"
+        '  "score": <1-5>,\n'
+        '  "justificativa": "<avaliação em 2-3 frases cobrindo acurácia, cobertura e coerência>"\n'
+        "}\n\n"
         "Escala:\n"
-        "1 = Texto contradiz os dados\n"
-        "2 = Texto omite a maioria dos achados\n"
+        "1 = Texto contradiz ou inventa dados\n"
+        "2 = Texto omite a maioria dos achados relevantes\n"
         "3 = Texto parcialmente fiel, com omissões significativas\n"
         "4 = Texto majoritariamente fiel, com omissões menores\n"
-        "5 = Texto completamente fiel aos dados"
+        "5 = Texto completamente fiel e coerente com os dados"
     )
 
     try:
         response = llm_client.generate(prompt)
         if response:
-            # Tentar extrair JSON da resposta
             import json
-            # Buscar JSON na resposta (pode vir com texto extra)
             json_match = re.search(r'\{[^}]+\}', response)
             if json_match:
                 parsed = json.loads(json_match.group())
@@ -405,7 +439,7 @@ def compute_completeness(
     contexto_orcamentario: dict,
     texto: str,
 ) -> dict[str, Any]:
-    """B3 — Verifica se todos os achados relevantes aparecem no texto.
+    """Q3 — Verifica se todos os achados relevantes aparecem no texto.
 
     Diferente de faithfulness (que verifica se o que está no texto é
     verdadeiro), completeness verifica se TUDO que deveria estar no
@@ -493,7 +527,7 @@ def compute_completeness(
 
 
 def compute_structural_quality(texto: str) -> dict[str, Any]:
-    """B4 — Verifica se o texto contém as seções estruturais esperadas.
+    """Q4 — Verifica se o texto contém as seções estruturais esperadas.
 
     O sintetizador deve produzir 4 seções:
     1. Resumo Executivo
@@ -560,7 +594,7 @@ def compute_structural_quality(texto: str) -> dict[str, Any]:
 
 
 def compute_partial_result_coverage(result: dict[str, Any]) -> dict[str, Any]:
-    """C1 — Calcula a cobertura de resultados parciais.
+    """R1 — Calcula a cobertura de resultados parciais.
 
     Verifica quantos componentes do resultado estão presentes e
     não-vazios, indicando quantos agentes completaram com sucesso.
@@ -597,7 +631,7 @@ def compute_graceful_degradation(
     full_result: dict[str, Any],
     degraded_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """C2 — Calcula o score de degradação graciosa.
+    """R2 — Calcula o score de degradação graciosa.
 
     Compara o resultado completo (sem falhas) com um resultado
     degradado (com falha simulada de agente) para medir quanto
@@ -655,6 +689,7 @@ def compute_all_quality_metrics(
     star_message_count: int,
     hier_message_count: int,
     use_llm_judge: bool = False,
+    use_llm: bool = True,
 ) -> dict[str, Any]:
     """Calcula todas as métricas de qualidade e eficiência.
 
@@ -669,6 +704,7 @@ def compute_all_quality_metrics(
         star_message_count: Total de mensagens da estrela.
         hier_message_count: Total de mensagens da hierárquica.
         use_llm_judge: Se True, também executa avaliação via LLM.
+        use_llm: Se False, LLM Judge é desabilitado independente de use_llm_judge.
 
     Returns:
         Dict com todas as métricas organizadas por eixo.
@@ -740,8 +776,8 @@ def compute_all_quality_metrics(
         },
     }
 
-    # LLM-as-judge (opcional, consome chamada ao LLM)
-    if use_llm_judge:
+    # LLM-as-judge (requer use_llm ativo — sem sentido avaliar texto fallback)
+    if use_llm_judge and use_llm:
         metrics["quality"]["star"]["faithfulness_llm"] = (
             compute_faithfulness_llm(
                 star_result.get("correlacoes", []),

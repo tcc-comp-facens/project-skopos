@@ -31,13 +31,18 @@ SPA (Single Page Application) em React 18 com TypeScript, usando Vite como bundl
 Componente principal que orquestra a interface:
 
 - Gerencia estado da análise (`analysisId`, `apiError`, `submitting`)
-- Integra com a API via `fetch` (POST /api/analysis)
+- Gerencia toggles globais `useLlm` (default `true`) e `useLlmJudge` (default `false`) no header
+- Integra com a API via `fetch` (POST /api/analysis), enviando `useLlm` e `useLlmJudge` no body
 - Conecta ao WebSocket via hook `useWebSocket`
 - Renderiza controles, painéis e relatório comparativo
 
+**Toggles no header:**
+- **LLM** — habilita/desabilita síntese textual via LLM (Groq/Gemini). Quando desabilitado, o backend gera texto estruturado (fallback).
+- **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge) durante o cálculo de métricas de qualidade. Consome 1 chamada LLM extra por topologia. **Desabilitado automaticamente quando o toggle LLM está desligado** (depende do LLM estar ativo).
+
 **Fluxo:**
 1. Usuário preenche formulário e clica "Analisar"
-2. `handleSubmit` envia POST → recebe `analysisId`
+2. `handleSubmit` envia POST com `{ ...request, useLlm, useLlmJudge }` → recebe `analysisId`
 3. `useWebSocket(analysisId)` conecta e começa a receber eventos
 4. Painéis exibem texto em streaming
 5. Após ambas completarem: relatório comparativo aparece
@@ -146,6 +151,8 @@ interface AnalysisRequest {
     internacoes: boolean;
     mortalidade: boolean;
   };
+  useLlm: boolean;
+  useLlmJudge: boolean;
 }
 
 interface AgentMetric {
@@ -158,6 +165,7 @@ interface BenchmarkMetrics {
   architecture: 'star' | 'hierarchical';
   totalExecutionTimeMs: number;
   agentMetrics: AgentMetric[];
+  messageCount?: number;
 }
 
 interface WSEvent {

@@ -22,6 +22,7 @@ class AnalysisRequest(BaseModel):
     dateTo: int = 2021
     healthParams: HealthParams
     useLlm: bool = True
+    useLlmJudge: bool = False
 
 
 class AnalysisResponse(BaseModel):

@@ -10,17 +10,18 @@ export function App() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [useLlm, setUseLlm] = useState(true);
+  const [useLlmJudge, setUseLlmJudge] = useState(false);
 
   const ws = useWebSocket(analysisId);
 
-  const handleSubmit = useCallback(async (request: Omit<AnalysisRequest, 'useLlm'>) => {
+  const handleSubmit = useCallback(async (request: Omit<AnalysisRequest, 'useLlm' | 'useLlmJudge'>) => {
     setApiError(null);
     setSubmitting(true);
     try {
       const res = await fetch(`${API_URL}/api/analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...request, useLlm }),
+        body: JSON.stringify({ ...request, useLlm, useLlmJudge }),
       });
       if (!res.ok) {
         const body = await res.text();
@@ -33,7 +34,7 @@ export function App() {
     } finally {
       setSubmitting(false);
     }
-  }, [useLlm]);
+  }, [useLlm, useLlmJudge]);
 
   return (
     <div className="app" data-testid="app">
@@ -50,6 +51,17 @@ export function App() {
               checked={useLlm}
               onChange={(e) => setUseLlm(e.target.checked)}
               data-testid="llm-toggle-input"
+            />
+            <span className="llm-toggle-slider" />
+          </label>
+          <label className="llm-toggle" data-testid="llm-judge-toggle">
+            <span className="llm-toggle-label">LLM Judge</span>
+            <input
+              type="checkbox"
+              checked={useLlmJudge && useLlm}
+              onChange={(e) => setUseLlmJudge(e.target.checked)}
+              disabled={!useLlm}
+              data-testid="llm-judge-toggle-input"
             />
             <span className="llm-toggle-slider" />
           </label>
@@ -126,8 +138,51 @@ export function App() {
               }
               return <p key={i} className="report-line">{line}</p>;
             })}
-            {ws.comparativeLoading && <span className="loading-cursor" data-testid="comparative-loading">▍</span>}
+            {ws.comparativeLoading && !ws.comparativeReport && (
+              <div className="panel-loading-indicator">
+                <div className="spinner" />
+                <span>Computando métricas de qualidade...</span>
+              </div>
+            )}
+            {ws.comparativeLoading && ws.comparativeReport && <span className="loading-cursor" data-testid="comparative-loading">▍</span>}
           </div>
+
+          {(ws.llmJudgeText || ws.llmJudgeLoading) && (
+            <div
+              className="llm-judge-body"
+              data-testid="llm-judge-report"
+              aria-live="polite"
+            >
+              {!ws.llmJudgeText && ws.llmJudgeLoading && (
+                <div className="panel-loading-indicator">
+                  <div className="spinner purple" />
+                  <span>LLM Judge avaliando fidelidade dos textos...</span>
+                </div>
+              )}
+              {ws.llmJudgeText.split('\n').map((line, i) => {
+                if (line.startsWith('━━━')) {
+                  const title = line.replace(/━/g, '').trim();
+                  return <h4 key={`j${i}`} className="report-section-title">{title}</h4>;
+                }
+                if (line === 'SCORES' || line === 'JUSTIFICATIVAS') {
+                  return <p key={`j${i}`} className="judge-subtitle">{line}</p>;
+                }
+                if (line.startsWith('★ Estrela:') || line.startsWith('◆ Hierárquica:')) {
+                  const isHigh = line.includes('5/5') || line.includes('4/5');
+                  const cls = isHigh ? 'judge-score good' : 'judge-score';
+                  return <p key={`j${i}`} className={cls}>{line}</p>;
+                }
+                if (line === '★ Estrela' || line === '◆ Hierárquica') {
+                  return <p key={`j${i}`} className="judge-arch-label">{line}</p>;
+                }
+                if (line.trim() === '') {
+                  return <div key={`j${i}`} className="report-spacer" />;
+                }
+                return <p key={`j${i}`} className="judge-justification">{line}</p>;
+              })}
+              {ws.llmJudgeLoading && <span className="loading-cursor" data-testid="llm-judge-loading">▍</span>}
+            </div>
+          )}
         </div>
       )}
     </div>
