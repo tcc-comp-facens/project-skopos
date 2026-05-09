@@ -14,13 +14,13 @@
 
 ## Visão Geral
 
-SPA (Single Page Application) em React 18 com TypeScript, usando Vite como bundler. A interface exibe os resultados de ambas as arquiteturas lado a lado com streaming em tempo real via WebSocket.
+SPA (Single Page Application) em React 18 com TypeScript, usando Vite como bundler. A interface é organizada em **duas abas** — Usuário e Técnica — que compartilham o mesmo estado de análise. A aba Usuário apresenta os resultados de forma acessível ao público geral (exibindo apenas a arquitetura vencedora). A aba Técnica preserva toda a profundidade técnica, com painéis lado a lado, métricas de qualidade e relatório comparativo. Os resultados são exibidos em streaming em tempo real via WebSocket.
 
 **Tecnologias:**
 - React 18.3.1 (hooks funcionais, sem classes)
 - TypeScript 5.5.3 (strict mode)
 - Vite 5.3.4 (bundler + HMR)
-- CSS puro (sem framework de estilização)
+- CSS puro (sem framework de estilização) com paleta Sophia
 
 ---
 
@@ -28,44 +28,102 @@ SPA (Single Page Application) em React 18 com TypeScript, usando Vite como bundl
 
 ### App (`src/App.tsx`)
 
-Componente principal que orquestra a interface:
+Componente principal que orquestra a interface com duas abas:
 
 - Gerencia estado da análise (`analysisId`, `apiError`, `submitting`)
-- Gerencia toggles globais `useLlm` (default `true`) e `useLlmJudge` (default `false`) no header
+- Gerencia `activeTab` (`'user'` | `'tech'`), iniciando em `'user'`
+- Gerencia toggles `useLlm` (default `true`) e `useLlmJudge` (default `false`)
+- Deriva `winner` via `useMemo(() => parseWinner(ws.comparativeReport))`
 - Integra com a API via `fetch` (POST /api/analysis), enviando `useLlm` e `useLlmJudge` no body
 - Conecta ao WebSocket via hook `useWebSocket`
-- Renderiza controles, painéis e relatório comparativo
-
-**Toggles no header:**
-- **LLM** — habilita/desabilita síntese textual via LLM (Groq/Gemini). Quando desabilitado, o backend gera texto estruturado (fallback).
-- **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge) durante o cálculo de métricas de qualidade. Consome 1 chamada LLM extra por topologia. **Desabilitado automaticamente quando o toggle LLM está desligado** (depende do LLM estar ativo).
+- Renderiza `<Header>`, `<TabNav>`, `<UserTab>` e `<TechTab>` (ambas sempre montadas, visibilidade controlada via CSS `display`)
 
 **Fluxo:**
-1. Usuário preenche formulário e clica "Analisar"
+1. Usuário preenche formulário na aba Usuário e clica "Analisar"
 2. `handleSubmit` envia POST com `{ ...request, useLlm, useLlmJudge }` → recebe `analysisId`
 3. `useWebSocket(analysisId)` conecta e começa a receber eventos
-4. Painéis exibem texto em streaming
-5. Após ambas completarem: relatório comparativo aparece
+4. Aba Usuário exibe resultado da arquitetura vencedora
+5. Aba Técnica exibe ambas as arquiteturas lado a lado, métricas e relatório comparativo
+6. Troca de aba não interrompe a análise em andamento (ambas as abas permanecem montadas no DOM; a visibilidade é controlada via `display: none/block`)
+
+### Header (`src/components/Header.tsx`)
+
+Identidade visual Sophia: barra superior com o brasão de Sorocaba (`src/assets/brasao-sorocaba.svg`), nome "Sophia" em destaque e subtítulo descritivo. Componente puramente visual, sem props.
+
+### TabNav (`src/components/TabNav.tsx`)
+
+Barra de navegação com duas abas: "Usuário" e "Técnica". Usa `role="tablist"`, `role="tab"`, `aria-selected` e `aria-controls` para acessibilidade.
+
+### UserTab (`src/components/UserTab.tsx`)
+
+Aba destinada ao público geral e servidores públicos:
+
+- `<AnalysisControls>` é sempre visível (renderizado em todos os estados)
+- Se análise em andamento → exibe indicador de carregamento ("Aguardando análise...")
+- Se vencedor identificado → exibe `<WinnerPanel>` com resultado da arquitetura vencedora
+- Se ambas as arquiteturas falharam → exibe mensagem de erro acessível
+- NÃO exibe controles LLM, métricas técnicas ou benchmarks
+
+### TechTab (`src/components/TechTab.tsx`)
+
+Aba destinada a avaliadores técnicos e contexto do TCC:
+
+- `<LlmControls>` — toggles LLM e LLM Judge
+- Dois `<ArchitecturePanel>` lado a lado (Estrela e Hierárquica) com benchmarks
+- `<QualityMetricsSection>` — cards de métricas E1-E3, Q1-Q4, R1-R2
+- `<ComparativeSection>` — relatório comparativo + LLM Judge
+- NÃO exibe controles de data/parâmetros de saúde
+
+### WinnerPanel (`src/components/WinnerPanel.tsx`)
+
+Exibe o resultado da arquitetura vencedora em painel com borda dourada:
+- Sem banner/badge — apenas o painel com destaque visual via borda `--sophia-gold`
+- Renderiza `<ArchitecturePanel>` com `benchmarks={null}` (sem métricas técnicas)
+
+### LlmControls (`src/components/LlmControls.tsx`)
+
+Toggles de LLM e LLM Judge:
+- **LLM** — habilita/desabilita síntese textual via LLM (Groq/Gemini)
+- **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge). **Desabilitado automaticamente quando o toggle LLM está desligado.**
+
+### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)
+
+Cards de métricas de qualidade organizados em três grupos:
+- **Eficiência**: E1, E2, E3
+- **Qualidade**: Q1, Q2, Q3, Q4
+- **Resiliência**: R1, R2
+
+Cada `<ScoreCard>` exibe valores de ambas as arquiteturas lado a lado.
+
+### ComparativeSection (`src/components/ComparativeSection.tsx`)
+
+Relatório comparativo e LLM Judge:
+- Parsing linha a linha com formatação visual: títulos (`━━━`), vereditos (`→`), sucessos (`✓`), alertas (`✗`), bullets (`•`)
+- Loading cursor durante streaming
 
 ### AnalysisControls (`src/components/AnalysisControls.tsx`)
 
-Formulário de entrada com:
+Formulário de entrada (renderizado dentro de `UserTab`, sempre visível):
 
 | Campo | Tipo | Default | Descrição |
 |-------|------|---------|-----------|
 | `dateFrom` | number input | 2019 | Ano de início |
 | `dateTo` | number input | 2021 | Ano de fim |
-| `dengue` | checkbox | ✓ | Incluir notificações de dengue |
-| `covid` | checkbox | ✓ | Incluir notificações de COVID |
-| `vaccination` | checkbox | ✓ | Incluir cobertura vacinal |
-| `internacoes` | checkbox | ✓ | Incluir internações |
-| `mortalidade` | checkbox | ✓ | Incluir mortalidade |
+| `dengue` | toggle button | ativo | SINAN-DENG — Dengue |
+| `covid` | toggle button | ativo | SINAN-INFL — COVID-19 |
+| `vaccination` | toggle button | ativo | SI-PNI — Vacinação |
+| `internacoes` | toggle button | ativo | SIH — Internações Hospitalares |
+| `mortalidade` | toggle button | ativo | SIM — Mortalidade |
 
-**Validação:** Botão "Analisar" desabilitado se nenhum parâmetro de saúde estiver marcado.
+Os parâmetros de saúde são exibidos como botões de alternância (`<button aria-pressed>`), mostrando a sigla do sistema SUS e o nome em linguagem acessível. O estado ativo é indicado visualmente pela classe CSS `active`.
+
+**Validação:**
+- Botão "Analisar" desabilitado se nenhum parâmetro de saúde estiver ativo.
+- Botão "Analisar" desabilitado e mensagem de erro exibida se `dateFrom > dateTo`.
 
 ### ArchitecturePanel (`src/components/ArchitecturePanel.tsx`)
 
-Painel de resultado para cada arquitetura:
+Painel de resultado para cada arquitetura (usado em TechTab com benchmarks, e em WinnerPanel sem benchmarks):
 
 | Elemento | Descrição |
 |----------|-----------|
@@ -85,14 +143,6 @@ interface ArchitecturePanelProps {
   error: string | null;
 }
 ```
-
-### Seção Relatório Comparativo
-
-Renderizada no `App.tsx` quando `ws.comparativeReport` ou `ws.comparativeLoading` são truthy:
-
-- Parsing linha a linha do relatório textual
-- Formatação visual: divisores (`=====`), títulos de seção (`━━━`), veredictos (`→`), sucessos (`✓`), alertas (`✗`), bullets (`•`)
-- Loading cursor durante streaming
 
 ---
 
@@ -195,13 +245,16 @@ Configurável via variáveis de ambiente Vite (prefixo `VITE_`).
 
 **Arquivo:** `src/styles.css`
 
-Tema dark com CSS puro:
+Tema dark com CSS puro e paleta Sophia:
 
 | Aspecto | Implementação |
 |---------|---------------|
-| Fundo | `#0f1117` (escuro) |
-| Cards | Bordas sutis `#30363d`, fundo `#161b22` |
-| Título | Gradiente azul/roxo |
+| Fundo | `#2D3945` (azul escuro — `--sophia-dark`) |
+| Cards/Painéis | `--surface-base` (#1E2A35), bordas `--sophia-mid` |
+| Paleta | Variáveis CSS: `--sophia-dark`, `--sophia-mid`, `--sophia-vivid`, `--sophia-light`, `--sophia-gold`, `--sophia-gray`, `--sophia-warm` |
+| Abas | `.tab-nav` com destaque `--sophia-vivid` na aba ativa |
+| Vencedor | `.winner-panel` com borda e badge `--sophia-gold` |
+| Score Cards | Grid responsivo com valores coloridos por arquitetura |
 | Scrollbar | Customizada (fina, escura) |
 | Loading | Cursor `▍` com animação de blink |
 | Layout | Grid 2 colunas → 1 coluna em mobile |
@@ -213,13 +266,15 @@ Tema dark com CSS puro:
 
 | Recurso | Implementação |
 |---------|---------------|
+| Navegação por abas | `role="tablist"`, `role="tab"`, `aria-selected`, `aria-controls` |
 | Conteúdo dinâmico | `aria-live="polite"` nas caixas de texto |
 | Mensagens de erro | `role="alert"` |
 | Labels | `<label htmlFor>` em todos os inputs |
-| Fieldset | `<fieldset>` + `<legend>` para grupo de checkboxes |
+| Fieldset | `<fieldset>` + `<legend>` para grupo de parâmetros de saúde |
+| Toggle buttons | `aria-pressed` nos botões de parâmetros de saúde |
 | data-testid | Em todos os elementos testáveis |
 | Semântica | `<header>`, `<form>`, `<table>` com `<thead>`/`<tbody>` |
-| Botão desabilitado | `disabled` quando nenhum parâmetro selecionado |
+| Botão desabilitado | `disabled` quando nenhum parâmetro selecionado ou datas inválidas |
 
 ---
 

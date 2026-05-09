@@ -77,11 +77,11 @@ export function ArchitecturePanel({
               </tr>
             </thead>
             <tbody>
-              {benchmarks.agentMetrics.map((agent) => (
-                <tr key={agent.agentName} data-testid={`agent-row-${agent.agentName}`}>
-                  <td>{agent.agentName}</td>
-                  <td>{agent.executionTimeMs}</td>
-                  <td>{agent.cpuPercent.toFixed(1)}</td>
+              {benchmarks.agentMetrics?.map((agent, idx) => (
+                <tr key={agent.agentName || idx} data-testid={`agent-row-${agent.agentName || idx}`}>
+                  <td>{agent.agentName || '—'}</td>
+                  <td>{agent.executionTimeMs ?? '—'}</td>
+                  <td>{agent.cpuPercent != null ? agent.cpuPercent.toFixed(1) : '—'}</td>
                 </tr>
               ))}
             </tbody>

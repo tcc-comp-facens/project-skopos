@@ -826,6 +826,8 @@ def generate_comparative_report(
     star_message_count: int,
     hier_message_count: int,
     data_coverage: dict[str, Any] | None = None,
+    star_wall_clock_ms: float = 0,
+    hier_wall_clock_ms: float = 0,
 ) -> str:
     """Gera relatório textual comparativo entre as duas topologias.
 
@@ -839,6 +841,9 @@ def generate_comparative_report(
         hier_agent_metrics: Métricas por agente da hierárquica.
         star_message_count: Total de mensagens da estrela.
         hier_message_count: Total de mensagens da hierárquica.
+        data_coverage: Dict com cobertura de dados e gaps detectados.
+        star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
+        hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
         data_coverage: Dict com cobertura de dados e gaps detectados.
 
     Returns:
@@ -858,8 +863,9 @@ def generate_comparative_report(
 
     star_eff = eff.get("star", {})
     hier_eff = eff.get("hierarchical", {})
-    star_total = star_eff.get("latency_breakdown", {}).get("total_ms", 0)
-    hier_total = hier_eff.get("latency_breakdown", {}).get("total_ms", 0)
+    # Use wall-clock real (tempo percebido pelo usuário) em vez da soma dos tempos individuais
+    star_total = star_wall_clock_ms if star_wall_clock_ms > 0 else star_eff.get("latency_breakdown", {}).get("total_ms", 0)
+    hier_total = hier_wall_clock_ms if hier_wall_clock_ms > 0 else hier_eff.get("latency_breakdown", {}).get("total_ms", 0)
 
     # ── 1. Eficiência ──
     sections.append("━━━ 1. Eficiência Operacional ━━━")

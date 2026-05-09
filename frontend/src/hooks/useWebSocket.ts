@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { WS_URL } from '../config';
-import type { WSEvent, BenchmarkMetrics } from '../types';
+import type { WSEvent, BenchmarkMetrics, QualityMetrics } from '../types';
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 
@@ -15,7 +15,7 @@ export interface UseWebSocketState {
   hierError: string | null;
   comparativeReport: string;
   comparativeLoading: boolean;
-  qualityMetrics: Record<string, unknown> | null;
+  qualityMetrics: QualityMetrics | null;
   llmJudgeText: string;
   llmJudgeLoading: boolean;
 }
@@ -124,7 +124,7 @@ export function useWebSocket(analysisId: string | null): UseWebSocketState {
         case 'quality_metrics':
           setState((prev) => ({
             ...prev,
-            qualityMetrics: event.payload as Record<string, unknown>,
+            qualityMetrics: event.payload as unknown as QualityMetrics,
           }));
           break;
         case 'llm_judge':

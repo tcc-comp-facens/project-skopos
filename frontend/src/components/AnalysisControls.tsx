@@ -5,24 +5,46 @@ interface AnalysisControlsProps {
   onSubmit: (request: Omit<AnalysisRequest, 'useLlm' | 'useLlmJudge'>) => void;
 }
 
+/**
+ * Mapeamento dos parâmetros de saúde com sigla SUS e nome acessível.
+ * Requirements: 3.1, 3.2
+ */
+const HEALTH_PARAMS = [
+  { key: 'dengue' as const,      acronym: 'SINAN-DENG', label: 'Dengue' },
+  { key: 'covid' as const,       acronym: 'SINAN-INFL', label: 'COVID-19' },
+  { key: 'vaccination' as const, acronym: 'SI-PNI',     label: 'Vacinação' },
+  { key: 'internacoes' as const, acronym: 'SIH',        label: 'Internações Hospitalares' },
+  { key: 'mortalidade' as const, acronym: 'SIM',        label: 'Mortalidade' },
+] as const;
+
+type HealthParamKey = typeof HEALTH_PARAMS[number]['key'];
+
 export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
   const [dateFrom, setDateFrom] = useState(2019);
   const [dateTo, setDateTo] = useState(2021);
-  const [dengue, setDengue] = useState(true);
-  const [covid, setCovid] = useState(true);
-  const [vaccination, setVaccination] = useState(true);
-  const [internacoes, setInternacoes] = useState(true);
-  const [mortalidade, setMortalidade] = useState(true);
+  const [params, setParams] = useState<Record<HealthParamKey, boolean>>({
+    dengue: false,
+    covid: false,
+    vaccination: false,
+    internacoes: false,
+    mortalidade: false,
+  });
 
-  const hasHealthParam = dengue || covid || vaccination || internacoes || mortalidade;
+  const hasHealthParam = Object.values(params).some(Boolean);
+  const dateError = dateFrom > dateTo;
+  const isSubmitDisabled = !hasHealthParam || dateError;
+
+  const handleParamChange = (key: HealthParamKey, checked: boolean) => {
+    setParams((prev) => ({ ...prev, [key]: checked }));
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hasHealthParam) return;
+    if (isSubmitDisabled) return;
     onSubmit({
       dateFrom,
       dateTo,
-      healthParams: { dengue, covid, vaccination, internacoes, mortalidade },
+      healthParams: params,
     });
   };
 
@@ -30,7 +52,7 @@ export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
     <form className="controls-form" data-testid="analysis-controls" onSubmit={handleSubmit}>
       <div className="controls-row">
         <div className="control-group">
-          <label htmlFor="dateFrom">Ano início</label>
+          <label htmlFor="dateFrom">De:</label>
           <input
             id="dateFrom"
             data-testid="date-from"
@@ -41,7 +63,7 @@ export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
         </div>
 
         <div className="control-group">
-          <label htmlFor="dateTo">Ano fim</label>
+          <label htmlFor="dateTo">Até:</label>
           <input
             id="dateTo"
             data-testid="date-to"
@@ -52,73 +74,44 @@ export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
         </div>
 
         <fieldset className="health-fieldset">
-          <legend>Parâmetros de saúde</legend>
+          <legend>Quais parâmetros consultar?</legend>
 
-          <label htmlFor="toggle-dengue">
-            <input
-              id="toggle-dengue"
-              data-testid="toggle-dengue"
-              type="checkbox"
-              checked={dengue}
-              onChange={(e) => setDengue(e.target.checked)}
-            />
-            Dengue
-          </label>
-
-          <label htmlFor="toggle-covid">
-            <input
-              id="toggle-covid"
-              data-testid="toggle-covid"
-              type="checkbox"
-              checked={covid}
-              onChange={(e) => setCovid(e.target.checked)}
-            />
-            COVID
-          </label>
-
-          <label htmlFor="toggle-vaccination">
-            <input
-              id="toggle-vaccination"
-              data-testid="toggle-vaccination"
-              type="checkbox"
-              checked={vaccination}
-              onChange={(e) => setVaccination(e.target.checked)}
-            />
-            Vacinação
-          </label>
-
-          <label htmlFor="toggle-internacoes">
-            <input
-              id="toggle-internacoes"
-              data-testid="toggle-internacoes"
-              type="checkbox"
-              checked={internacoes}
-              onChange={(e) => setInternacoes(e.target.checked)}
-            />
-            Internações
-          </label>
-
-          <label htmlFor="toggle-mortalidade">
-            <input
-              id="toggle-mortalidade"
-              data-testid="toggle-mortalidade"
-              type="checkbox"
-              checked={mortalidade}
-              onChange={(e) => setMortalidade(e.target.checked)}
-            />
-            Mortalidade
-          </label>
+          <div className="health-param-buttons">
+            {HEALTH_PARAMS.map(({ key, acronym, label }) => (
+              <button
+                key={key}
+                type="button"
+                data-testid={`toggle-${key}`}
+                className={`health-param-btn${params[key] ? ' active' : ''}`}
+                aria-pressed={params[key]}
+                onClick={() => handleParamChange(key, !params[key])}
+              >
+                <span className="health-param-acronym">{acronym}</span>
+                <span className="health-param-name">{label}</span>
+              </button>
+            ))}
+          </div>
         </fieldset>
 
         <button
           type="submit"
           className="submit-btn"
           data-testid="submit-button"
-          disabled={!hasHealthParam}
+          disabled={isSubmitDisabled}
         >
           Analisar
         </button>
       </div>
+
+      {dateError && (
+        <div
+          className="date-error"
+          data-testid="date-error"
+          role="alert"
+        >
+          O ano de início não pode ser maior que o ano de fim.
+        </div>
+      )}
     </form>
   );
 }

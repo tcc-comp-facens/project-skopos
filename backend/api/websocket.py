@@ -48,6 +48,7 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
     loop = asyncio.get_event_loop()
     captured_agent_metrics: dict[str, list[dict]] = {"star": [], "hierarchical": []}
     captured_message_counts: dict[str, int] = {"star": 0, "hierarchical": 0}
+    captured_wall_clock: dict[str, float] = {"star": 0, "hierarchical": 0}
 
     try:
         while done_count < 2:
@@ -72,6 +73,7 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                 if arch in captured_agent_metrics:
                     captured_agent_metrics[arch] = payload.get("agentMetrics", [])
                     captured_message_counts[arch] = payload.get("messageCount", 0)
+                    captured_wall_clock[arch] = payload.get("totalExecutionTimeMs", 0)
 
             await websocket.send_json(event)
 
@@ -122,6 +124,8 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                         "hierarchical", 0
                     ),
                     data_coverage=star_result.get("data_coverage"),
+                    star_wall_clock_ms=captured_wall_clock.get("star", 0),
+                    hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
                 )
                 active_results[analysis_id]["comparative_report"] = report
 
