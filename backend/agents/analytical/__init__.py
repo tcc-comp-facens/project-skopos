@@ -2,10 +2,10 @@
 
 from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
-from agents.analytical.sintetizador import AgenteSintetizador
+from agents.analytical.sintetizador import TextSynthesizer
 
 __all__ = [
     "AgenteCorrelacao",
     "AgenteAnomalias",
-    "AgenteSintetizador",
+    "TextSynthesizer",
 ]

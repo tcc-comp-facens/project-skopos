@@ -34,7 +34,7 @@ Avaliar comparativamente duas topologias de sistemas multiagente BDI:
 
 | Topologia | Descrição | Característica principal |
 |-----------|-----------|--------------------------|
-| **Estrela** | Um agente central (orquestrador) coordena 8 agentes periféricos | Ponto único de controle, comunicação centralizada |
+| **Estrela** | Um agente central (orquestrador) coordena agentes periféricos (ativação condicional de domínio) | Ponto único de controle, comunicação centralizada |
 | **Hierárquica** | Agentes organizados em 3 níveis com supervisores intermediários | Comunicação lateral entre supervisores, degradação graciosa |
 
 A comparação é feita com base em:
@@ -55,22 +55,21 @@ A comparação é feita com base em:
 | Bundler | Vite | 5.3.4 | Build rápido, HMR, suporte nativo a TypeScript |
 | Banco de Dados | Neo4j | 5.x | Grafo nativo para modelar relações entre gastos e indicadores |
 | LLM (primário) | Groq | llama-3.3-70b-versatile | Geração de análises textuais; baixa latência |
-| LLM (fallback) | Google Gemini | gemini-2.0-flash | Fallback quando Groq atinge limite de cota |
 | Métricas | psutil | latest | Coleta de CPU e memória por agente em tempo real |
-| Estatística | SciPy | latest | Pearson, Spearman, Kendall Tau-b |
+| Estatística | SciPy | latest | Spearman (correlação) |
 | ETL DataSUS | PySUS | latest | Download automatizado de dados do FTP DataSUS |
 | ETL SIOPS | openpyxl + xlrd | latest | Leitura de planilhas .xlsx e .xls |
 | Manipulação de dados | pandas | latest | Transformação e filtragem de DataFrames |
 | Containerização | Docker + Docker Compose | latest | Orquestração de Neo4j, backend e frontend |
-| Testes Backend | pytest + Hypothesis | latest | Testes unitários e property-based |
-| Testes Frontend | Vitest + fast-check | 2.0.4 + 3.21.0 | Testes unitários e property-based |
+| Testes Backend | pytest | latest | Testes unitários |
+| Testes Frontend | Vitest | 2.0.4 | Testes de componentes |
 | Testing Library | @testing-library/react | 16.0.0 | Testes de componentes React |
 
 ### Dependências Backend (requirements.txt)
 
 ```
-fastapi, uvicorn[standard], neo4j, pysus, psutil, hypothesis, pytest,
-pytest-asyncio, python-dotenv, httpx, google-genai, groq, openpyxl,
+fastapi, uvicorn[standard], neo4j, pysus, psutil, pytest,
+python-dotenv, httpx, groq, openpyxl,
 xlrd, pandas, scipy
 ```
 
@@ -78,7 +77,7 @@ xlrd, pandas, scipy
 
 ```
 react ^18.3.1, react-dom ^18.3.1, typescript ^5.5.3, vite ^5.3.4,
-vitest ^2.0.4, @testing-library/react ^16.0.0, fast-check ^3.21.0
+vitest ^2.0.4, @testing-library/react ^16.0.0
 ```
 
 ## Arquitetura do Sistema
@@ -108,8 +107,9 @@ O sistema é composto por 3 camadas: Frontend (React), Backend (FastAPI) e Neo4j
 │  │  (Estrela)         (Hierárquica)        │              │   │
 │  │     │                 │                 │              │   │
 │  │  OrquestradorEstrela  CoordenadorGeral  │              │   │
-│  │  (8 agentes)         (3 supervisores    │              │   │
-│  │                       + 8 agentes)      │              │   │
+│  │  (agentes conforme    (3 supervisores    │              │   │
+│  │   health_params)       + agentes conforme │              │   │
+│  │                        health_params)     │              │   │
 │  └─────────────┬─────────────────┬─────────┘              │   │
 │                │  ws_queue        │                        │   │
 │                ▼                  ▼                        │   │
@@ -130,12 +130,12 @@ O sistema é composto por 3 camadas: Frontend (React), Backend (FastAPI) e Neo4j
 3. O backend valida parâmetros (retorna 400 se inválidos)
 4. Cria nó `Analise` no Neo4j e vincula `DespesaSIOPS` e `IndicadorDataSUS` existentes
 5. Duas threads daemon são disparadas em paralelo (uma por arquitetura)
-6. Cada thread executa seu pipeline de 8 agentes BDI:
-   - 4 agentes de domínio consultam Neo4j (despesas + indicadores)
+6. Cada thread executa seu pipeline de agentes BDI:
+   - Agentes de domínio relevantes aos health_params consultam Neo4j (despesas + indicadores)
    - 1 agente de contexto analisa tendências orçamentárias
-   - 1 agente de correlação calcula Pearson/Spearman/Kendall
+   - 1 agente de correlação calcula Spearman entre gastos e indicadores
    - 1 agente de anomalias detecta ineficiências via mediana
-   - 1 agente sintetizador gera texto via LLM com streaming
+   - 1 sintetizador de texto (`TextSynthesizer`, serviço não-BDI) gera texto via LLM com streaming
 7. Chunks de texto (~80 chars) são enviados ao frontend via WebSocket em tempo real
 8. Métricas de execução (tempo, CPU, memória) são coletadas por agente e persistidas no Neo4j
 9. Contagem de mensagens entre agentes é registrada
@@ -164,7 +164,7 @@ Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O
 ### Pré-requisitos
 
 - Docker Desktop instalado e rodando
-- (Opcional) Chave de API Groq e/ou Google Gemini para geração de texto via LLM
+- (Opcional) Chave de API Groq para geração de texto via LLM
 - (Opcional) Python 3.11+ e Node.js 20+ para desenvolvimento local
 
 ### Variáveis de Ambiente
@@ -176,8 +176,7 @@ Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O
 | `NEO4J_URI` | URI de conexão Bolt do Neo4j | `bolt://neo4j:7687` (Docker) ou `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário do Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha do Neo4j | `your_password_here` |
-| `GROQ_API_KEY` | Chave API Groq (prioridade) | `gsk_...` |
-| `GEMINI_API_KEY` | Chave API Google Gemini (fallback) | `AI...` |
+| `GROQ_API_KEY` | Chave API Groq | `gsk_...` |
 | `CORS_ORIGINS` | Origens CORS permitidas | `*` ou `http://localhost:5173` |
 
 **Frontend (variáveis Vite):**
@@ -266,41 +265,33 @@ python download_pysus.py 2019 2025
 
 | Camada | Framework | Tipo | Arquivos | Total de testes |
 |--------|-----------|------|----------|-----------------|
-| Backend | pytest + Hypothesis | Unitários + Property-Based | 19 | ~322 |
-| Frontend | Vitest + fast-check + @testing-library/react | Unitários + Property-Based | 4 | — |
+| Backend | pytest | Unitários | 9 | 61 |
+| Frontend | Vitest + @testing-library/react | Componentes + Utilitários | 6 | 35 |
 
 ### Backend — Arquivos de Teste
 
 | Arquivo | Escopo |
 |---------|--------|
-| `test_agent_base.py` | Classe AgenteBDI, ciclo BDI, recuperação de falhas |
-| `test_anomalias.py` | Detecção de anomalias (unitário) |
-| `test_anomalias_properties.py` | Propriedades de anomalias (Hypothesis) |
-| `test_atencao_primaria.py` | Agente de domínio Atenção Primária |
-| `test_contexto_orcamentario.py` | Agente de contexto orçamentário |
-| `test_contexto_properties.py` | Propriedades de tendências (Hypothesis) |
-| `test_correlacao.py` | Correlações estatísticas (unitário) |
-| `test_correlacao_properties.py` | Propriedades de correlação (Hypothesis) |
-| `test_data_crossing.py` | Cruzamento de dados e detecção de gaps |
-| `test_hierarchical_coordinator.py` | Arquitetura hierárquica completa |
-| `test_main.py` | Endpoints REST e WebSocket |
-| `test_message_counter.py` | Contador de mensagens |
-| `test_metrics.py` | MetricsCollector (unitário) |
-| `test_metrics_properties.py` | Propriedades de métricas (Hypothesis) |
-| `test_mortalidade.py` | Agente de domínio Mortalidade |
-| `test_saude_hospitalar.py` | Agente de domínio Saúde Hospitalar |
-| `test_sintetizador.py` | Agente sintetizador (LLM + fallback) |
-| `test_star_orchestrator.py` | Arquitetura estrela completa |
-| `test_vigilancia_epidemiologica.py` | Agente de domínio Vigilância Epidemiológica |
+| `test_correlacao.py` | Correlações Spearman (vazio, ponto único, perfeita ±, classificação) |
+| `test_anomalias.py` | Detecção de anomalias (mediana, tipos, regra <2 pontos) |
+| `test_contexto_orcamentario.py` | Tendências orçamentárias (crescimento, corte, estagnação) |
+| `test_data_crossing.py` | Cruzamento de dados, deduplicação, detecção de gaps |
+| `test_sintetizador.py` | TextSynthesizer (fallback, seções, streaming) |
+| `test_streaming_adapter.py` | StreamingAdapter (chunking, formato de evento) |
+| `test_message_counter.py` | MessageCounter (thread-safety, incremento) |
+| `test_orchestrator_star.py` | OrquestradorEstrela (health_params filtering, degradação, métricas) |
+| `test_domain_agents.py` | Agente de domínio (filtro subfunção, fallback) |
 
 ### Frontend — Arquivos de Teste
 
 | Arquivo | Escopo |
 |---------|--------|
-| `src/App.test.tsx` | Componente principal, integração API |
-| `src/components/AnalysisControls.test.tsx` | Formulário de entrada |
-| `src/components/ArchitecturePanel.test.tsx` | Painel de resultado |
-| `src/hooks/useWebSocket.test.ts` | Hook WebSocket |
+| `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório comparativo |
+| `src/components/AnalysisControls.test.tsx` | Formulário de entrada (validação, toggles) |
+| `src/components/TabNav.test.tsx` | Navegação entre abas (acessibilidade) |
+| `src/components/LlmControls.test.tsx` | Toggles LLM/Judge (dependência, disabled) |
+| `src/components/WinnerPanel.test.tsx` | Painel do vencedor (texto, erro, título) |
+| `src/components/Header.test.tsx` | Identidade visual (Sophia, brasão) |
 
 ### Como Rodar
 
@@ -308,14 +299,8 @@ python download_pysus.py 2019 2025
 # Backend — todos os testes
 cd backend && pytest
 
-# Backend — com cobertura
-cd backend && pytest --cov=. --cov-report=term-missing
-
-# Backend — apenas property-based
-cd backend && pytest -k "properties"
-
-# Backend — teste específico
-cd backend && pytest tests/test_correlacao_properties.py -v
+# Backend — verbose
+cd backend && pytest -v
 
 # Frontend — todos os testes
 cd frontend && npm run test
@@ -323,21 +308,6 @@ cd frontend && npm run test
 # Frontend — watch mode
 cd frontend && npm run test:watch
 ```
-
-### Testes Property-Based (PBT)
-
-O projeto usa PBT para validar propriedades formais de correção:
-
-| Propriedade | Módulo | Framework |
-|-------------|--------|-----------|
-| Correlações sempre em [-1, 1] | correlacao | Hypothesis |
-| Classificação consistente com Spearman | correlacao | Hypothesis |
-| Pares com < 2 pontos retornam 0.0 | correlacao | Hypothesis |
-| Anomalias só detectadas com ≥ 2 pontos | anomalias | Hypothesis |
-| Tendência "insuficiente" com < 2 anos | contexto_orcamentario | Hypothesis |
-| Variação YoY correta | contexto_orcamentario | Hypothesis |
-| MetricsCollector sempre positivo | metrics | Hypothesis |
-| MessageCounter thread-safe | message_counter | Hypothesis |
 
 ---
 
@@ -372,16 +342,16 @@ project-skopos/
 │   │
 │   ├── agents/                      # Sistema multiagente BDI
 │   │   ├── base.py                  # AgenteBDI (modelo BDI base)
-│   │   ├── data_crossing.py         # cross_domain_data() + detect_data_gaps()
+│   │   ├── data_crossing.py         # cross_domain_data() + deduplicate_despesas() + detect_data_gaps()
 │   │   ├── domain/
 │   │   │   ├── vigilancia_epidemiologica.py  # Subfunção 305 (dengue, covid)
 │   │   │   ├── saude_hospitalar.py           # Subfunção 302 (internações)
 │   │   │   ├── atencao_primaria.py           # Subfunção 301 (vacinação)
 │   │   │   └── mortalidade.py                # Transversal (todas subfunções)
 │   │   ├── analytical/
-│   │   │   ├── correlacao.py                 # Pearson, Spearman, Kendall
+│   │   │   ├── correlacao.py                 # Spearman (correlação por par)
 │   │   │   ├── anomalias.py                  # Detecção via mediana
-│   │   │   └── sintetizador.py               # LLM + streaming + fallback
+│   │   │   └── sintetizador.py               # TextSynthesizer (serviço LLM, não-BDI)
 │   │   ├── context/
 │   │   │   └── contexto_orcamentario.py      # Tendências YoY
 │   │   ├── star/
@@ -391,10 +361,11 @@ project-skopos/
 │   │       └── supervisors.py                # 3 supervisores (nível 1)
 │   │
 │   ├── core/                        # Utilitários
-│   │   ├── llm_client.py            # Cliente LLM (Groq + Gemini, rate limit, retry)
+│   │   ├── llm_client.py            # Cliente LLM (Groq, cadeia de fallback entre modelos)
 │   │   ├── metrics.py               # MetricsCollector (psutil)
 │   │   ├── message_counter.py       # MessageCounter (thread-safe)
-│   │   └── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
+│   │   ├── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
+│   │   └── streaming_adapter.py     # StreamingAdapter (chunking de texto para ws_queue)
 │   │
 │   ├── db/
 │   │   └── neo4j_client.py          # Driver Neo4j + queries Cypher
@@ -408,26 +379,16 @@ project-skopos/
 │   ├── data/                        # Planilhas FNS + cache DataSUS
 │   │   └── datasus/                 # Cache local Parquet
 │   │
-│   └── tests/                       # 19 arquivos de teste (322 testes)
-│       ├── test_agent_base.py
+│   └── tests/                       # 9 arquivos de teste (61 testes)
 │       ├── test_anomalias.py
-│       ├── test_anomalias_properties.py
-│       ├── test_atencao_primaria.py
 │       ├── test_contexto_orcamentario.py
-│       ├── test_contexto_properties.py
 │       ├── test_correlacao.py
-│       ├── test_correlacao_properties.py
 │       ├── test_data_crossing.py
-│       ├── test_hierarchical_coordinator.py
-│       ├── test_main.py
+│       ├── test_domain_agents.py
 │       ├── test_message_counter.py
-│       ├── test_metrics.py
-│       ├── test_metrics_properties.py
-│       ├── test_mortalidade.py
-│       ├── test_saude_hospitalar.py
+│       ├── test_orchestrator_star.py
 │       ├── test_sintetizador.py
-│       ├── test_star_orchestrator.py
-│       └── test_vigilancia_epidemiologica.py
+│       └── test_streaming_adapter.py
 │
 ├── frontend/
 │   ├── Dockerfile                   # Node 20-alpine
@@ -438,17 +399,26 @@ project-skopos/
 │   └── src/
 │       ├── main.tsx                 # Entry point
 │       ├── App.tsx                  # Layout principal + integração API/WS
-│       ├── App.test.tsx
 │       ├── config.ts               # API_URL, WS_URL
 │       ├── styles.css              # Tema dark, responsivo
+│       ├── test-setup.ts           # Setup Vitest (jest-dom)
 │       ├── components/
 │       │   ├── AnalysisControls.tsx
 │       │   ├── AnalysisControls.test.tsx
 │       │   ├── ArchitecturePanel.tsx
-│       │   └── ArchitecturePanel.test.tsx
+│       │   ├── Header.tsx
+│       │   ├── Header.test.tsx
+│       │   ├── LlmControls.tsx
+│       │   ├── LlmControls.test.tsx
+│       │   ├── TabNav.tsx
+│       │   ├── TabNav.test.tsx
+│       │   ├── WinnerPanel.tsx
+│       │   └── WinnerPanel.test.tsx
 │       ├── hooks/
-│       │   ├── useWebSocket.ts
-│       │   └── useWebSocket.test.ts
+│       │   └── useWebSocket.ts
+│       ├── utils/
+│       │   ├── parseWinner.ts
+│       │   └── parseWinner.test.ts
 │       └── types/
 │           └── index.ts             # AnalysisRequest, WSEvent, BenchmarkMetrics
 │

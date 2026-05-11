@@ -101,7 +101,6 @@ Retorna relatório comparativo textual. Requer que `/quality` tenha sido computa
 active_queues: dict[str, Queue]                    # analysisId → fila WS
 active_threads: dict[str, list[Thread]]            # analysisId → [thread_star, thread_hier]
 active_results: dict[str, dict[str, Any]]          # analysisId → {"star": result, "hierarchical": result, ...}
-active_agent_metrics: dict[str, dict[str, list]]   # analysisId → {"star": [...], "hierarchical": [...]}
 ```
 
 ### CORS
@@ -167,9 +166,10 @@ Streaming de eventos em tempo real das duas arquiteturas.
 | Provider | Modelo | Prioridade | Variável de ambiente |
 |----------|--------|------------|---------------------|
 | **Groq** | `llama-3.3-70b-versatile` | Primário | `GROQ_API_KEY` |
-| **Google Gemini** | `gemini-2.0-flash` | Fallback | `GEMINI_API_KEY` |
+| **Groq** | `qwen/qwen3-32b` | Fallback 1 | `GROQ_API_KEY` |
+| **Groq** | `llama-4-scout-17b-16e` | Fallback 2 | `GROQ_API_KEY` |
 
-A detecção é automática: se `GROQ_API_KEY` está definida, usa Groq; senão tenta Gemini.
+Todos os modelos usam a API Groq. A cadeia de fallback é percorrida automaticamente quando um modelo atinge rate limit (429) ou retorna resposta vazia.
 
 ### Rate Limiting
 
@@ -196,8 +196,8 @@ O cliente LLM oferece dois modos de geração:
 
 | Modo | Função | Descrição |
 |------|--------|-----------|
-| **Batch** | `generate(prompt, model?)` | Retorna o texto completo de uma vez. Usado pelo `AgenteSintetizador` (fallback) e pela avaliação Q2+ (LLM-as-Judge). |
-| **Streaming** | `generate_stream(prompt, model?)` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `AgenteSintetizador` para streaming em tempo real via WebSocket. |
+| **Batch** | `generate(prompt, model?)` | Retorna o texto completo de uma vez. Usado pelo `TextSynthesizer` (fallback) e pela avaliação Q2+ (LLM-as-Judge). |
+| **Streaming** | `generate_stream(prompt, model?)` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
 
 Ambos os modos compartilham o mesmo lock global, rate limiting, cadeia de fallback entre modelos e retry em caso de 429.
 
@@ -209,10 +209,10 @@ Modelos de raciocínio (ex: Qwen3) incluem tags `<think>...</think>` com o proce
 
 ### Fallback
 
-Se o LLM retorna `None` (indisponível após 3 tentativas), o `AgenteSintetizador` gera texto estruturado com:
+Se o LLM retorna `None` (indisponível após 3 tentativas), o `TextSynthesizer` gera texto estruturado com:
 - Resumo Executivo
 - Cobertura de Dados (gaps detectados)
-- Análise das Correlações (Pearson/Spearman/Kendall por par)
+- Análise das Correlações (Spearman por par, com estratégia e confiança)
 - Discussão das Anomalias (com descrições em português)
 - Contexto Orçamentário (tendências por subfunção)
 
@@ -251,6 +251,31 @@ Contador atômico thread-safe (`threading.Lock`):
 - `count` — property thread-safe para leitura
 - Persistido no Neo4j como `starMessageCount` / `hierMessageCount`
 - Enviado via WebSocket como parte do evento `metric`
+
+### StreamingAdapter (`backend/core/streaming_adapter.py`)
+
+Adaptador de streaming para WebSocket. Encapsula a lógica de chunking (~80 chars) e envio de eventos para a fila compartilhada. Não é um agente BDI — é infraestrutura de transporte reutilizável pelo orquestrador estrela, coordenador hierárquico e relatório comparativo.
+
+**Construtor:**
+```python
+adapter = StreamingAdapter(ws_queue, analysis_id, architecture, chunk_size=80)
+```
+
+| Parâmetro | Tipo | Descrição |
+|-----------|------|-----------|
+| `ws_queue` | `Queue` | Fila compartilhada para eventos WebSocket |
+| `analysis_id` | `str` | UUID da análise corrente |
+| `architecture` | `str` | Identificador da topologia (`"star"`, `"hierarchical"`, `"both"`) |
+| `chunk_size` | `int` | Tamanho aproximado de cada chunk (default: 80) |
+
+**Métodos:**
+
+| Método | Descrição |
+|--------|-----------|
+| `stream_text(text)` | Envia texto pré-gerado em chunks para `ws_queue` |
+| `stream_tokens(token_generator)` | Consome generator de tokens LLM, faz buffering e streaming; retorna texto completo acumulado |
+
+Cada chunk é enviado como evento `WSEvent` com `type: "chunk"` e o `architecture` configurado no construtor.
 
 ---
 
@@ -380,7 +405,7 @@ Onde:
 
 1. Extrai `correlacoes` e `anomalias` de cada resultado
 2. Normaliza cada lista ordenando por chave natural:
-   - Correlações: `(subfuncao, tipo_indicador, pearson, spearman, kendall)`
+   - Correlações: `(subfuncao, tipo_indicador, spearman, estrategia, confianca)`
    - Anomalias: `(subfuncao, tipo_indicador, ano, tipo_anomalia)`
 3. Compara as listas normalizadas com `==`
 
@@ -406,7 +431,7 @@ all_identical = corr_identical AND anom_identical
 
 **Função:** `compute_faithfulness(correlacoes, anomalias, texto)`
 
-**O que mede:** Se o texto gerado pelo `AgenteSintetizador` (via LLM) reflete fielmente os dados numéricos calculados pelos agentes analíticos. Verifica se o texto não "inventa" informações nem omite achados importantes.
+**O que mede:** Se o texto gerado pelo `TextSynthesizer` (via LLM) reflete fielmente os dados numéricos calculados pelos agentes analíticos. Verifica se o texto não "inventa" informações nem omite achados importantes.
 
 **Como é calculado:**
 
@@ -582,7 +607,7 @@ Verifica a presença (valor truthy) de 7 componentes no resultado:
 | `correlacoes` | `AgenteCorrelacao` |
 | `anomalias` | `AgenteAnomalias` |
 | `contexto_orcamentario` | `AgenteContextoOrcamentario` |
-| `texto_analise` | `AgenteSintetizador` |
+| `texto_analise` | `TextSynthesizer` |
 
 ```
 score = componentes_presentes / 7
@@ -646,13 +671,11 @@ Além das métricas de qualidade do módulo `quality_metrics.py`, os agentes ana
 
 **Arquivo:** `backend/agents/analytical/correlacao.py`
 
-Três coeficientes calculados por par subfunção-indicador:
+Coeficiente Spearman calculado por par subfunção-indicador. Spearman é baseado em ranks — robusto a outliers e captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
 
-| Coeficiente | Fórmula (via scipy) | O que mede | Quando usar |
-|-------------|---------------------|------------|-------------|
-| **Pearson** | `scipy.stats.pearsonr(x, y)` | Relação linear entre duas variáveis | Dados normalmente distribuídos, relação linear |
-| **Spearman** | `scipy.stats.spearmanr(x, y)` | Relação monotônica baseada em ranks | Dados não-normais, relação monotônica não-linear |
-| **Kendall Tau-b** | `scipy.stats.kendalltau(x, y)` | Concordância entre pares ordenados | Amostras pequenas, dados ordinais |
+**Comportamento:**
+- n < 2 pontos → retorna 0.0, classificação `"baixa"`
+- n ≥ 2 pontos → calcula Spearman normalmente
 
 **Classificação (baseada em |Spearman|):**
 
@@ -663,11 +686,13 @@ Três coeficientes calculados por par subfunção-indicador:
 | \|r\| < 0.4 | `"baixa"` |
 
 **Tratamento de edge cases:**
-- < 2 pontos de dados → retorna 0.0 para todos os coeficientes, classificação `"baixa"`
+- < 2 pontos de dados → retorna 0.0, classificação `"baixa"`
 - Arrays constantes (scipy retorna NaN) → retorna 0.0
 - Resultado clamped a [-1.0, 1.0]
 
-**Significado para o TCC:** Spearman é a referência principal porque é robusto a outliers e não assume linearidade — adequado para dados de gastos públicos que podem ter variações abruptas. Pearson complementa para relações lineares, e Kendall é ideal para as amostras pequenas típicas (3-5 anos de dados).
+**Output por par:** `subfuncao`, `tipo_indicador`, `spearman`, `classificacao`, `n_pontos`.
+
+**Significado para o TCC:** Spearman é o método único porque é robusto a outliers e não assume linearidade — adequado para dados de gastos públicos que podem ter variações abruptas entre anos (ex: pandemia).
 
 ---
 

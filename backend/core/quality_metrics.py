@@ -198,7 +198,7 @@ def compute_deterministic_consistency(
     def _sort_corr(corrs: list[dict]) -> list[tuple]:
         return sorted(
             (c.get("subfuncao", 0), c.get("tipo_indicador", ""),
-             c.get("pearson", 0), c.get("spearman", 0), c.get("kendall", 0))
+             c.get("spearman", 0))
             for c in corrs
         )
 

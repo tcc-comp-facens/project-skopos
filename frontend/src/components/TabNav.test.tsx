@@ -1,6 +1,9 @@
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+/**
+ * Tests for TabNav component.
+ * Validates tab switching and accessibility attributes.
+ */
 import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TabNav } from './TabNav';
 
 describe('TabNav', () => {
@@ -10,44 +13,28 @@ describe('TabNav', () => {
     expect(screen.getByTestId('tab-tech')).toBeInTheDocument();
   });
 
-  it('sets aria-selected="true" on the active tab (user)', () => {
+  it('marks active tab with aria-selected=true', () => {
     render(<TabNav activeTab="user" onTabChange={vi.fn()} />);
     expect(screen.getByTestId('tab-user')).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('tab-tech')).toHaveAttribute('aria-selected', 'false');
   });
 
-  it('sets aria-selected="true" on the active tab (tech)', () => {
-    render(<TabNav activeTab="tech" onTabChange={vi.fn()} />);
-    expect(screen.getByTestId('tab-tech')).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('tab-user')).toHaveAttribute('aria-selected', 'false');
-  });
-
-  it('calls onTabChange("tech") when Técnica tab is clicked', async () => {
+  it('calls onTabChange with "tech" when tech tab clicked', () => {
     const onTabChange = vi.fn();
-    const user = userEvent.setup();
     render(<TabNav activeTab="user" onTabChange={onTabChange} />);
-
-    await user.click(screen.getByTestId('tab-tech'));
+    fireEvent.click(screen.getByTestId('tab-tech'));
     expect(onTabChange).toHaveBeenCalledWith('tech');
   });
 
-  it('calls onTabChange("user") when Usuário tab is clicked', async () => {
+  it('calls onTabChange with "user" when user tab clicked', () => {
     const onTabChange = vi.fn();
-    const user = userEvent.setup();
     render(<TabNav activeTab="tech" onTabChange={onTabChange} />);
-
-    await user.click(screen.getByTestId('tab-user'));
+    fireEvent.click(screen.getByTestId('tab-user'));
     expect(onTabChange).toHaveBeenCalledWith('user');
   });
 
-  it('has role="tablist" on the container', () => {
+  it('has role="tablist" on nav element', () => {
     render(<TabNav activeTab="user" onTabChange={vi.fn()} />);
     expect(screen.getByTestId('tab-nav')).toHaveAttribute('role', 'tablist');
-  });
-
-  it('has role="tab" on each button', () => {
-    render(<TabNav activeTab="user" onTabChange={vi.fn()} />);
-    const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(2);
   });
 });

@@ -1,27 +1,27 @@
 """
-Agente Analítico — Sintetizador de Texto.
+Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (Groq primário, Gemini fallback)
-a partir de correlações, anomalias e contexto orçamentário. Faz streaming
-do texto em chunks de ~80 caracteres via ws_queue.
+Gera texto consolidado de análise via LLM (Groq, cadeia de fallback entre modelos)
+a partir de correlações, anomalias e contexto orçamentário.
 
-Quando o LLM está indisponível após 3 tentativas, gera texto estruturado
-como fallback.
+Quando o LLM está indisponível, gera texto estruturado como fallback.
 
-Requisitos: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6
+Nota arquitetural: o sintetizador NÃO é um agente BDI. Ele não possui
+autonomia deliberativa — recebe dados prontos e produz texto. A decisão
+de modelá-lo como classe normal (não agente) reflete que ele não percebe
+ambiente mutável, não forma desejos concorrentes, e não escolhe entre
+planos alternativos. O streaming é responsabilidade do caller via
+StreamingAdapter.
+
+Requisitos: 7.1, 7.2, 7.3, 7.4
 """
 
 from __future__ import annotations
 
 import logging
-from queue import Queue
-from typing import Any
-
-from agents.base import AgenteBDI, IntentionFailure
+from typing import Any, Generator
 
 logger = logging.getLogger(__name__)
-
-CHUNK_SIZE = 80  # approximate chars per streaming chunk
 
 SUBFUNCAO_NOMES: dict[int, str] = {
     301: "Atenção Básica",
@@ -31,193 +31,126 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 }
 
 
-class AgenteSintetizador(AgenteBDI):
-    """Agente analítico que gera texto consolidado via LLM com streaming (Req 7).
+class TextSynthesizer:
+    """Serviço de geração de texto analítico via LLM com fallback estruturado.
 
-    Recebe correlações, anomalias e contexto orçamentário dos demais agentes
-    analíticos e de contexto, consolida em um prompt para o LLM, e faz
-    streaming do texto gerado em chunks via ws_queue.
+    Não é um agente BDI — é um serviço consumido pelos orquestradores
+    e supervisores. Responsabilidade: dado um conjunto de correlações,
+    anomalias e contexto orçamentário, produzir texto analítico.
 
-    WSEvent format sent to ws_queue::
-
-        {"analysisId": str, "architecture": str, "type": "chunk", "payload": str}
-        {"analysisId": str, "architecture": str, "type": "done",  "payload": ""}
+    Args:
+        synthesizer_id: Identificador para métricas e logging.
     """
 
-    def __init__(self, agent_id: str) -> None:
-        super().__init__(agent_id)
+    def __init__(self, synthesizer_id: str) -> None:
+        self.synthesizer_id = synthesizer_id
 
-    # -- BDI overrides --------------------------------------------------
-
-    def perceive(self) -> dict:
-        """Return current beliefs as perception (data set by caller)."""
-        return {
-            "correlacoes": self.beliefs.get("correlacoes", []),
-            "anomalias": self.beliefs.get("anomalias", []),
-            "contexto_orcamentario": self.beliefs.get("contexto_orcamentario", {}),
-            "analysis_id": self.beliefs.get("analysis_id"),
-            "architecture": self.beliefs.get("architecture"),
-        }
-
-    def deliberate(self) -> list[dict]:
-        """Determine desires based on available data."""
-        desires: list[dict] = []
-        # We can synthesize even with empty correlacoes/anomalias (fallback text)
-        if self.beliefs.get("analysis_id") is not None:
-            desires.append({"goal": "sintetizar_texto"})
-        self.desires = desires
-        return desires
-
-    def plan(self, desires: list[dict]) -> list[dict]:
-        """Generate intentions from desires."""
-        return [{"desire": d, "status": "pending"} for d in desires]
-
-    def _execute_intention(self, intention: dict) -> None:
-        """Execute a single intention."""
-        goal = intention["desire"]["goal"]
-        try:
-            if goal == "sintetizar_texto":
-                self._synthesize_and_stream()
-            intention["status"] = "completed"
-        except Exception as e:
-            raise IntentionFailure(intention, str(e)) from e
-
-    # -- Public API called by orchestrator/supervisor -------------------
-
-    def synthesize(
+    def generate(
         self,
         correlacoes: list[dict],
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
-        analysis_id: str,
-        ws_queue: Queue,
-        architecture: str,
         data_coverage: dict[str, Any] | None = None,
         use_llm: bool = True,
     ) -> str:
-        """Gera e faz streaming do texto de análise.
+        """Gera texto completo de análise (batch, sem streaming).
 
-        Usa LLM (Groq/Gemini) com fallback para texto estruturado (Req 7.3).
-        Streaming em chunks de ~80 chars (Req 7.2).
-        Envia evento "done" ao concluir (Req 7.6).
+        Tenta LLM primeiro; se indisponível, retorna fallback estruturado.
 
         Args:
             correlacoes: Lista de dicts com correlações calculadas.
             anomalias: Lista de dicts com anomalias detectadas.
             contexto_orcamentario: Dict com tendências orçamentárias por subfunção.
-            analysis_id: UUID da análise corrente.
-            ws_queue: Queue para streaming de WSEvent dicts.
-            architecture: "star" ou "hierarchical".
             data_coverage: Dict com cobertura de dados e gaps detectados.
+            use_llm: Se True, tenta usar LLM; se False, usa fallback direto.
 
         Returns:
             Texto completo da análise gerada.
         """
-        self.update_beliefs({
-            "correlacoes": correlacoes,
-            "anomalias": anomalias,
-            "contexto_orcamentario": contexto_orcamentario,
-            "analysis_id": analysis_id,
-            "ws_queue": ws_queue,
-            "architecture": architecture,
-            "data_coverage": data_coverage or {},
-            "use_llm": use_llm,
-        })
+        if not use_llm:
+            logger.info("TextSynthesizer %s: LLM disabled, using structured fallback", self.synthesizer_id)
+            return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
 
-        self.run_cycle()
-
-        return self.beliefs.get("texto_analise", "")
-
-    # -- Internal pipeline steps ----------------------------------------
-
-    def _synthesize_and_stream(self) -> None:
-        """Generate textual analysis and stream chunks to ws_queue (Req 7.1, 7.2)."""
-        ws_queue: Queue | None = self.beliefs.get("ws_queue")
-        analysis_id = self.beliefs.get("analysis_id", "")
-        architecture = self.beliefs.get("architecture", "")
-
-        if not self.beliefs.get("use_llm", True):
-            logger.info("Agent %s: LLM disabled, using structured fallback", self.agent_id)
-            text = self._generate_structured_text()
-            self.beliefs["texto_analise"] = text
-            if ws_queue is not None:
-                self._stream_text(text, analysis_id, ws_queue, architecture)
-            return
-
-        # Tentar streaming real via LLM
         try:
-            text = self._stream_via_llm(analysis_id, ws_queue, architecture)
+            import core.llm_client as llm_client
+
+            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+            # Consume the stream fully for batch mode
+            text = "".join(llm_client.generate_stream(prompt))
             if text:
-                self.beliefs["texto_analise"] = text
-                return
+                logger.info("TextSynthesizer %s: LLM generation complete (%d chars)", self.synthesizer_id, len(text))
+                return text
         except Exception:
             logger.warning(
-                "Agent %s: LLM streaming failed, using structured fallback",
-                self.agent_id,
+                "TextSynthesizer %s: LLM failed, using structured fallback",
+                self.synthesizer_id,
             )
 
-        # Fallback
-        text = self._generate_structured_text()
-        self.beliefs["texto_analise"] = text
-        if ws_queue is not None:
-            self._stream_text(text, analysis_id, ws_queue, architecture)
+        return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
 
-    def _stream_via_llm(
+    def generate_stream(
         self,
-        analysis_id: str,
-        ws_queue: Queue | None,
-        architecture: str,
-    ) -> str | None:
-        """Stream LLM response token-by-token to ws_queue."""
+        correlacoes: list[dict],
+        anomalias: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None = None,
+    ) -> Generator[str, None, None]:
+        """Retorna generator de tokens para streaming via LLM.
+
+        O caller é responsável por consumir o generator e fazer o
+        streaming via StreamingAdapter. Se o LLM falhar, levanta exceção
+        para que o caller use o fallback.
+
+        Args:
+            correlacoes: Lista de dicts com correlações calculadas.
+            anomalias: Lista de dicts com anomalias detectadas.
+            contexto_orcamentario: Dict com tendências orçamentárias.
+            data_coverage: Dict com cobertura de dados e gaps detectados.
+
+        Yields:
+            Tokens individuais do LLM.
+
+        Raises:
+            Exception: Se o LLM estiver indisponível.
+        """
         import core.llm_client as llm_client
 
-        correlacoes = self.beliefs.get("correlacoes", [])
-        anomalias = self.beliefs.get("anomalias", [])
-        contexto_orcamentario = self.beliefs.get("contexto_orcamentario", {})
-        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario)
+        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+        yield from llm_client.generate_stream(prompt)
 
-        full_text = ""
-        buffer = ""
+    def generate_fallback(
+        self,
+        correlacoes: list[dict],
+        anomalias: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None = None,
+    ) -> str:
+        """Gera texto estruturado sem LLM (fallback determinístico).
 
-        for token in llm_client.generate_stream(prompt):
-            full_text += token
-            buffer += token
+        Args:
+            correlacoes: Lista de dicts com correlações calculadas.
+            anomalias: Lista de dicts com anomalias detectadas.
+            contexto_orcamentario: Dict com tendências orçamentárias.
+            data_coverage: Dict com cobertura de dados e gaps detectados.
 
-            # Enviar em chunks de ~CHUNK_SIZE para não sobrecarregar o WS
-            if ws_queue is not None and len(buffer) >= CHUNK_SIZE:
-                ws_queue.put({
-                    "analysisId": analysis_id,
-                    "architecture": architecture,
-                    "type": "chunk",
-                    "payload": buffer,
-                })
-                buffer = ""
+        Returns:
+            Texto estruturado com seções de análise.
+        """
+        return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
 
-        # Enviar resto do buffer
-        if ws_queue is not None and buffer:
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": architecture,
-                "type": "chunk",
-                "payload": buffer,
-            })
-
-        if full_text:
-            logger.info("Agent %s: LLM stream complete (%d chars)", self.agent_id, len(full_text))
-            return full_text
-
-        return None
+    # -- Internal methods ------------------------------------------------
 
     def _build_prompt(
         self,
         correlacoes: list[dict],
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None = None,
     ) -> str:
         """Build the LLM prompt from analysis data (Req 7.4)."""
-        data_coverage = self.beliefs.get("data_coverage", {})
-        gaps = data_coverage.get("gaps", [])
-        summary = data_coverage.get("summary", {})
+        coverage = data_coverage or {}
+        gaps = coverage.get("gaps", [])
+        summary = coverage.get("summary", {})
 
         coverage_section = ""
         if gaps:
@@ -256,15 +189,21 @@ class AgenteSintetizador(AgenteBDI):
             "Use formatação com seções claras."
         )
 
-    def _generate_structured_text(self) -> str:
+    def _generate_structured_text(
+        self,
+        correlacoes: list[dict],
+        anomalias: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None = None,
+    ) -> str:
         """Generate structured fallback text when LLM is unavailable (Req 7.3, 7.4).
 
-        Includes: resumo executivo, correlações analysis, anomalias discussion,
-        and contexto orçamentário.
+        Includes: resumo executivo, cobertura de dados, correlações analysis,
+        anomalias discussion, and contexto orçamentário.
         """
-        correlacoes = self.beliefs.get("correlacoes", [])
-        anomalias = self.beliefs.get("anomalias", [])
-        contexto_orcamentario = self.beliefs.get("contexto_orcamentario", {})
+        coverage = data_coverage or {}
+        gaps = coverage.get("gaps", [])
+        summary = coverage.get("summary", {})
 
         sections: list[str] = []
 
@@ -281,10 +220,6 @@ class AgenteSintetizador(AgenteBDI):
         )
 
         # --- Cobertura de Dados ---
-        data_coverage = self.beliefs.get("data_coverage", {})
-        gaps = data_coverage.get("gaps", [])
-        summary = data_coverage.get("summary", {})
-
         sections.append("\n=== Cobertura de Dados ===\n")
         if not gaps:
             sections.append(
@@ -408,20 +343,3 @@ class AgenteSintetizador(AgenteBDI):
 
         sections.append("\n=== Fim da Análise ===")
         return "\n".join(sections)
-
-    def _stream_text(
-        self,
-        text: str,
-        analysis_id: str,
-        ws_queue: Queue,
-        architecture: str,
-    ) -> None:
-        """Stream text in chunks to ws_queue as WSEvent dicts (Req 7.2, 7.6)."""
-        for i in range(0, len(text), CHUNK_SIZE):
-            chunk = text[i: i + CHUNK_SIZE]
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": architecture,
-                "type": "chunk",
-                "payload": chunk,
-            })

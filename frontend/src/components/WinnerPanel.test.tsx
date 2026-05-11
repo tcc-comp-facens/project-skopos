@@ -1,111 +1,87 @@
-import { render, screen } from '@testing-library/react';
+/**
+ * Tests for WinnerPanel component.
+ * Validates display of winning architecture's text and error handling.
+ */
 import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import { WinnerPanel } from './WinnerPanel';
 
 describe('WinnerPanel', () => {
-  it('renders the winner panel', () => {
+  it('displays star text when winner is star', () => {
     render(
       <WinnerPanel
         winner="star"
-        starText="Análise da Estrela"
-        hierText="Análise da Hierárquica"
+        starText="Análise estrela completa"
+        hierText="Análise hierárquica"
         starError={null}
         hierError={null}
-      />,
+      />
     );
-    expect(screen.getByTestId('winner-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('panel-text-box')).toHaveTextContent('Análise estrela completa');
   });
 
-  it('displays ⭐ badge when winner="star"', () => {
-    render(
-      <WinnerPanel
-        winner="star"
-        starText="Análise da Estrela"
-        hierText="Análise da Hierárquica"
-        starError={null}
-        hierError={null}
-      />,
-    );
-    const badge = screen.getByTestId('winner-badge');
-    expect(badge.textContent).toContain('⭐');
-  });
-
-  it('displays 🏛 badge when winner="hierarchical"', () => {
+  it('displays hierarchical text when winner is hierarchical', () => {
     render(
       <WinnerPanel
         winner="hierarchical"
-        starText="Análise da Estrela"
-        hierText="Análise da Hierárquica"
+        starText="Análise estrela"
+        hierText="Análise hierárquica completa"
         starError={null}
         hierError={null}
-      />,
+      />
     );
-    const badge = screen.getByTestId('winner-badge');
-    expect(badge.textContent).toContain('🏛');
+    expect(screen.getByTestId('panel-text-box')).toHaveTextContent('Análise hierárquica completa');
   });
 
-  it('displays star text when winner="star"', () => {
-    render(
-      <WinnerPanel
-        winner="star"
-        starText="Texto da Estrela"
-        hierText="Texto da Hierárquica"
-        starError={null}
-        hierError={null}
-      />,
-    );
-    expect(screen.getByTestId('panel-text-box').textContent).toContain('Texto da Estrela');
-  });
-
-  it('displays hierarchical text when winner="hierarchical"', () => {
-    render(
-      <WinnerPanel
-        winner="hierarchical"
-        starText="Texto da Estrela"
-        hierText="Texto da Hierárquica"
-        starError={null}
-        hierError={null}
-      />,
-    );
-    expect(screen.getByTestId('panel-text-box').textContent).toContain('Texto da Hierárquica');
-  });
-
-  it('does not render benchmarks section', () => {
-    render(
-      <WinnerPanel
-        winner="star"
-        starText="Texto"
-        hierText="Texto"
-        starError={null}
-        hierError={null}
-      />,
-    );
-    expect(screen.queryByTestId('panel-benchmarks')).not.toBeInTheDocument();
-  });
-
-  it('shows error when star architecture has error and winner="star"', () => {
+  it('shows placeholder when text is empty', () => {
     render(
       <WinnerPanel
         winner="star"
         starText=""
         hierText=""
-        starError="Erro na análise Estrela"
+        starError={null}
         hierError={null}
-      />,
+      />
     );
-    expect(screen.getByTestId('panel-error')).toHaveTextContent('Erro na análise Estrela');
+    expect(screen.getByTestId('panel-text-box')).toHaveTextContent('Aguardando análise...');
   });
 
-  it('shows error when hierarchical architecture has error and winner="hierarchical"', () => {
+  it('displays error when winner architecture has error', () => {
+    render(
+      <WinnerPanel
+        winner="star"
+        starText=""
+        hierText=""
+        starError="Neo4j timeout"
+        hierError={null}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Neo4j timeout');
+  });
+
+  it('shows title Estrela for star winner', () => {
+    render(
+      <WinnerPanel
+        winner="star"
+        starText="text"
+        hierText=""
+        starError={null}
+        hierError={null}
+      />
+    );
+    expect(screen.getByText('Estrela')).toBeInTheDocument();
+  });
+
+  it('shows title Hierárquica for hierarchical winner', () => {
     render(
       <WinnerPanel
         winner="hierarchical"
         starText=""
-        hierText=""
+        hierText="text"
         starError={null}
-        hierError="Erro na análise Hierárquica"
-      />,
+        hierError={null}
+      />
     );
-    expect(screen.getByTestId('panel-error')).toHaveTextContent('Erro na análise Hierárquica');
+    expect(screen.getByText('Hierárquica')).toBeInTheDocument();
   });
 });

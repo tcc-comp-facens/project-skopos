@@ -152,6 +152,7 @@ class CoordenadorGeral(AgenteBDI):
                 date_from=date_from,
                 date_to=date_to,
                 counter=counter,
+                health_params=params.get("health_params", []),
             )
             mc_dominio.stop()
             # Req 11.1: coordinator → supervisor call (ida + volta)
@@ -186,6 +187,7 @@ class CoordenadorGeral(AgenteBDI):
             "indicadores": dominio_data.get("indicadores", []),
             "date_from": date_from,
             "date_to": date_to,
+            "health_params": params.get("health_params", []),
         })
         # Req 11.1: lateral communication (ida + volta)
         counter.increment(2)

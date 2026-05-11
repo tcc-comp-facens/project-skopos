@@ -83,7 +83,7 @@ Exibe o resultado da arquitetura vencedora em painel com borda dourada:
 ### LlmControls (`src/components/LlmControls.tsx`)
 
 Toggles de LLM e LLM Judge:
-- **LLM** — habilita/desabilita síntese textual via LLM (Groq/Gemini)
+- **LLM** — habilita/desabilita síntese textual via LLM (Groq)
 - **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge). **Desabilitado automaticamente quando o toggle LLM está desligado.**
 
 ### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)
@@ -221,7 +221,7 @@ interface BenchmarkMetrics {
 interface WSEvent {
   analysisId: string;
   architecture: 'star' | 'hierarchical' | 'both';
-  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics';
+  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'llm_judge' | 'llm_judge_done';
   payload: string | BenchmarkMetrics | Record<string, unknown>;
 }
 ```

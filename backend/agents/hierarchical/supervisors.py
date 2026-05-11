@@ -22,22 +22,32 @@ from queue import Queue
 from typing import Any, TYPE_CHECKING
 
 from agents.base import AgenteBDI
-from agents.data_crossing import cross_domain_data, detect_data_gaps
+from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
 from agents.domain.vigilancia_epidemiologica import AgenteVigilanciaEpidemiologica
 from agents.domain.saude_hospitalar import AgenteSaudeHospitalar
 from agents.domain.atencao_primaria import AgenteAtencaoPrimaria
 from agents.domain.mortalidade import AgenteMortalidade
 from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
-from agents.analytical.sintetizador import AgenteSintetizador
+from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
 from core.message_counter import MessageCounter
 from core.metrics import MetricsCollector
+from core.streaming_adapter import StreamingAdapter
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
+
+# Mapeamento: tipo de indicador → agente de domínio responsável
+INDICADOR_TO_AGENT: dict[str, str] = {
+    "dengue": "vigilancia_epidemiologica",
+    "covid": "vigilancia_epidemiologica",
+    "internacoes": "saude_hospitalar",
+    "vacinacao": "atencao_primaria",
+    "mortalidade": "mortalidade",
+}
 
 
 class SupervisorDominio(AgenteBDI):
@@ -107,20 +117,27 @@ class SupervisorDominio(AgenteBDI):
         date_from: int | None,
         date_to: int | None,
         counter: MessageCounter,
+        health_params: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Executa o pipeline de domínio via 4 agentes subordinados.
+        """Executa o pipeline de domínio via agentes subordinados.
 
-        1. Instancia 4 agentes de domínio com IDs únicos (Req 10.2).
-        2. Executa cada agente em sequência, coletando dados.
-        3. Agrega resultados de despesas e indicadores (Req 10.7).
-        4. Trata falhas de subordinados graciosamente.
-        5. Coleta métricas por subordinado via MetricsCollector.
+        Ativa apenas os agentes de domínio cujos indicadores estão
+        presentes em health_params. Se health_params for None ou vazio,
+        ativa todos (comportamento legado).
+
+        1. Instancia agentes de domínio com IDs únicos (Req 10.2).
+        2. Filtra agentes com base em health_params.
+        3. Executa cada agente em sequência, coletando dados.
+        4. Agrega resultados de despesas e indicadores (Req 10.7).
+        5. Trata falhas de subordinados graciosamente.
+        6. Coleta métricas por subordinado via MetricsCollector.
 
         Args:
             analysis_id: UUID da análise.
             date_from: Ano inicial do período.
             date_to: Ano final do período.
             counter: MessageCounter compartilhado para contagem de mensagens.
+            health_params: Lista de tipos de indicador selecionados pelo usuário.
 
         Returns:
             Dicionário com "despesas" e "indicadores" agregados.
@@ -131,23 +148,41 @@ class SupervisorDominio(AgenteBDI):
             "date_to": date_to,
         })
 
-        # -- 1. Instanciar 4 agentes de domínio com IDs únicos --
+        # -- 1. Instanciar agentes de domínio com IDs únicos --
         vig_id = f"hier-vigilancia-{uuid.uuid4().hex[:8]}"
         hosp_id = f"hier-hospitalar-{uuid.uuid4().hex[:8]}"
         prim_id = f"hier-primaria-{uuid.uuid4().hex[:8]}"
         mort_id = f"hier-mortalidade-{uuid.uuid4().hex[:8]}"
 
-        agente_vigilancia = AgenteVigilanciaEpidemiologica(vig_id, self.neo4j_client)
-        agente_hospitalar = AgenteSaudeHospitalar(hosp_id, self.neo4j_client)
-        agente_primaria = AgenteAtencaoPrimaria(prim_id, self.neo4j_client)
-        agente_mortalidade = AgenteMortalidade(mort_id, self.neo4j_client)
-
-        domain_agents: list[tuple[str, str, Any]] = [
-            (vig_id, "vigilancia_epidemiologica", agente_vigilancia),
-            (hosp_id, "saude_hospitalar", agente_hospitalar),
-            (prim_id, "atencao_primaria", agente_primaria),
-            (mort_id, "mortalidade", agente_mortalidade),
+        all_domain_agents: list[tuple[str, str, Any]] = [
+            (vig_id, "vigilancia_epidemiologica", AgenteVigilanciaEpidemiologica(vig_id, self.neo4j_client)),
+            (hosp_id, "saude_hospitalar", AgenteSaudeHospitalar(hosp_id, self.neo4j_client)),
+            (prim_id, "atencao_primaria", AgenteAtencaoPrimaria(prim_id, self.neo4j_client)),
+            (mort_id, "mortalidade", AgenteMortalidade(mort_id, self.neo4j_client)),
         ]
+
+        # -- 2. Filtrar agentes com base em health_params --
+        if health_params:
+            active_agent_types: set[str] = set()
+            for hp in health_params:
+                agent_type = INDICADOR_TO_AGENT.get(hp)
+                if agent_type:
+                    active_agent_types.add(agent_type)
+            domain_agents = [
+                (aid, atype, agent)
+                for aid, atype, agent in all_domain_agents
+                if atype in active_agent_types
+            ]
+        else:
+            domain_agents = all_domain_agents
+
+        logger.info(
+            "SupervisorDominio %s: activating %d/%d domain agents for health_params=%s",
+            self.agent_id,
+            len(domain_agents),
+            len(all_domain_agents),
+            health_params,
+        )
 
         all_despesas: list[dict] = []
         all_indicadores: list[dict] = []
@@ -183,13 +218,7 @@ class SupervisorDominio(AgenteBDI):
             self._collectors.append(mc)
 
         # -- 3. Deduplicate despesas (mortalidade returns all subfunções) --
-        seen_despesas: set[tuple[int, int]] = set()
-        unique_despesas: list[dict] = []
-        for d in all_despesas:
-            key = (d.get("subfuncao", 0), d.get("ano", 0))
-            if key not in seen_despesas:
-                seen_despesas.add(key)
-                unique_despesas.append(d)
+        unique_despesas = deduplicate_despesas(all_despesas)
 
         aggregated = {
             "despesas": unique_despesas,
@@ -211,7 +240,7 @@ class SupervisorAnalitico(AgenteBDI):
     """Supervisor analítico — nível 1 da topologia hierárquica (Req 10.3).
 
     Coordena 3 agentes analíticos (nível 2): AgenteCorrelacao,
-    AgenteAnomalias e AgenteSintetizador.
+    AgenteAnomalias e TextSynthesizer.
 
     Recebe dados de domínio e contexto orçamentário via
     ``receive_from_peer`` (Reqs 10.5, 10.6), cruza dados usando
@@ -287,7 +316,7 @@ class SupervisorAnalitico(AgenteBDI):
         1. Cruza dados de domínio usando ``cross_domain_data()``.
         2. AgenteCorrelacao.compute(dados_cruzados).
         3. AgenteAnomalias.detect(dados_cruzados).
-        4. AgenteSintetizador.synthesize(correlacoes, anomalias, contexto, ...).
+        4. TextSynthesizer.generate() com streaming via StreamingAdapter.
 
         Args:
             analysis_id: UUID da análise em andamento.
@@ -309,7 +338,7 @@ class SupervisorAnalitico(AgenteBDI):
 
         agente_correlacao = AgenteCorrelacao(corr_id)
         agente_anomalias = AgenteAnomalias(anom_id)
-        agente_sintetizador = AgenteSintetizador(sint_id)
+        sintetizador = TextSynthesizer(sint_id)
 
         self._collectors: list[MetricsCollector] = []
 
@@ -323,10 +352,11 @@ class SupervisorAnalitico(AgenteBDI):
         # Detect data gaps for transparency
         date_from = self.peer_data.get("date_from")
         date_to = self.peer_data.get("date_to")
+        health_params = self.peer_data.get("health_params")
         data_coverage: dict = {}
         if date_from is not None and date_to is not None:
             data_coverage = detect_data_gaps(
-                despesas, indicadores, date_from, date_to
+                despesas, indicadores, date_from, date_to, health_params
             )
             if data_coverage.get("summary", {}).get("has_gaps"):
                 logger.warning(
@@ -384,16 +414,37 @@ class SupervisorAnalitico(AgenteBDI):
         mc_sint = MetricsCollector(sint_id, "sintetizador")
         mc_sint.start()
         try:
-            texto_analise = agente_sintetizador.synthesize(
-                correlacoes=correlacoes,
-                anomalias=anomalias,
-                contexto_orcamentario=contexto_orcamentario,
-                analysis_id=analysis_id,
-                ws_queue=ws_queue,
-                architecture="hierarchical",
-                data_coverage=data_coverage,
-                use_llm=use_llm,
-            )
+            adapter = StreamingAdapter(ws_queue, analysis_id, "hierarchical")
+
+            if use_llm:
+                try:
+                    token_gen = sintetizador.generate_stream(
+                        correlacoes=correlacoes,
+                        anomalias=anomalias,
+                        contexto_orcamentario=contexto_orcamentario,
+                        data_coverage=data_coverage,
+                    )
+                    texto_analise = adapter.stream_tokens(token_gen)
+                    if not texto_analise:
+                        texto_analise = sintetizador.generate_fallback(
+                            correlacoes, anomalias, contexto_orcamentario, data_coverage
+                        )
+                        adapter.stream_text(texto_analise)
+                except Exception:
+                    logger.warning(
+                        "SupervisorAnalitico %s: LLM streaming failed, using fallback",
+                        self.agent_id,
+                    )
+                    texto_analise = sintetizador.generate_fallback(
+                        correlacoes, anomalias, contexto_orcamentario, data_coverage
+                    )
+                    adapter.stream_text(texto_analise)
+            else:
+                texto_analise = sintetizador.generate_fallback(
+                    correlacoes, anomalias, contexto_orcamentario, data_coverage
+                )
+                adapter.stream_text(texto_analise)
+
             mc_sint.stop()
             counter.increment(2)
             logger.info(

@@ -19,7 +19,7 @@ from api.websocket import router as ws_router
 
 # Re-export shared state and models so existing imports from "main" still work.
 # This keeps backward compatibility with tests that do `from main import ...`.
-from api.state import active_queues, active_threads, active_results, active_agent_metrics  # noqa: F401
+from api.state import active_queues, active_threads, active_results  # noqa: F401
 from api.models import (  # noqa: F401
     AnalysisRequest,
     AnalysisResponse,

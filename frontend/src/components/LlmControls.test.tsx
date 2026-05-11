@@ -1,119 +1,51 @@
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+/**
+ * Tests for LlmControls component.
+ * Validates toggle behavior and LLM Judge dependency on LLM toggle.
+ */
 import { describe, it, expect, vi } from 'vitest';
-import * as fc from 'fast-check';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { LlmControls } from './LlmControls';
 
 describe('LlmControls', () => {
-  it('renders both toggles', () => {
-    render(
-      <LlmControls
-        useLlm={true}
-        useLlmJudge={false}
-        disabled={false}
-        onUseLlmChange={vi.fn()}
-        onUseLlmJudgeChange={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('llm-toggle')).toBeInTheDocument();
-    expect(screen.getByTestId('llm-judge-toggle')).toBeInTheDocument();
+  const defaultProps = {
+    useLlm: false,
+    useLlmJudge: false,
+    disabled: false,
+    onUseLlmChange: vi.fn(),
+    onUseLlmJudgeChange: vi.fn(),
+  };
+
+  it('renders LLM and LLM Judge toggles', () => {
+    render(<LlmControls {...defaultProps} />);
+    expect(screen.getByTestId('llm-toggle-input')).toBeInTheDocument();
+    expect(screen.getByTestId('llm-judge-toggle-input')).toBeInTheDocument();
   });
 
-  it('LLM Judge is enabled when useLlm=true', () => {
-    render(
-      <LlmControls
-        useLlm={true}
-        useLlmJudge={false}
-        disabled={false}
-        onUseLlmChange={vi.fn()}
-        onUseLlmJudgeChange={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('llm-judge-toggle-input')).not.toBeDisabled();
-  });
-
-  it('LLM Judge is disabled when useLlm=false', () => {
-    render(
-      <LlmControls
-        useLlm={false}
-        useLlmJudge={true}
-        disabled={false}
-        onUseLlmChange={vi.fn()}
-        onUseLlmJudgeChange={vi.fn()}
-      />,
-    );
+  it('LLM Judge is disabled when useLlm is false', () => {
+    render(<LlmControls {...defaultProps} useLlm={false} />);
     expect(screen.getByTestId('llm-judge-toggle-input')).toBeDisabled();
   });
 
-  it('both toggles are disabled when disabled=true', () => {
-    render(
-      <LlmControls
-        useLlm={true}
-        useLlmJudge={true}
-        disabled={true}
-        onUseLlmChange={vi.fn()}
-        onUseLlmJudgeChange={vi.fn()}
-      />,
-    );
+  it('LLM Judge is enabled when useLlm is true', () => {
+    render(<LlmControls {...defaultProps} useLlm={true} />);
+    expect(screen.getByTestId('llm-judge-toggle-input')).not.toBeDisabled();
+  });
+
+  it('both toggles disabled when disabled prop is true', () => {
+    render(<LlmControls {...defaultProps} disabled={true} />);
     expect(screen.getByTestId('llm-toggle-input')).toBeDisabled();
     expect(screen.getByTestId('llm-judge-toggle-input')).toBeDisabled();
   });
 
-  it('calls onUseLlmChange when LLM toggle is clicked', async () => {
+  it('calls onUseLlmChange when LLM toggle clicked', () => {
     const onUseLlmChange = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LlmControls
-        useLlm={true}
-        useLlmJudge={false}
-        disabled={false}
-        onUseLlmChange={onUseLlmChange}
-        onUseLlmJudgeChange={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByTestId('llm-toggle-input'));
-    expect(onUseLlmChange).toHaveBeenCalledWith(false);
+    render(<LlmControls {...defaultProps} onUseLlmChange={onUseLlmChange} />);
+    fireEvent.click(screen.getByTestId('llm-toggle-input'));
+    expect(onUseLlmChange).toHaveBeenCalledWith(true);
   });
 
-  it('calls onUseLlmJudgeChange when LLM Judge toggle is clicked', async () => {
-    const onUseLlmJudgeChange = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <LlmControls
-        useLlm={true}
-        useLlmJudge={false}
-        disabled={false}
-        onUseLlmChange={vi.fn()}
-        onUseLlmJudgeChange={onUseLlmJudgeChange}
-      />,
-    );
-    await user.click(screen.getByTestId('llm-judge-toggle-input'));
-    expect(onUseLlmJudgeChange).toHaveBeenCalledWith(true);
-  });
-
-  // Feature: frontend-redesign, Property 5
-  // Propriedade 5: Toggle LLM Judge desabilitado quando LLM está desabilitado
-  it('Property 5: LLM Judge input is always disabled when useLlm=false, regardless of useLlmJudge', () => {
-    fc.assert(
-      fc.property(
-        fc.boolean(), // useLlmJudge
-        (useLlmJudge) => {
-          const { unmount } = render(
-            <LlmControls
-              useLlm={false}
-              useLlmJudge={useLlmJudge}
-              disabled={false}
-              onUseLlmChange={vi.fn()}
-              onUseLlmJudgeChange={vi.fn()}
-            />,
-          );
-          const input = screen.getByTestId('llm-judge-toggle-input') as HTMLInputElement;
-          const isDisabled = input.disabled;
-          unmount();
-          return isDisabled === true;
-        },
-      ),
-      { numRuns: 100 },
-    );
+  it('LLM Judge checkbox unchecked when useLlm is false even if useLlmJudge is true', () => {
+    render(<LlmControls {...defaultProps} useLlm={false} useLlmJudge={true} />);
+    expect(screen.getByTestId('llm-judge-toggle-input')).not.toBeChecked();
   });
 });

@@ -1,14 +1,14 @@
 """
-Agente Analítico — Correlação Estatística.
+Agente Analítico — Correlação Estatística (Spearman).
 
-Calcula correlações de Pearson, Spearman e Kendall Tau-b entre gastos
-públicos em saúde (despesas por subfunção) e indicadores de saúde,
-classificando a força da correlação com base no coeficiente de Spearman.
+Calcula correlação de Spearman (rank/monotônico) entre gastos públicos
+em saúde (despesas por subfunção) e indicadores de saúde, classificando
+a força da correlação com base no coeficiente.
 
 Opera sobre dados em memória (CrossedDataPoint dicts) — sem dependência
 de Neo4j ou outros serviços externos.
 
-Requisitos: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7
+Requisitos: 5.1, 5.2, 5.4, 5.5, 5.6, 5.7
 """
 
 from __future__ import annotations
@@ -58,13 +58,16 @@ def _classify(r: float) -> str:
 
 
 class AgenteCorrelacao(AgenteBDI):
-    """Agente analítico que calcula correlações estatísticas (Req 5).
+    """Agente analítico que calcula correlação Spearman (Req 5).
 
     Recebe dados cruzados (despesas × indicadores por subfunção e ano)
-    e calcula três métricas de correlação para cada par subfunção-indicador:
-    Pearson (linear), Spearman (rank/monotônico) e Kendall Tau-b (pares).
+    e calcula correlação Spearman para cada par subfunção-indicador.
 
-    Classifica a força da correlação usando Spearman como referência principal.
+    Spearman é baseado em ranks — robusto a outliers e captura relações
+    monotônicas não-lineares. Ideal para dados de saúde pública com
+    amostras pequenas e possíveis anos atípicos.
+
+    Classifica a força: alta (≥0.7), média (≥0.4), baixa (<0.4).
     Retorna 0.0 para pares com menos de 2 pontos de dados (Req 5.7).
     """
 
@@ -104,20 +107,17 @@ class AgenteCorrelacao(AgenteBDI):
     # -- Public API called by orchestrator/supervisor -------------------
 
     def compute(self, dados_cruzados: list[dict]) -> list[dict]:
-        """Calcula correlações para cada par subfunção-indicador.
-
-        Recebe dados cruzados (CrossedDataPoint dicts) e retorna lista
-        de correlações com Pearson, Spearman, Kendall e classificação.
+        """Calcula correlação Spearman para cada par subfunção-indicador.
 
         Args:
             dados_cruzados: Lista de dicts com keys: subfuncao, subfuncao_nome,
                 tipo_indicador, ano, valor_despesa, valor_indicador.
 
         Returns:
-            Lista de dicts com keys: subfuncao, tipo_indicador, pearson,
-            spearman, kendall, classificacao, n_pontos.
+            Lista de dicts com keys: subfuncao, tipo_indicador, spearman,
+            classificacao, n_pontos.
             Retorna lista vazia se input for vazio.
-            Retorna 0.0 para todas as métricas se < 2 pontos (Req 5.7).
+            Retorna 0.0 se < 2 pontos (Req 5.7).
         """
         self.update_beliefs({"dados_cruzados": dados_cruzados})
         self.run_cycle()
@@ -126,7 +126,7 @@ class AgenteCorrelacao(AgenteBDI):
     # -- Internal computation -------------------------------------------
 
     def _compute_correlations(self) -> None:
-        """Compute correlations per subfuncao-indicador pair (Reqs 5.1-5.7)."""
+        """Compute Spearman correlation per subfuncao-indicador pair."""
         crossed = self.beliefs.get("dados_cruzados", [])
         correlacoes: list[dict[str, Any]] = []
 
@@ -142,32 +142,22 @@ class AgenteCorrelacao(AgenteBDI):
             ys = [it["valor_indicador"] for it in items]
 
             if n < 2:
-                # Req 5.7: Return 0.0 for all metrics when < 2 data points
+                # Req 5.7: Return 0.0 when < 2 data points
                 correlacoes.append({
                     "subfuncao": subfuncao,
                     "tipo_indicador": tipo,
-                    "pearson": 0.0,
                     "spearman": 0.0,
-                    "kendall": 0.0,
                     "classificacao": "baixa",
                     "n_pontos": n,
                 })
             else:
-                # Req 5.1: Pearson (linear correlation)
-                r_pearson = _safe_correlation(stats.pearsonr, xs, ys)
-                # Req 5.2: Spearman (rank correlation)
                 r_spearman = _safe_correlation(stats.spearmanr, xs, ys)
-                # Req 5.3: Kendall Tau-b (pair concordance)
-                r_kendall = _safe_correlation(stats.kendalltau, xs, ys)
-
-                r_spearman_rounded = round(r_spearman, 4)
+                r_rounded = round(r_spearman, 4)
                 correlacoes.append({
                     "subfuncao": subfuncao,
                     "tipo_indicador": tipo,
-                    "pearson": round(r_pearson, 4),
-                    "spearman": r_spearman_rounded,
-                    "kendall": round(r_kendall, 4),
-                    "classificacao": _classify(r_spearman_rounded),  # Req 5.4
+                    "spearman": r_rounded,
+                    "classificacao": _classify(r_rounded),
                     "n_pontos": n,
                 })
 

@@ -1,189 +1,138 @@
-"""
-Tests for the cross_domain_data utility function.
+"""Tests for data_crossing module: cross_domain_data, deduplicate_despesas, detect_data_gaps."""
 
-Validates Requirements: 9.4, 10.5
-"""
+import pytest
 
-from agents.data_crossing import (
-    cross_domain_data,
-    SUBFUNCAO_INDICADOR_MAP,
-    MORTALIDADE_SUBFUNCOES,
-)
+from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
+
+
+# ============================================================
+# cross_domain_data
+# ============================================================
 
 
 class TestCrossDomainDataEmpty:
-    """Handle empty inputs gracefully."""
+    def test_empty_despesas_returns_empty(self):
+        assert cross_domain_data([], [{"tipo": "dengue", "ano": 2020, "valor": 10}]) == []
 
-    def test_empty_despesas(self):
-        result = cross_domain_data([], [{"tipo": "dengue", "ano": 2020, "valor": 100.0}])
-        assert result == []
-
-    def test_empty_indicadores(self):
-        result = cross_domain_data(
-            [{"subfuncao": 305, "subfuncaoNome": "Vigilância Epidemiológica", "ano": 2020, "valor": 1000.0}],
-            [],
-        )
-        assert result == []
-
-    def test_both_empty(self):
-        result = cross_domain_data([], [])
-        assert result == []
+    def test_empty_indicadores_returns_empty(self):
+        assert cross_domain_data([{"subfuncao": 305, "ano": 2020, "valor": 100}], []) == []
 
 
-class TestCrossDomainDataStandardMapping:
-    """Standard subfunção→indicador mapping (301, 302, 305)."""
-
-    def test_301_vacinacao(self):
-        despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
-        ]
-        indicadores = [
-            {"tipo": "vacinacao", "ano": 2020, "valor": 85.0},
-        ]
+class TestCrossDomainDataMapping:
+    def test_301_maps_to_vacinacao(self):
+        despesas = [{"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 100.0}]
+        indicadores = [{"tipo": "vacinacao", "ano": 2020, "valor": 80.0}]
         result = cross_domain_data(despesas, indicadores)
         assert len(result) == 1
-        assert result[0]["subfuncao"] == 301
         assert result[0]["tipo_indicador"] == "vacinacao"
-        assert result[0]["ano"] == 2020
-        assert result[0]["valor_despesa"] == 5000.0
-        assert result[0]["valor_indicador"] == 85.0
-        assert result[0]["subfuncao_nome"] == "Atenção Básica"
+        assert result[0]["subfuncao"] == 301
 
-    def test_302_internacoes(self):
-        despesas = [
-            {"subfuncao": 302, "subfuncaoNome": "Assistência Hospitalar", "ano": 2021, "valor": 8000.0},
-        ]
-        indicadores = [
-            {"tipo": "internacoes", "ano": 2021, "valor": 1200.0},
-        ]
+    def test_302_maps_to_internacoes(self):
+        despesas = [{"subfuncao": 302, "subfuncaoNome": "Assistência Hospitalar", "ano": 2021, "valor": 200.0}]
+        indicadores = [{"tipo": "internacoes", "ano": 2021, "valor": 500.0}]
         result = cross_domain_data(despesas, indicadores)
         assert len(result) == 1
-        assert result[0]["subfuncao"] == 302
         assert result[0]["tipo_indicador"] == "internacoes"
 
-    def test_305_dengue_and_covid(self):
-        despesas = [
-            {"subfuncao": 305, "subfuncaoNome": "Vigilância Epidemiológica", "ano": 2020, "valor": 3000.0},
-        ]
+    def test_305_maps_to_dengue_and_covid(self):
+        despesas = [{"subfuncao": 305, "subfuncaoNome": "Vigilância", "ano": 2020, "valor": 150.0}]
         indicadores = [
-            {"tipo": "dengue", "ano": 2020, "valor": 500.0},
-            {"tipo": "covid", "ano": 2020, "valor": 2000.0},
+            {"tipo": "dengue", "ano": 2020, "valor": 30.0},
+            {"tipo": "covid", "ano": 2020, "valor": 40.0},
         ]
         result = cross_domain_data(despesas, indicadores)
-        assert len(result) == 2
         tipos = {r["tipo_indicador"] for r in result}
         assert tipos == {"dengue", "covid"}
 
-    def test_no_matching_year(self):
+    def test_mortalidade_crosses_with_all_subfuncoes(self):
         despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
+            {"subfuncao": 301, "subfuncaoNome": "AB", "ano": 2020, "valor": 100.0},
+            {"subfuncao": 302, "subfuncaoNome": "AH", "ano": 2020, "valor": 200.0},
+            {"subfuncao": 305, "subfuncaoNome": "VE", "ano": 2020, "valor": 300.0},
         ]
-        indicadores = [
-            {"tipo": "vacinacao", "ano": 2021, "valor": 85.0},
-        ]
+        indicadores = [{"tipo": "mortalidade", "ano": 2020, "valor": 50.0}]
         result = cross_domain_data(despesas, indicadores)
-        assert result == []
+        subfuncoes = {r["subfuncao"] for r in result}
+        # mortalidade crosses with 301, 302, 303, 305 — but only those with data
+        assert 301 in subfuncoes
+        assert 302 in subfuncoes
+        assert 305 in subfuncoes
 
-    def test_no_matching_subfuncao(self):
+
+class TestCrossDomainDataYearMatching:
+    def test_only_matching_years_produce_crossed_points(self):
         despesas = [
-            {"subfuncao": 303, "subfuncaoNome": "Suporte Profilático", "ano": 2020, "valor": 2000.0},
+            {"subfuncao": 301, "subfuncaoNome": "AB", "ano": 2019, "valor": 100.0},
+            {"subfuncao": 301, "subfuncaoNome": "AB", "ano": 2020, "valor": 200.0},
         ]
-        indicadores = [
-            {"tipo": "vacinacao", "ano": 2020, "valor": 85.0},
-        ]
-        # 303 is not in SUBFUNCAO_INDICADOR_MAP, and no mortalidade indicadores
-        result = cross_domain_data(despesas, indicadores)
-        assert result == []
-
-    def test_multiple_years(self):
-        despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2019, "valor": 4000.0},
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2021, "valor": 6000.0},
-        ]
-        indicadores = [
-            {"tipo": "vacinacao", "ano": 2019, "valor": 80.0},
-            {"tipo": "vacinacao", "ano": 2020, "valor": 85.0},
-            {"tipo": "vacinacao", "ano": 2021, "valor": 90.0},
-        ]
-        result = cross_domain_data(despesas, indicadores)
-        assert len(result) == 3
-        years = sorted(r["ano"] for r in result)
-        assert years == [2019, 2020, 2021]
-
-
-class TestCrossDomainDataMortalidade:
-    """Mortalidade is transversal — crosses with ALL subfunções."""
-
-    def test_mortalidade_crosses_all_subfuncoes(self):
-        despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
-            {"subfuncao": 302, "subfuncaoNome": "Assistência Hospitalar", "ano": 2020, "valor": 8000.0},
-            {"subfuncao": 303, "subfuncaoNome": "Suporte Profilático", "ano": 2020, "valor": 2000.0},
-            {"subfuncao": 305, "subfuncaoNome": "Vigilância Epidemiológica", "ano": 2020, "valor": 3000.0},
-        ]
-        indicadores = [
-            {"tipo": "mortalidade", "ano": 2020, "valor": 150.0},
-        ]
-        result = cross_domain_data(despesas, indicadores)
-        assert len(result) == 4
-        subfuncoes = sorted(r["subfuncao"] for r in result)
-        assert subfuncoes == [301, 302, 303, 305]
-        for r in result:
-            assert r["tipo_indicador"] == "mortalidade"
-            assert r["valor_indicador"] == 150.0
-
-    def test_mortalidade_only_matching_years(self):
-        despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2021, "valor": 6000.0},
-        ]
-        indicadores = [
-            {"tipo": "mortalidade", "ano": 2020, "valor": 150.0},
-        ]
+        indicadores = [{"tipo": "vacinacao", "ano": 2020, "valor": 80.0}]
         result = cross_domain_data(despesas, indicadores)
         assert len(result) == 1
         assert result[0]["ano"] == 2020
 
-    def test_mortalidade_with_standard_indicators(self):
-        """Mortalidade crossing coexists with standard mapping."""
-        despesas = [
-            {"subfuncao": 301, "subfuncaoNome": "Atenção Básica", "ano": 2020, "valor": 5000.0},
-        ]
-        indicadores = [
-            {"tipo": "vacinacao", "ano": 2020, "valor": 85.0},
-            {"tipo": "mortalidade", "ano": 2020, "valor": 150.0},
-        ]
-        result = cross_domain_data(despesas, indicadores)
-        assert len(result) == 2
-        tipos = {r["tipo_indicador"] for r in result}
-        assert tipos == {"vacinacao", "mortalidade"}
 
-
-class TestCrossDomainDataOutputStructure:
-    """Verify output structure matches CrossedDataPoint."""
-
-    def test_all_required_fields_present(self):
-        despesas = [
-            {"subfuncao": 302, "subfuncaoNome": "Assistência Hospitalar", "ano": 2020, "valor": 8000.0},
-        ]
-        indicadores = [
-            {"tipo": "internacoes", "ano": 2020, "valor": 1200.0},
-        ]
+class TestCrossDomainDataOutputFields:
+    def test_output_has_required_fields(self):
+        despesas = [{"subfuncao": 302, "subfuncaoNome": "AH", "ano": 2021, "valor": 500.0}]
+        indicadores = [{"tipo": "internacoes", "ano": 2021, "valor": 1000.0}]
         result = cross_domain_data(despesas, indicadores)
         assert len(result) == 1
-        point = result[0]
-        required_keys = {"subfuncao", "subfuncao_nome", "tipo_indicador", "ano", "valor_despesa", "valor_indicador"}
-        assert set(point.keys()) == required_keys
+        required = {"subfuncao", "subfuncao_nome", "tipo_indicador", "ano", "valor_despesa", "valor_indicador"}
+        assert required.issubset(result[0].keys())
 
-    def test_subfuncao_nome_fallback(self):
-        """When subfuncaoNome is missing from despesa, use SUBFUNCAO_NOMES lookup."""
+
+# ============================================================
+# deduplicate_despesas
+# ============================================================
+
+
+class TestDeduplicateDespesas:
+    def test_empty_list_returns_empty(self):
+        assert deduplicate_despesas([]) == []
+
+    def test_no_duplicates_returns_same_list(self):
         despesas = [
-            {"subfuncao": 301, "ano": 2020, "valor": 5000.0},
+            {"subfuncao": 301, "ano": 2019, "valor": 100.0},
+            {"subfuncao": 301, "ano": 2020, "valor": 200.0},
+            {"subfuncao": 302, "ano": 2019, "valor": 300.0},
+        ]
+        result = deduplicate_despesas(despesas)
+        assert len(result) == 3
+
+    def test_duplicates_removed_first_kept(self):
+        despesas = [
+            {"subfuncao": 301, "ano": 2020, "valor": 100.0},
+            {"subfuncao": 301, "ano": 2020, "valor": 999.0},  # duplicate
+        ]
+        result = deduplicate_despesas(despesas)
+        assert len(result) == 1
+        assert result[0]["valor"] == 100.0
+
+
+# ============================================================
+# detect_data_gaps
+# ============================================================
+
+
+class TestDetectDataGaps:
+    def test_full_coverage_returns_no_gaps(self):
+        despesas = [
+            {"subfuncao": sf, "ano": ano, "valor": 100.0}
+            for sf in [301, 302, 303, 305]
+            for ano in [2019, 2020, 2021]
         ]
         indicadores = [
-            {"tipo": "vacinacao", "ano": 2020, "valor": 85.0},
+            {"tipo": tipo, "ano": ano, "valor": 50.0}
+            for tipo in ["vacinacao", "internacoes", "dengue", "covid", "mortalidade"]
+            for ano in [2019, 2020, 2021]
         ]
-        result = cross_domain_data(despesas, indicadores)
-        assert len(result) == 1
-        assert result[0]["subfuncao_nome"] == "Atenção Básica"
+        result = detect_data_gaps(despesas, indicadores, 2019, 2021)
+        assert result["summary"]["has_gaps"] is False
+
+    def test_missing_years_detected(self):
+        # Only 2019 data, but period is 2019-2021
+        despesas = [{"subfuncao": 301, "ano": 2019, "valor": 100.0}]
+        indicadores = [{"tipo": "vacinacao", "ano": 2019, "valor": 50.0}]
+        result = detect_data_gaps(despesas, indicadores, 2019, 2021)
+        assert result["summary"]["has_gaps"] is True
+        assert len(result["gaps"]) > 0

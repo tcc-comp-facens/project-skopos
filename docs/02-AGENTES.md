@@ -6,7 +6,7 @@
 2. [Modelo BDI](#modelo-bdi-belief-desire-intention)
 3. [Classe Base AgenteBDI](#classe-base-agentebdi)
 4. [Agentes de Domínio (4)](#agentes-de-domínio-4)
-5. [Agentes Analíticos (3)](#agentes-analíticos-3)
+5. [Agentes Analíticos (2 BDI + 1 serviço)](#agentes-analíticos-2-bdi--1-serviço)
 6. [Agente de Contexto (1)](#agente-de-contexto-1)
 7. [Arquitetura Estrela](#arquitetura-estrela)
 8. [Arquitetura Hierárquica](#arquitetura-hierárquica)
@@ -175,10 +175,8 @@ def deliberate(self):
     if self.beliefs.get("dados_cruzados"):
         desires.append({"goal": "calcular_correlacoes"})
 
-# AgenteSintetizador — "se tenho analysis_id, quero sintetizar (mesmo sem dados)"
-def deliberate(self):
-    if self.beliefs.get("analysis_id") is not None:
-        desires.append({"goal": "sintetizar_texto"})
+# TextSynthesizer — serviço (não-BDI), não usa deliberate()
+# O caller invoca diretamente: sintetizador.generate(correlacoes, anomalias, contexto)
 ```
 
 **4. Planejar** — converte desejos em intenções executáveis (1 desejo = 1 intenção):
@@ -427,7 +425,7 @@ Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021
 
 ---
 
-## Agentes Analíticos (3)
+## Agentes Analíticos (2 BDI + 1 serviço)
 
 Os agentes analíticos processam dados **em memória** — não acessam Neo4j. Recebem dados já coletados pelos agentes de domínio e produzem análises.
 
@@ -436,8 +434,8 @@ Os agentes analíticos processam dados **em memória** — não acessam Neo4j. R
 │                   AGENTES ANALÍTICOS                            │
 │                                                                 │
 │  Dados dos agentes     ┌──────────────┐                        │
-│  de domínio ──────────►│ Correlação   │──► Pearson, Spearman,  │
-│  (dados cruzados)      │              │    Kendall por par     │
+│  de domínio ──────────►│ Correlação   │──► Spearman por par     │
+│  (dados cruzados)      │              │    (classificação)      │
 │                        └──────────────┘                        │
 │                                                                 │
 │  Dados dos agentes     ┌──────────────┐                        │
@@ -447,16 +445,16 @@ Os agentes analíticos processam dados **em memória** — não acessam Neo4j. R
 │                                                                 │
 │  Correlações +         ┌──────────────┐                        │
 │  Anomalias +  ────────►│ Sintetizador │──► Texto via LLM       │
-│  Contexto              │              │    (streaming chunks)  │
+│  Contexto              │ (serviço)    │    (streaming chunks)  │
 │                        └──────────────┘                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### AgenteCorrelacao — Correlação Estatística
+### AgenteCorrelacao — Correlação Estatística Spearman
 
 **Arquivo:** `agents/analytical/correlacao.py`
 
-Calcula a força da relação entre gastos e indicadores de saúde usando três métodos estatísticos:
+Calcula a força da relação entre gastos e indicadores de saúde usando Spearman (rank/monotônico). Spearman é baseado em ranks — robusto a outliers e captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
 
 ```
 Entrada: dados cruzados (despesa × indicador por subfunção e ano)
@@ -469,11 +467,9 @@ Entrada: dados cruzados (despesa × indicador por subfunção e ano)
                     │
                     ▼
 ┌──────────────────────────────────────────────────────┐
-│  Calcula 3 coeficientes para cada par:               │
+│  n=3 pontos (≥ 2) → calcula Spearman                 │
 │                                                      │
-│  Pearson  = -0.85  (relação linear)                  │
 │  Spearman = -0.87  (relação monotônica, por ranks)   │
-│  Kendall  = -0.82  (concordância entre pares)        │
 │                                                      │
 │  Classificação (baseada em |Spearman|):              │
 │  |0.87| = 0.87 ≥ 0.7 → "alta"                       │
@@ -484,15 +480,17 @@ Saída:
 {
   subfuncao: 305,
   tipo_indicador: "dengue",
-  pearson: -0.85,
   spearman: -0.87,
-  kendall: -0.82,
   classificacao: "alta",
   n_pontos: 3
 }
 ```
 
-**Classificação (baseada no Spearman):**
+**Comportamento:**
+- Pares com < 2 pontos de dados → retorna 0.0 (não é possível calcular correlação)
+- Pares com ≥ 2 pontos → calcula Spearman normalmente
+
+**Classificação (baseada no |Spearman|):**
 
 ```
 |r| ≥ 0.7  ──►  "alta"     (relação forte)
@@ -501,7 +499,7 @@ Saída:
 ```
 
 **Regras especiais:**
-- Pares com < 2 pontos de dados → retorna 0.0 para tudo (não é possível calcular correlação)
+- Pares com < 2 pontos de dados → retorna 0.0 (não é possível calcular correlação)
 - Arrays constantes (todos os valores iguais) → retorna 0.0 (NaN tratado)
 - Resultado sempre clamped a [-1, 1]
 
@@ -567,9 +565,11 @@ Entrada: dados cruzados (subfunção 301 × vacinação)
 
 **Regra:** Pares com < 2 pontos de dados são ignorados (não faz sentido calcular mediana com 1 valor).
 
-### AgenteSintetizador — Geração de Texto
+### TextSynthesizer — Geração de Texto (Serviço, não-BDI)
 
 **Arquivo:** `agents/analytical/sintetizador.py`
+
+> **Nota arquitetural:** O sintetizador NÃO é um agente BDI. Ele não possui autonomia deliberativa — recebe dados prontos e produz texto. A decisão de modelá-lo como classe normal (não agente) reflete que ele não percebe ambiente mutável, não forma desejos concorrentes, e não escolhe entre planos alternativos. O streaming é responsabilidade do caller via `StreamingAdapter`.
 
 Recebe todos os resultados dos outros agentes e gera um texto de análise em português:
 
@@ -590,23 +590,29 @@ Recebe todos os resultados dos outros agentes e gera um texto de análise em por
                 ▼
        ┌─────────────────┐
        │  Tenta LLM:     │
-       │  1º Groq        │──► Sucesso? → Texto do LLM
-       │  2º Gemini      │
-       │  (3 tentativas) │──► Falhou?  → Texto estruturado (fallback)
+       │  1º llama-3.3   │──► Sucesso? → Texto do LLM
+       │  2º qwen3-32b   │
+       │  3º llama-4     │──► Falhou?  → Texto estruturado (fallback)
        └────────┬────────┘
                 ▼
        ┌─────────────────┐
-       │  Streaming:      │
+       │  StreamingAdapter│
+       │  (core/streaming │
+       │  _adapter.py)    │
        │  Divide texto em │
        │  chunks de ~80   │──► ws_queue ──► WebSocket ──► Frontend
        │  caracteres      │
        └─────────────────┘
 ```
 
+O streaming é realizado pelo `StreamingAdapter` (`backend/core/streaming_adapter.py`), um componente de infraestrutura reutilizável que encapsula a lógica de chunking e envio para `ws_queue`. Oferece dois modos:
+- `stream_text(text)` — para texto pré-gerado (fallback estruturado)
+- `stream_tokens(generator)` — para tokens incrementais do LLM (streaming em tempo real)
+
 **Seções do texto gerado (fallback):**
 1. Resumo Executivo
 2. Cobertura de Dados (gaps detectados)
-3. Análise das Correlações (Pearson/Spearman/Kendall por par)
+3. Análise das Correlações (Spearman por par, com classificação)
 4. Discussão das Anomalias (com descrições em português)
 5. Contexto Orçamentário (tendências por subfunção)
 
@@ -670,7 +676,20 @@ Entrada: despesas agregadas por subfunção
 
 **Arquivo:** `backend/agents/star/orchestrator.py`
 
-Na topologia estrela, um único agente central (OrquestradorEstrela) coordena todos os 8 agentes. Nenhum agente periférico se comunica diretamente com outro — tudo passa pelo hub.
+Na topologia estrela, um único agente central (OrquestradorEstrela) coordena todos os agentes. Nenhum agente periférico se comunica diretamente com outro — tudo passa pelo hub.
+
+**Ativação condicional de agentes de domínio:** O orquestrador usa o mapeamento `INDICADOR_TO_AGENT` para instanciar apenas os agentes de domínio relevantes aos `health_params` selecionados pelo usuário:
+
+```
+INDICADOR_TO_AGENT:
+  dengue      → vigilancia_epidemiologica
+  covid       → vigilancia_epidemiologica
+  internacoes → saude_hospitalar
+  vacinacao   → atencao_primaria
+  mortalidade → mortalidade
+```
+
+Se o usuário seleciona apenas `dengue` e `vacinacao`, somente `AgenteVigilanciaEpidemiologica` e `AgenteAtencaoPrimaria` são instanciados. Agentes analíticos e de contexto são sempre executados.
 
 ```
                          OrquestradorEstrela
@@ -703,9 +722,11 @@ Na topologia estrela, um único agente central (OrquestradorEstrela) coordena to
 ### Pipeline (10 passos)
 
 ```
-Passo 1:  Instancia 8 agentes com IDs únicos
+Passo 1:  Instancia agentes com IDs únicos; agentes de domínio são
+          instanciados condicionalmente conforme health_params do usuário
+          (via mapeamento INDICADOR_TO_AGENT)
 Passo 2:  Cria MessageCounter
-Passo 3:  Executa 4 agentes de domínio em SEQUÊNCIA
+Passo 3:  Executa apenas os agentes de domínio relevantes em SEQUÊNCIA
           Vigilância → Hospitalar → Primária → Mortalidade
 Passo 4:  Deduplica despesas (mortalidade retorna todas as subfunções)
 Passo 5:  Cruza dados: cross_domain_data(despesas, indicadores)
@@ -713,13 +734,14 @@ Passo 6:  Detecta lacunas: detect_data_gaps()
 Passo 7:  AgenteContextoOrcamentario.analyze_trends(despesas)
 Passo 8:  AgenteCorrelacao.compute(dados_cruzados)
 Passo 9:  AgenteAnomalias.detect(dados_cruzados)
-Passo 10: AgenteSintetizador.synthesize(correlações, anomalias, contexto)
+Passo 10: TextSynthesizer.generate(correlações, anomalias, contexto)
 ```
 
 **Características:**
 - Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
 - Ponto único de falha: se o orquestrador falhar, toda a análise falha
-- Mensagens esperadas: ~16 (8 agentes × 2)
+- Ativação condicional: apenas agentes de domínio relevantes aos `health_params` são instanciados
+- Mensagens esperadas: variável (depende dos health_params); máximo ~16 (8 agentes × 2)
 - Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
 
 ---
@@ -741,8 +763,8 @@ Na topologia hierárquica, os agentes são organizados em 3 níveis com supervis
           │                │                    │
     ┌─────┼─────┐         │              ┌─────┼─────┐
     ▼     ▼     ▼    ▼    ▼              ▼     ▼     ▼
-  Vigil. Hosp. Prim. Mort. CtxOrç.     Corr. Anom. Sint.
-  (Nível 2)                (Nível 2)    (Nível 2)
+  Vigil. Hosp. Prim. Mort. CtxOrç.     Corr. Anom. TextSynth.
+  (Nível 2)                (Nível 2)    (Nível 2)   (serviço)
 
 
   Comunicação lateral (sem passar pelo Coordenador):
@@ -768,7 +790,7 @@ Passo 5:  SupervisorContexto.run()
           → Executa AgenteContextoOrcamentario
 Passo 6:  Comunicação lateral: Contexto → Analítico (contexto orçamentário)
 Passo 7:  SupervisorAnalitico.run()
-          → Cruza dados, executa correlação, anomalias, sintetizador
+          → Cruza dados, executa correlação, anomalias, TextSynthesizer
 Passo 8:  Persiste métricas para 8 agentes + 3 supervisores
 ```
 
@@ -813,7 +835,34 @@ Passo 8:  Persiste métricas para 8 agentes + 3 supervisores
 └──────────┴──────────────────────────┴─────────────────┴──────────┘
 ```
 
-### Cruzamento de Dados
+### Deduplicação de Despesas (`deduplicate_despesas`)
+
+**Arquivo:** `backend/agents/data_crossing.py`
+
+O `AgenteMortalidade` é transversal — retorna despesas de **todas** as subfunções (301, 302, 303, 305). Quando executado junto com outros agentes de domínio, as despesas se sobrepõem. A função `deduplicate_despesas()` resolve isso:
+
+```
+Antes (com duplicatas):
+┌──────────────────────────────────────────────────────┐
+│  AgenteAtencaoPrimaria  → subfunção=301, ano=2020    │
+│  AgenteMortalidade      → subfunção=301, ano=2020  ← │ duplicata!
+│  AgenteMortalidade      → subfunção=302, ano=2020    │
+│  AgenteSaudeHospitalar  → subfunção=302, ano=2020  ← │ duplicata!
+└──────────────────────────────────────────────────────┘
+                    │
+                    ▼  deduplicate_despesas()
+                    │  (chave: subfuncao + ano)
+                    ▼
+Depois (sem duplicatas):
+┌──────────────────────────────────────────────────────┐
+│  subfunção=301, ano=2020  (primeira ocorrência)      │
+│  subfunção=302, ano=2020  (primeira ocorrência)      │
+└──────────────────────────────────────────────────────┘
+```
+
+Preserva a ordem de inserção — a primeira ocorrência de cada par `(subfuncao, ano)` é mantida.
+
+### Cruzamento de Dados (`cross_domain_data`)
 
 **Arquivo:** `backend/agents/data_crossing.py`
 
@@ -840,10 +889,24 @@ Despesas (por subfunção e ano)     Indicadores (por tipo e ano)
 
 **Arquivo:** `backend/agents/data_crossing.py`
 
-Identifica dados faltantes para transparência na análise:
+Identifica dados faltantes para transparência na análise.
+
+**Assinatura:**
+```python
+detect_data_gaps(despesas, indicadores, date_from, date_to, health_params=None)
+```
+
+**Parâmetro `health_params`** (opcional):
+- Quando fornecido (ex: `["dengue", "vacinacao"]`), verifica apenas as subfunções e indicadores relevantes à seleção do usuário
+- Quando `None`, verifica todos os tipos e subfunções (comportamento legado)
+- Mortalidade é transversal — se incluída em `health_params`, todas as subfunções são verificadas
 
 ```
-Período solicitado: 2019-2023
+Período solicitado: 2019-2023, health_params=["dengue", "vacinacao"]
+
+Verifica apenas:
+  Subfunções: 305 (dengue→vigilância), 301 (vacinacao→atenção primária)
+  Indicadores: dengue, vacinacao
 
 Despesas subfunção 305:  2019 ✓  2020 ✓  2021 ✓  2022 ✗  2023 ✗
 Indicador dengue:        2019 ✓  2020 ✓  2021 ✓  2022 ✓  2023 ✓
@@ -870,7 +933,8 @@ Agente → Orquestrador (volta)     Supervisor → Coordenador (volta)
 = 2 mensagens por chamada         Supervisor → Agente (ida)
                                   Agente → Supervisor (volta)
 8 agentes × 2 = ~16 mensagens    + comunicação lateral entre supervisores
-                                  = ~24+ mensagens
+(máximo; depende dos              = ~24+ mensagens
+health_params selecionados)
 ```
 
 A diferença na contagem de mensagens é uma das métricas comparativas entre as topologias.
@@ -1000,20 +1064,20 @@ despesas = [d for d in all_despesas if d.get("subfuncao") in [301, 302, 303, 305
 #                                                             ↑ todas as subfunções
 ```
 
-### D. AgenteCorrelacao — Cálculo estatístico
+### D. AgenteCorrelacao — Correlação Spearman
 
 ```python
 # backend/agents/analytical/correlacao.py
 
 class AgenteCorrelacao(AgenteBDI):
-    # DELIBERAR: só calcula se tem dados cruzados
+    # DELIBERAR: se há dados cruzados, deseja calcular correlações
     def deliberate(self):
         desires = []
-        if self.beliefs.get("dados_cruzados"):  # ← precisa de dados
+        if self.beliefs.get("dados_cruzados"):
             desires.append({"goal": "calcular_correlacoes"})
         return desires
 
-    # EXECUTAR: calcula 3 coeficientes por par
+    # EXECUTAR: calcula Spearman por par subfunção-indicador
     def _compute_correlations(self):
         crossed = self.beliefs["dados_cruzados"]
 
@@ -1026,22 +1090,25 @@ class AgenteCorrelacao(AgenteBDI):
         for (subfuncao, tipo), items in pairs.items():
             xs = [it["valor_despesa"] for it in items]
             ys = [it["valor_indicador"] for it in items]
+            n = len(items)
 
-            if len(items) < 2:
-                # Menos de 2 pontos → impossível calcular → retorna 0.0
-                correlacoes.append({..., "pearson": 0.0, "spearman": 0.0, "kendall": 0.0})
-            else:
-                r_pearson  = _safe_correlation(stats.pearsonr, xs, ys)
-                r_spearman = _safe_correlation(stats.spearmanr, xs, ys)
-                r_kendall  = _safe_correlation(stats.kendalltau, xs, ys)
-
+            if n < 2:
+                # < 2 pontos → impossível calcular → retorna 0.0
                 correlacoes.append({
                     "subfuncao": subfuncao,
                     "tipo_indicador": tipo,
-                    "pearson": round(r_pearson, 4),
+                    "spearman": 0.0,
+                    "classificacao": "baixa",
+                    "n_pontos": n,
+                })
+            else:
+                r_spearman = _safe_correlation(stats.spearmanr, xs, ys)
+                correlacoes.append({
+                    "subfuncao": subfuncao,
+                    "tipo_indicador": tipo,
                     "spearman": round(r_spearman, 4),
-                    "kendall": round(r_kendall, 4),
                     "classificacao": _classify(r_spearman),  # "alta"/"média"/"baixa"
+                    "n_pontos": n,
                 })
 ```
 
@@ -1082,42 +1149,56 @@ class AgenteAnomalias(AgenteBDI):
                     })
 ```
 
-### F. AgenteSintetizador — LLM com fallback
+### F. TextSynthesizer — Serviço LLM (não-BDI)
 
 ```python
 # backend/agents/analytical/sintetizador.py
 
-class AgenteSintetizador(AgenteBDI):
-    # DELIBERAR: gera texto mesmo sem dados (fallback)
-    def deliberate(self):
-        if self.beliefs.get("analysis_id") is not None:
-            desires.append({"goal": "sintetizar_texto"})
-        return desires
+class TextSynthesizer:
+    """Serviço de geração de texto — NÃO herda de AgenteBDI."""
 
-    def _generate_analysis_text(self):
+    def __init__(self, synthesizer_id: str):
+        self.synthesizer_id = synthesizer_id
+
+    def generate(self, correlacoes, anomalias, contexto_orcamentario,
+                 data_coverage=None, use_llm=True) -> str:
+        """Gera texto completo (batch). Tenta LLM, fallback estruturado."""
+        if not use_llm:
+            return self._generate_structured_text(...)
         try:
-            return self._generate_via_llm()      # tenta Groq/Gemini
+            import core.llm_client as llm_client
+            prompt = self._build_prompt(...)
+            text = "".join(llm_client.generate_stream(prompt))
+            if text:
+                return text
         except Exception:
-            return self._generate_structured_text()  # fallback estruturado
+            pass
+        return self._generate_structured_text(...)
 
-    def _generate_via_llm(self):
+    def generate_stream(self, correlacoes, anomalias, contexto_orcamentario,
+                        data_coverage=None):
+        """Retorna generator de tokens para streaming via caller."""
         import core.llm_client as llm_client
-        prompt = self._build_prompt(correlacoes, anomalias, contexto)
-        text = llm_client.generate(prompt)   # Groq → Gemini → None
-        if text:
-            return text
-        return self._generate_structured_text()  # LLM retornou None
+        prompt = self._build_prompt(...)
+        yield from llm_client.generate_stream(prompt)
 
-    # Streaming: divide texto em chunks de ~80 chars
-    def _stream_text(self, text, analysis_id, ws_queue, architecture):
-        for i in range(0, len(text), 80):
-            chunk = text[i: i + 80]
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": architecture,
-                "type": "chunk",
-                "payload": chunk,
-            })
+    def generate_fallback(self, correlacoes, anomalias, contexto_orcamentario,
+                          data_coverage=None) -> str:
+        """Texto estruturado sem LLM (determinístico)."""
+        return self._generate_structured_text(...)
+```
+
+O streaming é feito pelo caller (orquestrador/supervisor) via `StreamingAdapter`:
+
+```python
+# No orquestrador/supervisor:
+adapter = StreamingAdapter(ws_queue, analysis_id, architecture)
+try:
+    token_gen = sintetizador.generate_stream(correlacoes, anomalias, contexto)
+    texto = adapter.stream_tokens(token_gen)
+except Exception:
+    texto = sintetizador.generate_fallback(correlacoes, anomalias, contexto)
+    adapter.stream_text(texto)
 ```
 
 ### G. AgenteContextoOrcamentario — Tendências YoY
@@ -1185,8 +1266,8 @@ class OrquestradorEstrela(AgenteBDI):
         contexto = agente_contexto.analyze_trends(unique_despesas)
         correlacoes = agente_correlacao.compute(dados_cruzados)
         anomalias = agente_anomalias.detect(dados_cruzados)
-        texto = agente_sintetizador.synthesize(
-            correlacoes, anomalias, contexto, analysis_id, ws_queue, "star"
+        texto = sintetizador.generate(
+            correlacoes, anomalias, contexto, data_coverage, use_llm=True
         )
 ```
 

@@ -22,22 +22,33 @@ from queue import Queue
 from typing import Any, TYPE_CHECKING
 
 from agents.base import AgenteBDI
-from agents.data_crossing import cross_domain_data, detect_data_gaps
+from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
 from agents.domain.vigilancia_epidemiologica import AgenteVigilanciaEpidemiologica
 from agents.domain.saude_hospitalar import AgenteSaudeHospitalar
 from agents.domain.atencao_primaria import AgenteAtencaoPrimaria
 from agents.domain.mortalidade import AgenteMortalidade
 from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
-from agents.analytical.sintetizador import AgenteSintetizador
+from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
 from core.message_counter import MessageCounter
 from core.metrics import MetricsCollector
+from core.streaming_adapter import StreamingAdapter
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
+
+# Mapeamento: tipo de indicador → agente de domínio responsável
+# Usado para ativar apenas os agentes relevantes aos health_params do usuário
+INDICADOR_TO_AGENT: dict[str, str] = {
+    "dengue": "vigilancia_epidemiologica",
+    "covid": "vigilancia_epidemiologica",
+    "internacoes": "saude_hospitalar",
+    "vacinacao": "atencao_primaria",
+    "mortalidade": "mortalidade",
+}
 
 
 class OrquestradorEstrela(AgenteBDI):
@@ -96,7 +107,7 @@ class OrquestradorEstrela(AgenteBDI):
         4. Passa despesas agregadas ao AgenteContextoOrcamentario (Req 9.4)
         5. Passa dados cruzados ao AgenteCorrelacao (Req 9.4)
         6. Passa dados cruzados ao AgenteAnomalias (Req 9.5)
-        7. Passa correlações, anomalias e contexto ao AgenteSintetizador (Req 9.6)
+        7. Passa correlações, anomalias e contexto ao TextSynthesizer (Req 9.6)
         8. Registra métricas por agente (Req 9.7)
         9. Trata falhas com resultados parciais (Req 9.8)
 
@@ -124,7 +135,7 @@ class OrquestradorEstrela(AgenteBDI):
         import time as _time
         _orch_start = _time.time()
 
-        # -- 1. Instanciar 8 agentes com IDs únicos (Req 9.1) --
+        # -- 1. Instanciar agentes com IDs únicos (Req 9.1) --
         vig_id = f"star-vigilancia-{uuid.uuid4().hex[:8]}"
         hosp_id = f"star-hospitalar-{uuid.uuid4().hex[:8]}"
         prim_id = f"star-primaria-{uuid.uuid4().hex[:8]}"
@@ -134,14 +145,10 @@ class OrquestradorEstrela(AgenteBDI):
         anom_id = f"star-anomalias-{uuid.uuid4().hex[:8]}"
         sint_id = f"star-sintetizador-{uuid.uuid4().hex[:8]}"
 
-        agente_vigilancia = AgenteVigilanciaEpidemiologica(vig_id, self.neo4j_client)
-        agente_hospitalar = AgenteSaudeHospitalar(hosp_id, self.neo4j_client)
-        agente_primaria = AgenteAtencaoPrimaria(prim_id, self.neo4j_client)
-        agente_mortalidade = AgenteMortalidade(mort_id, self.neo4j_client)
         agente_contexto = AgenteContextoOrcamentario(ctx_id)
         agente_correlacao = AgenteCorrelacao(corr_id)
         agente_anomalias = AgenteAnomalias(anom_id)
-        agente_sintetizador = AgenteSintetizador(sint_id)
+        sintetizador = TextSynthesizer(sint_id)
 
         # -- 2. MessageCounter para esta análise (Req 11.1, 11.2) --
         counter = MessageCounter()
@@ -155,15 +162,36 @@ class OrquestradorEstrela(AgenteBDI):
 
         # ============================================================
         # FASE 1 — Pipeline de Domínio (Req 9.2)
-        # Execute 4 domain agents in SEQUENCE, collecting data from each
+        # Only activate domain agents relevant to user's health_params
         # ============================================================
 
-        domain_agents: list[tuple[str, str, Any]] = [
-            (vig_id, "vigilancia_epidemiologica", agente_vigilancia),
-            (hosp_id, "saude_hospitalar", agente_hospitalar),
-            (prim_id, "atencao_primaria", agente_primaria),
-            (mort_id, "mortalidade", agente_mortalidade),
+        health_params = params.get("health_params", [])
+        active_agent_types: set[str] = set()
+        for hp in health_params:
+            agent_type = INDICADOR_TO_AGENT.get(hp)
+            if agent_type:
+                active_agent_types.add(agent_type)
+
+        # Build list of domain agents to run (only those matching health_params)
+        all_domain_agents: list[tuple[str, str, Any]] = [
+            (vig_id, "vigilancia_epidemiologica", AgenteVigilanciaEpidemiologica(vig_id, self.neo4j_client)),
+            (hosp_id, "saude_hospitalar", AgenteSaudeHospitalar(hosp_id, self.neo4j_client)),
+            (prim_id, "atencao_primaria", AgenteAtencaoPrimaria(prim_id, self.neo4j_client)),
+            (mort_id, "mortalidade", AgenteMortalidade(mort_id, self.neo4j_client)),
         ]
+
+        domain_agents = [
+            (aid, atype, agent)
+            for aid, atype, agent in all_domain_agents
+            if atype in active_agent_types
+        ]
+
+        logger.info(
+            "OrquestradorEstrela: activating %d/%d domain agents for health_params=%s",
+            len(domain_agents),
+            len(all_domain_agents),
+            health_params,
+        )
 
         for agent_id_str, agent_type, agent in domain_agents:
             mc = MetricsCollector(agent_id_str, agent_type)
@@ -202,19 +230,13 @@ class OrquestradorEstrela(AgenteBDI):
 
         # Deduplicate despesas (mortalidade returns all subfunções,
         # which may overlap with other domain agents)
-        seen_despesas: set[tuple[int, int]] = set()
-        unique_despesas: list[dict] = []
-        for d in all_despesas:
-            key = (d.get("subfuncao", 0), d.get("ano", 0))
-            if key not in seen_despesas:
-                seen_despesas.add(key)
-                unique_despesas.append(d)
+        unique_despesas = deduplicate_despesas(all_despesas)
 
         dados_cruzados = cross_domain_data(unique_despesas, all_indicadores)
 
         # Detect data gaps for transparency
         data_coverage = detect_data_gaps(
-            unique_despesas, all_indicadores, date_from, date_to
+            unique_despesas, all_indicadores, date_from, date_to, health_params
         )
         if data_coverage["summary"]["has_gaps"]:
             logger.warning(
@@ -304,16 +326,36 @@ class OrquestradorEstrela(AgenteBDI):
         mc_sint = MetricsCollector(sint_id, "sintetizador")
         mc_sint.start()
         try:
-            texto_analise = agente_sintetizador.synthesize(
-                correlacoes=correlacoes,
-                anomalias=anomalias,
-                contexto_orcamentario=contexto_orcamentario,
-                analysis_id=analysis_id,
-                ws_queue=ws_queue,
-                architecture="star",
-                data_coverage=data_coverage,
-                use_llm=params.get("use_llm", True),
-            )
+            adapter = StreamingAdapter(ws_queue, analysis_id, "star")
+            use_llm = params.get("use_llm", True)
+
+            if use_llm:
+                try:
+                    token_gen = sintetizador.generate_stream(
+                        correlacoes=correlacoes,
+                        anomalias=anomalias,
+                        contexto_orcamentario=contexto_orcamentario,
+                        data_coverage=data_coverage,
+                    )
+                    texto_analise = adapter.stream_tokens(token_gen)
+                    if not texto_analise:
+                        # LLM returned empty — use fallback
+                        texto_analise = sintetizador.generate_fallback(
+                            correlacoes, anomalias, contexto_orcamentario, data_coverage
+                        )
+                        adapter.stream_text(texto_analise)
+                except Exception:
+                    logger.warning("OrquestradorEstrela: LLM streaming failed, using fallback")
+                    texto_analise = sintetizador.generate_fallback(
+                        correlacoes, anomalias, contexto_orcamentario, data_coverage
+                    )
+                    adapter.stream_text(texto_analise)
+            else:
+                texto_analise = sintetizador.generate_fallback(
+                    correlacoes, anomalias, contexto_orcamentario, data_coverage
+                )
+                adapter.stream_text(texto_analise)
+
             mc_sint.stop()
             counter.increment(2)
             logger.info(
@@ -329,7 +371,7 @@ class OrquestradorEstrela(AgenteBDI):
                 "analysisId": analysis_id,
                 "architecture": "star",
                 "type": "error",
-                "payload": f"Agente sintetizador falhou: {exc}",
+                "payload": f"Sintetizador falhou: {exc}",
             })
         collectors.append((sint_id, "sintetizador", mc_sint))
 

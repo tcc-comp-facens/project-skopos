@@ -1,7 +1,7 @@
 """
 Shared in-memory state for active analyses.
 
-Stores queues, threads, results and agent metrics per analysis ID.
+Stores queues, threads and results per analysis ID.
 Accessed by routes, WebSocket handler and thread runners.
 """
 
@@ -21,9 +21,6 @@ active_threads: dict[str, list[threading.Thread]] = {}
 
 # analysisId → {"star": result, "hierarchical": result, "quality_metrics": ..., "comparative_report": ...}
 active_results: dict[str, dict[str, Any]] = {}
-
-# analysisId → {"star": [agent_metrics], "hierarchical": [agent_metrics]}
-active_agent_metrics: dict[str, dict[str, list[dict]]] = {}
 
 
 def get_neo4j_client() -> Neo4jClient:

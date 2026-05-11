@@ -3,9 +3,7 @@ uvicorn[standard]
 neo4j
 pysus
 psutil
-hypothesis
 pytest
-pytest-asyncio
 python-dotenv
 httpx
 groq

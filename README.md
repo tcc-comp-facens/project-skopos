@@ -11,7 +11,7 @@ Sistema de comparação de duas arquiteturas multiagente BDI (Estrela e Hierárq
 ```bash
 # 1. Configurar variáveis de ambiente
 cp backend/.env.example backend/.env
-# Edite backend/.env com suas credenciais Neo4j e (opcionalmente) Groq/Gemini
+# Edite backend/.env com suas credenciais Neo4j e (opcionalmente) Groq
 
 # 2. Subir todos os serviços
 docker compose up --build
@@ -31,16 +31,16 @@ docker compose up --build
 project-skopos/
 ├── backend/                  # Python 3.11 + FastAPI
 │   ├── api/                  # Camada de API (routes, WebSocket, models, state, runners)
-│   ├── agents/               # Sistema multiagente BDI (8 agentes por topologia)
+│   ├── agents/               # Sistema multiagente BDI (ativação condicional de domínio)
 │   │   ├── domain/           # 4 agentes de domínio
-│   │   ├── analytical/       # 3 agentes analíticos
+│   │   ├── analytical/       # 2 agentes BDI + TextSynthesizer (serviço)
 │   │   ├── context/          # 1 agente de contexto orçamentário
 │   │   ├── star/             # Topologia estrela (OrquestradorEstrela)
 │   │   └── hierarchical/     # Topologia hierárquica (CoordenadorGeral + 3 supervisores)
 │   ├── core/                 # Utilitários (métricas, LLM, qualidade, mensagens)
 │   ├── db/                   # Cliente Neo4j
 │   ├── etl/                  # Pipeline ETL (FNS, DataSUS, seed)
-│   ├── tests/                # 322 testes (pytest + Hypothesis)
+│   ├── tests/                # 61 testes (pytest)
 │   └── data/                 # Planilhas FNS + cache DataSUS
 ├── frontend/                 # React 18 + TypeScript + Vite
 │   └── src/
@@ -75,8 +75,7 @@ uvicorn main:app --reload --port 8000
 | `NEO4J_URI` | URI Bolt do Neo4j | `bolt://neo4j:7687` (Docker) / `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha Neo4j | `your_password_here` |
-| `GROQ_API_KEY` | Chave Groq (primário) | `gsk_...` |
-| `GEMINI_API_KEY` | Chave Gemini (fallback) | `AI...` |
+| `GROQ_API_KEY` | Chave Groq | `gsk_...` |
 | `CORS_ORIGINS` | Origens CORS | `*` |
 
 ### Endpoints
@@ -110,10 +109,11 @@ backend/
 │   ├── star/                     # Topologia estrela
 │   └── hierarchical/             # Topologia hierárquica
 ├── core/                         # Utilitários
-│   ├── llm_client.py             # Cliente LLM (Groq + Gemini)
+│   ├── llm_client.py             # Cliente LLM (Groq, cadeia de fallback entre modelos)
 │   ├── metrics.py                # MetricsCollector (psutil)
 │   ├── message_counter.py        # MessageCounter (thread-safe)
-│   └── quality_metrics.py        # Métricas de qualidade + relatório
+│   ├── quality_metrics.py        # Métricas de qualidade + relatório
+│   └── streaming_adapter.py      # StreamingAdapter (chunking para ws_queue)
 ├── db/
 │   └── neo4j_client.py           # Driver Neo4j
 ├── etl/                          # Pipeline ETL
@@ -122,7 +122,7 @@ backend/
 │   ├── seed_data.py              # Dados fallback 2019-2021
 │   └── detect_years.py           # Auto-detecção de anos
 ├── data/                         # Planilhas + cache
-└── tests/                        # 322 testes
+└── tests/                        # 61 testes
 ```
 
 ---
@@ -160,16 +160,13 @@ npm run dev                   # http://localhost:5173
 ## Testes
 
 ```bash
-# Backend — todos (322 testes)
+# Backend — todos (61 testes)
 cd backend && pytest
 
-# Backend — com cobertura
-cd backend && pytest --cov=. --cov-report=term-missing
+# Backend — verbose
+cd backend && pytest -v
 
-# Backend — apenas property-based (Hypothesis)
-cd backend && pytest -k "properties"
-
-# Frontend
+# Frontend (35 testes)
 cd frontend && npm test
 ```
 
@@ -200,7 +197,7 @@ Documentação detalhada em [`docs/`](docs/):
 | Arquivo | Conteúdo |
 |---------|----------|
 | [01-VISAO-GERAL.md](docs/01-VISAO-GERAL.md) | Introdução, stack, arquitetura, como executar, testes, estrutura |
-| [02-AGENTES.md](docs/02-AGENTES.md) | Modelo BDI, 8 agentes, topologias, regras de negócio |
+| [02-AGENTES.md](docs/02-AGENTES.md) | Modelo BDI, agentes, topologias, regras de negócio |
 | [03-DADOS-ETL.md](docs/03-DADOS-ETL.md) | Fontes institucionais (FNS, DataSUS), ETL, Neo4j, limitações |
 | [04-BACKEND-API.md](docs/04-BACKEND-API.md) | API REST, WebSocket, LLM, métricas de qualidade, erros |
 | [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, hook WS, tipos, acessibilidade |

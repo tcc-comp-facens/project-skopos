@@ -3,7 +3,7 @@
 Organização:
 - agents.base: Classe base AgenteBDI
 - agents.domain: Agentes de domínio (Req 14.1)
-- agents.analytical: Agentes analíticos (Req 14.2)
+- agents.analytical: Agentes analíticos (Req 14.2) + TextSynthesizer
 - agents.context: Agente de contexto (Req 14.3)
 - agents.star: Topologia estrela (Req 14.4)
 - agents.hierarchical: Topologia hierárquica (Req 14.4)
@@ -24,7 +24,7 @@ from agents.domain import (
 from agents.analytical import (
     AgenteCorrelacao,
     AgenteAnomalias,
-    AgenteSintetizador,
+    TextSynthesizer,
 )
 
 # Context agent (Req 14.3)
@@ -48,7 +48,7 @@ __all__ = [
     # Analytical
     "AgenteCorrelacao",
     "AgenteAnomalias",
-    "AgenteSintetizador",
+    "TextSynthesizer",
     # Context
     "AgenteContextoOrcamentario",
     # Star

@@ -38,6 +38,29 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 }
 
 
+def deduplicate_despesas(despesas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove despesas duplicadas por (subfuncao, ano).
+
+    O AgenteMortalidade retorna despesas de todas as subfunções, que podem
+    sobrepor com as retornadas pelos outros agentes de domínio. Esta função
+    mantém apenas a primeira ocorrência de cada par (subfuncao, ano).
+
+    Args:
+        despesas: Lista de dicts com keys: subfuncao (int), ano (int), ...
+
+    Returns:
+        Lista deduplicada preservando a ordem de inserção.
+    """
+    seen: set[tuple[int, int]] = set()
+    unique: list[dict[str, Any]] = []
+    for d in despesas:
+        key = (d.get("subfuncao", 0), d.get("ano", 0))
+        if key not in seen:
+            seen.add(key)
+            unique.append(d)
+    return unique
+
+
 def cross_domain_data(
     despesas: list[dict[str, Any]],
     indicadores: list[dict[str, Any]],
@@ -135,18 +158,22 @@ def detect_data_gaps(
     indicadores: list[dict[str, Any]],
     date_from: int,
     date_to: int,
+    health_params: list[str] | None = None,
 ) -> dict[str, Any]:
     """Detecta lacunas nos dados disponíveis para o período solicitado.
 
     Verifica, para cada ano no intervalo [date_from, date_to], quais
     subfunções de despesa e quais tipos de indicador estão presentes
-    ou ausentes. Retorna um relatório estruturado de cobertura.
+    ou ausentes. Quando health_params é fornecido, verifica apenas
+    as subfunções e indicadores relevantes à seleção do usuário.
 
     Args:
         despesas: Lista de despesas retornadas pelos agentes de domínio.
         indicadores: Lista de indicadores retornados pelos agentes de domínio.
         date_from: Ano de início do período solicitado.
         date_to: Ano de fim do período solicitado.
+        health_params: Lista de tipos de indicador selecionados pelo usuário.
+            Se None, verifica todos (comportamento legado).
 
     Returns:
         Dict com:
@@ -157,11 +184,29 @@ def detect_data_gaps(
         - summary: resumo com contagens
     """
     expected_years = list(range(date_from, date_to + 1))
-    all_subfuncoes = [301, 302, 303, 305]
-    all_tipos = set()
-    for tipos in SUBFUNCAO_INDICADOR_MAP.values():
-        all_tipos.update(tipos)
-    all_tipos.add("mortalidade")
+
+    # Determinar quais subfunções e indicadores são relevantes
+    if health_params:
+        # Apenas os tipos selecionados pelo usuário
+        relevant_tipos: set[str] = set(health_params)
+        # Subfunções correspondentes aos indicadores selecionados
+        relevant_subfuncoes: set[int] = set()
+        for tipo in health_params:
+            for sf, tipos in SUBFUNCAO_INDICADOR_MAP.items():
+                if tipo in tipos:
+                    relevant_subfuncoes.add(sf)
+            # Mortalidade é transversal — se selecionada, inclui todas as subfunções
+            if tipo == "mortalidade":
+                relevant_subfuncoes.update(MORTALIDADE_SUBFUNCOES)
+        all_subfuncoes = sorted(relevant_subfuncoes)
+        all_tipos = sorted(relevant_tipos)
+    else:
+        all_subfuncoes = [301, 302, 303, 305]
+        all_tipos_set: set[str] = set()
+        for tipos in SUBFUNCAO_INDICADOR_MAP.values():
+            all_tipos_set.update(tipos)
+        all_tipos_set.add("mortalidade")
+        all_tipos = sorted(all_tipos_set)
 
     # Mapear dados disponíveis
     desp_available: dict[int, set[int]] = {}  # subfuncao → {anos}
@@ -208,7 +253,7 @@ def detect_data_gaps(
 
     # Indicadores
     indicadores_coverage: dict[str, dict[str, Any]] = {}
-    for tipo in sorted(all_tipos):
+    for tipo in all_tipos:
         available_years = ind_available.get(tipo, set())
         missing_years = [y for y in expected_years if y not in available_years]
         present_years = [y for y in expected_years if y in available_years]
@@ -231,10 +276,15 @@ def detect_data_gaps(
             })
 
     # Cruzamentos impossíveis (subfunção tem dados mas indicador não, ou vice-versa)
+    # Verifica apenas pares relevantes aos health_params selecionados
     for sf, tipos in SUBFUNCAO_INDICADOR_MAP.items():
+        if sf not in all_subfuncoes:
+            continue
         sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
         sf_years = desp_available.get(sf, set())
         for tipo in tipos:
+            if tipo not in all_tipos:
+                continue
             tipo_years = ind_available.get(tipo, set())
             # Anos onde só um lado tem dados
             only_despesa = sorted(sf_years - tipo_years)
