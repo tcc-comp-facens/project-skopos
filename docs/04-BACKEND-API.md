@@ -61,7 +61,7 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS e registra o
 | `useLlmJudge` | `bool` | `false` | Se `true`, habilita avaliação Q2+ (LLM-as-Judge) durante o cálculo de métricas de qualidade. Consome 1 chamada LLM extra por topologia |
 
 **Validações (retorna 400):**
-- `dateFrom` deve ser ≤ `dateTo`
+- `dateFrom` deve ser < `dateTo` (intervalo mínimo de 2 anos)
 - Pelo menos um `healthParam` deve ser `true`
 
 **Conversão de healthParams:**
@@ -664,18 +664,27 @@ Coeficiente Spearman calculado por par subfunção-indicador. Spearman é basead
 
 **Arquivo:** `backend/agents/analytical/anomalias.py`
 
-**Método:** Comparação com mediana por par subfunção-indicador.
+**Método:** Comparação com mediana por par subfunção-indicador, considerando a polaridade do indicador.
+
+**Polaridade dos indicadores:**
+- Indicadores NEGATIVOS (mais = pior): dengue, covid, internacoes, mortalidade
+- Indicadores POSITIVOS (mais = melhor): vacinacao
+
+Constantes: `INDICADORES_NEGATIVOS`, `INDICADORES_POSITIVOS`
 
 Para cada par (subfunção, tipo_indicador) com ≥ 2 pontos:
 1. Calcula a mediana das despesas e a mediana dos indicadores
-2. Para cada ano, classifica:
+2. Para cada ano, classifica conforme a polaridade:
 
 | Condição | Tipo de anomalia | Interpretação |
 |----------|-----------------|---------------|
-| despesa > mediana E indicador < mediana | `alto_gasto_baixo_resultado` | Possível ineficiência |
-| despesa < mediana E indicador > mediana | `baixo_gasto_alto_resultado` | Possível eficiência |
+| despesa > mediana E resultado ruim* | `alto_gasto_baixo_resultado` | Possível ineficiência |
+| despesa < mediana E resultado bom* | `baixo_gasto_alto_resultado` | Possível eficiência |
 
-**Significado para o TCC:** Identifica anos onde o gasto e o resultado divergem do padrão. Um ano com gasto acima da mediana mas indicador abaixo sugere ineficiência na aplicação dos recursos. Essas anomalias são o principal achado analítico do sistema e alimentam tanto o texto do sintetizador quanto as métricas de fidelidade (Q2) e completude (Q3).
+\* "Resultado ruim" = indicador negativo acima da mediana OU indicador positivo abaixo da mediana.
+\* "Resultado bom" = indicador negativo abaixo da mediana OU indicador positivo acima da mediana.
+
+**Significado para o TCC:** Identifica anos onde o gasto e o resultado divergem do padrão. Um ano com gasto acima da mediana mas indicador abaixo sugere ineficiência na aplicação dos recursos. A consideração da polaridade garante interpretação correta — para vacinação (positivo), cobertura baixa é resultado ruim; para dengue (negativo), casos altos é resultado ruim. Essas anomalias são o principal achado analítico do sistema e alimentam tanto o texto do sintetizador quanto as métricas de fidelidade (Q2) e completude (Q3).
 
 ---
 

@@ -4,9 +4,17 @@ Agente Analítico — Detecção de Anomalias.
 Detecta ineficiências nos gastos públicos em saúde comparando despesas
 e indicadores com suas respectivas medianas por par subfunção-indicador.
 
+A polaridade do indicador é considerada:
+- Indicadores NEGATIVOS (mais = pior): dengue, covid, internacoes, mortalidade
+- Indicadores POSITIVOS (mais = melhor): vacinacao
+
 Anomalias detectadas:
-- "alto_gasto_baixo_resultado": despesa acima da mediana com indicador abaixo
-- "baixo_gasto_alto_resultado": despesa abaixo da mediana com indicador acima
+- "alto_gasto_baixo_resultado": gasto alto sem resultado proporcional (ineficiência)
+  → Indicador negativo: gastou muito E casos continuam altos (acima da mediana)
+  → Indicador positivo: gastou muito E cobertura continua baixa (abaixo da mediana)
+- "baixo_gasto_alto_resultado": resultado bom apesar de gasto baixo (eficiência)
+  → Indicador negativo: gastou pouco E casos estão baixos (abaixo da mediana)
+  → Indicador positivo: gastou pouco E cobertura está alta (acima da mediana)
 
 Opera sobre dados em memória (CrossedDataPoint dicts) — sem dependência
 de Neo4j ou outros serviços externos.
@@ -30,6 +38,12 @@ SUBFUNCAO_NOMES: dict[int, str] = {
     305: "Vigilância Epidemiológica",
 }
 
+# Indicadores onde valor alto = resultado RUIM (mais casos/óbitos/internações = pior)
+INDICADORES_NEGATIVOS: set[str] = {"dengue", "covid", "internacoes", "mortalidade"}
+
+# Indicadores onde valor alto = resultado BOM (mais cobertura vacinal = melhor)
+INDICADORES_POSITIVOS: set[str] = {"vacinacao"}
+
 
 def _median(values: list[float]) -> float:
     """Calculate the median of a list of floats.
@@ -51,9 +65,19 @@ class AgenteAnomalias(AgenteBDI):
     e identifica anomalias onde o gasto e o resultado divergem da mediana
     do par subfunção-indicador.
 
+    A polaridade do indicador é considerada:
+    - Indicadores negativos (dengue, covid, internacoes, mortalidade):
+      valor alto = resultado RUIM (muitos casos)
+    - Indicadores positivos (vacinacao):
+      valor alto = resultado BOM (boa cobertura)
+
     Tipos de anomalia:
-    - "alto_gasto_baixo_resultado": despesa > mediana E indicador < mediana (Req 6.1)
-    - "baixo_gasto_alto_resultado": despesa < mediana E indicador > mediana (Req 6.2)
+    - "alto_gasto_baixo_resultado": ineficiência — gastou muito sem resultado (Req 6.1)
+      → Negativo: despesa > mediana E indicador > mediana (gastou muito, casos altos)
+      → Positivo: despesa > mediana E indicador < mediana (gastou muito, cobertura baixa)
+    - "baixo_gasto_alto_resultado": eficiência — resultado bom com pouco gasto (Req 6.2)
+      → Negativo: despesa < mediana E indicador < mediana (gastou pouco, casos baixos)
+      → Positivo: despesa < mediana E indicador > mediana (gastou pouco, cobertura alta)
 
     Pares com menos de 2 pontos de dados são ignorados (Req 6.5).
     """
@@ -116,7 +140,14 @@ class AgenteAnomalias(AgenteBDI):
     # -- Internal computation -------------------------------------------
 
     def _detect_anomalies(self) -> None:
-        """Detect anomalies per subfuncao-indicador pair (Reqs 6.1-6.5)."""
+        """Detect anomalies per subfuncao-indicador pair (Reqs 6.1-6.5).
+
+        A polaridade do indicador determina a interpretação:
+        - Indicadores negativos (dengue, covid, internacoes, mortalidade):
+          indicador ALTO = resultado RUIM
+        - Indicadores positivos (vacinacao):
+          indicador ALTO = resultado BOM
+        """
         crossed = self.beliefs.get("dados_cruzados", [])
         anomalias: list[dict[str, Any]] = []
 
@@ -142,14 +173,37 @@ class AgenteAnomalias(AgenteBDI):
                 SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao)),
             )
 
+            # Determinar polaridade do indicador
+            is_negative = tipo in INDICADORES_NEGATIVOS
+
             for it in items:
                 high_spend = it["valor_despesa"] > med_desp
-                low_outcome = it["valor_indicador"] < med_ind
                 low_spend = it["valor_despesa"] < med_desp
-                high_outcome = it["valor_indicador"] > med_ind
+                high_indicator = it["valor_indicador"] > med_ind
+                low_indicator = it["valor_indicador"] < med_ind
 
-                if high_spend and low_outcome:
-                    # Req 6.1: alto gasto com baixo resultado
+                # Determinar "resultado ruim" e "resultado bom" conforme polaridade
+                if is_negative:
+                    # Indicador negativo: valor alto = resultado ruim
+                    bad_outcome = high_indicator  # muitos casos = ruim
+                    good_outcome = low_indicator  # poucos casos = bom
+                else:
+                    # Indicador positivo: valor baixo = resultado ruim
+                    bad_outcome = low_indicator   # baixa cobertura = ruim
+                    good_outcome = high_indicator  # alta cobertura = bom
+
+                if high_spend and bad_outcome:
+                    # Req 6.1: alto gasto sem resultado — ineficiência
+                    if is_negative:
+                        desc_resultado = (
+                            f"indicador acima da mediana "
+                            f"({it['valor_indicador']:.1f} casos)"
+                        )
+                    else:
+                        desc_resultado = (
+                            f"indicador abaixo da mediana "
+                            f"({it['valor_indicador']:.1f})"
+                        )
                     anomalias.append({
                         "subfuncao": subfuncao,
                         "tipo_indicador": tipo,
@@ -158,12 +212,22 @@ class AgenteAnomalias(AgenteBDI):
                         "descricao": (
                             f"Subfunção {subfuncao} ({subfuncao_nome}) "
                             f"em {it['ano']}: gasto acima da mediana "
-                            f"(R$ {it['valor_despesa']:,.2f}) com indicador "
-                            f"abaixo da mediana ({it['valor_indicador']:.1f})"
+                            f"(R$ {it['valor_despesa']:,.2f}) com "
+                            f"{desc_resultado} — possível ineficiência"
                         ),
                     })
-                elif low_spend and high_outcome:
-                    # Req 6.2: baixo gasto com alto resultado
+                elif low_spend and good_outcome:
+                    # Req 6.2: baixo gasto com bom resultado — eficiência
+                    if is_negative:
+                        desc_resultado = (
+                            f"indicador abaixo da mediana "
+                            f"({it['valor_indicador']:.1f} casos)"
+                        )
+                    else:
+                        desc_resultado = (
+                            f"indicador acima da mediana "
+                            f"({it['valor_indicador']:.1f})"
+                        )
                     anomalias.append({
                         "subfuncao": subfuncao,
                         "tipo_indicador": tipo,
@@ -172,8 +236,8 @@ class AgenteAnomalias(AgenteBDI):
                         "descricao": (
                             f"Subfunção {subfuncao} ({subfuncao_nome}) "
                             f"em {it['ano']}: gasto abaixo da mediana "
-                            f"(R$ {it['valor_despesa']:,.2f}) com indicador "
-                            f"acima da mediana ({it['valor_indicador']:.1f})"
+                            f"(R$ {it['valor_despesa']:,.2f}) com "
+                            f"{desc_resultado} — possível eficiência"
                         ),
                     })
 

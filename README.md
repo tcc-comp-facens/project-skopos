@@ -165,7 +165,7 @@ cd backend && pytest
 # Backend — verbose
 cd backend && pytest -v
 
-# Frontend (35 testes)
+# Frontend (36 testes)
 cd frontend && npm test
 ```
 

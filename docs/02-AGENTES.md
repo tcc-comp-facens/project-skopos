@@ -507,7 +507,27 @@ Saída:
 
 **Arquivo:** `agents/analytical/anomalias.py`
 
-Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada:
+Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada.
+
+**Polaridade dos indicadores:**
+
+A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do indicador:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  INDICADORES NEGATIVOS (mais = pior):                       │
+│  dengue, covid, internacoes, mortalidade                    │
+│  → Valor ALTO = muitos casos/óbitos = resultado RUIM        │
+│  → Valor BAIXO = poucos casos/óbitos = resultado BOM        │
+│                                                             │
+│  INDICADORES POSITIVOS (mais = melhor):                     │
+│  vacinacao                                                  │
+│  → Valor ALTO = boa cobertura = resultado BOM               │
+│  → Valor BAIXO = baixa cobertura = resultado RUIM           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Exemplo (indicador positivo — vacinação, subfunção 301):**
 
 ```
 Entrada: dados cruzados (subfunção 301 × vacinação)
@@ -532,14 +552,14 @@ Entrada: dados cruzados (subfunção 301 × vacinação)
 │        → Sem anomalia (na mediana)                   │
 │                                                      │
 │  2020: despesa=199M (> mediana), indicador=412100    │
-│        indicador < mediana                           │
+│        indicador < mediana (cobertura baixa)         │
 │        → ⚠ ALTO GASTO + BAIXO RESULTADO             │
-│          (possível ineficiência)                     │
+│          (gastou muito E cobertura continua baixa)   │
 │                                                      │
 │  2021: despesa=23M (< mediana), indicador=892450     │
-│        indicador > mediana                           │
+│        indicador > mediana (cobertura alta)          │
 │        → ✓ BAIXO GASTO + ALTO RESULTADO             │
-│          (possível eficiência)                       │
+│          (gastou pouco E cobertura está alta)        │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -548,20 +568,26 @@ Entrada: dados cruzados (subfunção 301 × vacinação)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                                                             │
-│  alto_gasto_baixo_resultado                                 │
+│  alto_gasto_baixo_resultado (ineficiência)                  │
 │  ─────────────────────────                                  │
-│  Despesa ACIMA da mediana + Indicador ABAIXO da mediana     │
+│  Despesa ACIMA da mediana + resultado RUIM                  │
+│  • Indicador negativo: gastou muito E casos altos           │
+│  • Indicador positivo: gastou muito E cobertura baixa       │
 │  → "Gastou muito mas o resultado foi ruim"                  │
-│  → Possível ineficiência na alocação de recursos            │
 │                                                             │
-│  baixo_gasto_alto_resultado                                 │
+│  baixo_gasto_alto_resultado (eficiência)                    │
 │  ──────────────────────────                                 │
-│  Despesa ABAIXO da mediana + Indicador ACIMA da mediana     │
+│  Despesa ABAIXO da mediana + resultado BOM                  │
+│  • Indicador negativo: gastou pouco E casos baixos          │
+│  • Indicador positivo: gastou pouco E cobertura alta        │
 │  → "Gastou pouco mas o resultado foi bom"                   │
-│  → Possível eficiência ou fatores externos positivos        │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Constantes de polaridade:**
+- `INDICADORES_NEGATIVOS: set[str]` = {"dengue", "covid", "internacoes", "mortalidade"}
+- `INDICADORES_POSITIVOS: set[str]` = {"vacinacao"}
 
 **Regra:** Pares com < 2 pontos de dados são ignorados (não faz sentido calcular mediana com 1 valor).
 

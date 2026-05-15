@@ -31,7 +31,7 @@ export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
   });
 
   const hasHealthParam = Object.values(params).some(Boolean);
-  const dateError = dateFrom > dateTo;
+  const dateError = dateFrom >= dateTo;
   const isSubmitDisabled = !hasHealthParam || dateError;
 
   const handleParamChange = (key: HealthParamKey, checked: boolean) => {
@@ -109,7 +109,7 @@ export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
           data-testid="date-error"
           role="alert"
         >
-          O ano de início não pode ser maior que o ano de fim.
+          O período deve ter no mínimo 2 anos (ex: 2019 a 2020).
         </div>
       )}
     </form>

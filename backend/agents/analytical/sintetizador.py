@@ -325,12 +325,13 @@ class TextSynthesizer:
             if alto_gasto:
                 sections.append(
                     f"\nForam identificados {len(alto_gasto)} caso(s) de alto gasto com "
-                    "baixo resultado, o que pode indicar ineficiência na alocação de recursos.\n"
+                    "resultado insatisfatório, o que pode indicar ineficiência na "
+                    "alocação de recursos públicos em saúde.\n"
                 )
             if baixo_gasto:
                 sections.append(
                     f"\nForam identificados {len(baixo_gasto)} caso(s) de baixo gasto com "
-                    "alto resultado, sugerindo eficiência ou fatores externos positivos.\n"
+                    "resultado positivo, sugerindo eficiência ou fatores externos favoráveis.\n"
                 )
 
         # --- Contexto Orçamentário (Req 7.4) ---

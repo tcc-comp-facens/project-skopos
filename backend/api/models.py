@@ -32,8 +32,8 @@ class AnalysisResponse(BaseModel):
 def validate_analysis_params(req: AnalysisRequest) -> list[str]:
     """Return a list of validation error messages (empty == valid)."""
     errors: list[str] = []
-    if req.dateFrom > req.dateTo:
-        errors.append("dateFrom must be <= dateTo")
+    if req.dateFrom >= req.dateTo:
+        errors.append("dateFrom must be < dateTo (minimum 2-year range required)")
     hp = req.healthParams
     if not (hp.dengue or hp.covid or hp.vaccination or hp.internacoes or hp.mortalidade):
         errors.append("At least one healthParam must be true")

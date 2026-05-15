@@ -462,9 +462,9 @@ def compute_completeness(
         tipo_anomalia = a.get("tipo_anomalia", "")
         # Verificar menção do tipo de anomalia no texto
         if tipo_anomalia == "alto_gasto_baixo_resultado":
-            keywords = ["alto gasto", "gasto acima", "ineficiência", "ineficiente"]
+            keywords = ["alto gasto", "gasto acima", "ineficiência", "ineficiente", "resultado insatisfatório"]
         else:
-            keywords = ["baixo gasto", "gasto abaixo", "eficiência", "eficiente"]
+            keywords = ["baixo gasto", "gasto abaixo", "eficiência", "eficiente", "resultado positivo"]
         if any(kw in texto_lower for kw in keywords):
             anom_found += 1
 

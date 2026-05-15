@@ -39,11 +39,30 @@ class TestDetectMinimumPoints:
 
 
 class TestDetectAltoGastoBaixoResultado:
-    def test_high_spend_low_outcome(self, agente):
-        """Despesa above median + indicador below median → alto_gasto_baixo_resultado."""
+    def test_high_spend_bad_outcome_negative_indicator(self, agente):
+        """Indicador negativo (internacoes): despesa > mediana E indicador > mediana → ineficiência.
+
+        Gastou muito mas os casos continuam altos = resultado ruim.
+        """
         # Median despesa = 200, median indicador = 30
-        # Point (2021, 300, 10): despesa > 200, indicador < 30 → anomaly
+        # Point (2021, 300, 50): despesa > 200, indicador > 30 → ineficiência
         data = _make_crossed(302, "internacoes", [
+            (2019, 100.0, 10.0),
+            (2020, 200.0, 30.0),
+            (2021, 300.0, 50.0),
+        ])
+        result = agente.detect(data)
+        anomaly_types = [a["tipo_anomalia"] for a in result]
+        assert "alto_gasto_baixo_resultado" in anomaly_types
+
+    def test_high_spend_bad_outcome_positive_indicator(self, agente):
+        """Indicador positivo (vacinacao): despesa > mediana E indicador < mediana → ineficiência.
+
+        Gastou muito mas a cobertura vacinal continua baixa = resultado ruim.
+        """
+        # Median despesa = 200, median indicador = 30
+        # Point (2021, 300, 10): despesa > 200, indicador < 30 → ineficiência
+        data = _make_crossed(301, "vacinacao", [
             (2019, 100.0, 50.0),
             (2020, 200.0, 30.0),
             (2021, 300.0, 10.0),
@@ -54,11 +73,30 @@ class TestDetectAltoGastoBaixoResultado:
 
 
 class TestDetectBaixoGastoAltoResultado:
-    def test_low_spend_high_outcome(self, agente):
-        """Despesa below median + indicador above median → baixo_gasto_alto_resultado."""
+    def test_low_spend_good_outcome_negative_indicator(self, agente):
+        """Indicador negativo (internacoes): despesa < mediana E indicador < mediana → eficiência.
+
+        Gastou pouco e os casos estão baixos = resultado bom.
+        """
         # Median despesa = 200, median indicador = 30
-        # Point (2019, 100, 50): despesa < 200, indicador > 30 → anomaly
+        # Point (2019, 100, 10): despesa < 200, indicador < 30 → eficiência
         data = _make_crossed(302, "internacoes", [
+            (2019, 100.0, 10.0),
+            (2020, 200.0, 30.0),
+            (2021, 300.0, 50.0),
+        ])
+        result = agente.detect(data)
+        anomaly_types = [a["tipo_anomalia"] for a in result]
+        assert "baixo_gasto_alto_resultado" in anomaly_types
+
+    def test_low_spend_good_outcome_positive_indicator(self, agente):
+        """Indicador positivo (vacinacao): despesa < mediana E indicador > mediana → eficiência.
+
+        Gastou pouco mas a cobertura vacinal está alta = resultado bom.
+        """
+        # Median despesa = 200, median indicador = 30
+        # Point (2019, 100, 50): despesa < 200, indicador > 30 → eficiência
+        data = _make_crossed(301, "vacinacao", [
             (2019, 100.0, 50.0),
             (2020, 200.0, 30.0),
             (2021, 300.0, 10.0),
@@ -82,10 +120,11 @@ class TestDetectAtMedian:
 
 class TestDetectOutputFields:
     def test_output_contains_required_fields(self, agente):
+        # Dengue é indicador negativo: high_spend + high_indicator = ineficiência
         data = _make_crossed(305, "dengue", [
-            (2019, 100.0, 50.0),
+            (2019, 100.0, 10.0),
             (2020, 200.0, 30.0),
-            (2021, 300.0, 10.0),
+            (2021, 300.0, 50.0),
         ])
         result = agente.detect(data)
         assert len(result) > 0

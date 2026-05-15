@@ -34,7 +34,14 @@ describe('AnalysisControls', () => {
     expect(screen.getByTestId('date-error')).toBeInTheDocument();
   });
 
-  it('does not show date error when dateFrom <= dateTo', () => {
+  it('shows date error when dateFrom equals dateTo (single year)', () => {
+    render(<AnalysisControls onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByTestId('date-from'), { target: { value: '2020' } });
+    fireEvent.change(screen.getByTestId('date-to'), { target: { value: '2020' } });
+    expect(screen.getByTestId('date-error')).toBeInTheDocument();
+  });
+
+  it('does not show date error when dateFrom < dateTo', () => {
     render(<AnalysisControls onSubmit={vi.fn()} />);
     expect(screen.queryByTestId('date-error')).not.toBeInTheDocument();
   });
