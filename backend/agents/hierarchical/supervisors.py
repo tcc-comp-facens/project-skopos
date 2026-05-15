@@ -31,7 +31,6 @@ from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
-from core.message_counter import MessageCounter
 from core.metrics import MetricsCollector
 from core.streaming_adapter import StreamingAdapter
 
@@ -116,7 +115,6 @@ class SupervisorDominio(AgenteBDI):
         analysis_id: str,
         date_from: int | None,
         date_to: int | None,
-        counter: MessageCounter,
         health_params: list[str] | None = None,
     ) -> dict[str, Any]:
         """Executa o pipeline de domínio via agentes subordinados.
@@ -136,7 +134,6 @@ class SupervisorDominio(AgenteBDI):
             analysis_id: UUID da análise.
             date_from: Ano inicial do período.
             date_to: Ano final do período.
-            counter: MessageCounter compartilhado para contagem de mensagens.
             health_params: Lista de tipos de indicador selecionados pelo usuário.
 
         Returns:
@@ -195,8 +192,6 @@ class SupervisorDominio(AgenteBDI):
             try:
                 result = agent.query(analysis_id, date_from, date_to)
                 mc.stop()
-                # Req 11.1: 2 messages per call (ida + volta)
-                counter.increment(2)
                 all_despesas.extend(result.get("despesas", []))
                 all_indicadores.extend(result.get("indicadores", []))
                 logger.info(
@@ -304,7 +299,6 @@ class SupervisorAnalitico(AgenteBDI):
         self,
         analysis_id: str,
         ws_queue: Queue,
-        counter: MessageCounter,
         use_llm: bool = True,
     ) -> dict[str, Any]:
         """Executa o pipeline analítico via 3 agentes subordinados.
@@ -321,7 +315,6 @@ class SupervisorAnalitico(AgenteBDI):
         Args:
             analysis_id: UUID da análise em andamento.
             ws_queue: Fila para streaming de eventos WebSocket.
-            counter: MessageCounter compartilhado para contagem de mensagens.
 
         Returns:
             Dicionário com "correlacoes", "anomalias" e "texto_analise".
@@ -372,7 +365,6 @@ class SupervisorAnalitico(AgenteBDI):
         try:
             correlacoes = agente_correlacao.compute(dados_cruzados)
             mc_corr.stop()
-            counter.increment(2)
             logger.info(
                 "SupervisorAnalitico %s: computed %d correlações",
                 self.agent_id,
@@ -394,7 +386,6 @@ class SupervisorAnalitico(AgenteBDI):
         try:
             anomalias = agente_anomalias.detect(dados_cruzados)
             mc_anom.stop()
-            counter.increment(2)
             logger.info(
                 "SupervisorAnalitico %s: detected %d anomalias",
                 self.agent_id,
@@ -446,7 +437,6 @@ class SupervisorAnalitico(AgenteBDI):
                 adapter.stream_text(texto_analise)
 
             mc_sint.stop()
-            counter.increment(2)
             logger.info(
                 "SupervisorAnalitico %s: synthesis complete (%d chars)",
                 self.agent_id,
@@ -539,7 +529,6 @@ class SupervisorContexto(AgenteBDI):
 
     def run(
         self,
-        counter: MessageCounter,
     ) -> dict[str, Any]:
         """Executa a análise de contexto orçamentário via subordinado.
 
@@ -549,9 +538,6 @@ class SupervisorContexto(AgenteBDI):
         1. Instancia AgenteContextoOrcamentario com ID único.
         2. Executa analyze_trends() com as despesas recebidas.
         3. Coleta métricas via MetricsCollector.
-
-        Args:
-            counter: MessageCounter compartilhado para contagem de mensagens.
 
         Returns:
             Dicionário com "contexto_orcamentario".
@@ -571,7 +557,6 @@ class SupervisorContexto(AgenteBDI):
         try:
             contexto_orcamentario = agente_contexto.analyze_trends(despesas)
             mc_ctx.stop()
-            counter.increment(2)
             logger.info(
                 "SupervisorContexto %s: computed trends for %d subfunções",
                 self.agent_id,

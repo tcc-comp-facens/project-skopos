@@ -83,19 +83,6 @@ class TestGracefulDegradation:
         assert "anomalias" in result
 
 
-class TestMessageCount:
-    def test_message_count_equals_two_times_agent_calls(self, orchestrator, neo4j_client, ws_queue):
-        params = {
-            "date_from": 2019,
-            "date_to": 2021,
-            "health_params": ["dengue"],
-            "use_llm": False,
-        }
-        result = orchestrator.run("analysis-4", params, ws_queue)
-        # 1 domain agent + contexto + correlacao + anomalias + sintetizador = 5 calls × 2
-        assert result["message_count"] == 10
-
-
 class TestResultKeys:
     def test_result_contains_expected_keys(self, orchestrator, neo4j_client, ws_queue):
         params = {
@@ -108,7 +95,7 @@ class TestResultKeys:
         expected_keys = {
             "despesas", "indicadores", "dados_cruzados",
             "contexto_orcamentario", "correlacoes", "anomalias",
-            "texto_analise", "message_count", "data_coverage",
+            "texto_analise", "data_coverage",
         }
         assert expected_keys.issubset(result.keys())
 

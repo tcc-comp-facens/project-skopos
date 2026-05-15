@@ -40,7 +40,7 @@ project-skopos/
 │   ├── core/                 # Utilitários (métricas, LLM, qualidade, mensagens)
 │   ├── db/                   # Cliente Neo4j
 │   ├── etl/                  # Pipeline ETL (FNS, DataSUS, seed)
-│   ├── tests/                # 61 testes (pytest)
+│   ├── tests/                # 55 testes (pytest)
 │   └── data/                 # Planilhas FNS + cache DataSUS
 ├── frontend/                 # React 18 + TypeScript + Vite
 │   └── src/
@@ -64,7 +64,7 @@ cd backend
 pip install -r requirements.txt
 cp .env.example .env          # edite com credenciais Neo4j
 
-python -m etl.seed_data       # popular dados mínimos (requer Neo4j rodando)
+python -m etl.seed_data       # popular dados COVID (requer Neo4j rodando)
 uvicorn main:app --reload --port 8000
 ```
 
@@ -111,7 +111,6 @@ backend/
 ├── core/                         # Utilitários
 │   ├── llm_client.py             # Cliente LLM (Groq, cadeia de fallback entre modelos)
 │   ├── metrics.py                # MetricsCollector (psutil)
-│   ├── message_counter.py        # MessageCounter (thread-safe)
 │   ├── quality_metrics.py        # Métricas de qualidade + relatório
 │   └── streaming_adapter.py      # StreamingAdapter (chunking para ws_queue)
 ├── db/
@@ -119,7 +118,7 @@ backend/
 ├── etl/                          # Pipeline ETL
 │   ├── siops_loader.py           # Planilhas FNS (.xls/.xlsx)
 │   ├── datasus_loader.py         # DataSUS (PySUS + cache)
-│   ├── seed_data.py              # Dados fallback 2019-2021
+│   ├── seed_data.py              # Seed COVID (fallback)
 │   └── detect_years.py           # Auto-detecção de anos
 ├── data/                         # Planilhas + cache
 └── tests/                        # 61 testes

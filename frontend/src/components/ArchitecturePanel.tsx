@@ -63,11 +63,6 @@ export function ArchitecturePanel({
           <div className="total-time" data-testid="total-time">
             Tempo total: {benchmarks.totalExecutionTimeMs}ms
           </div>
-          {benchmarks.messageCount != null && (
-            <div className="message-count" data-testid="message-count">
-              Mensagens entre agentes: {benchmarks.messageCount}
-            </div>
-          )}
           <table className="metrics-table" data-testid="agent-metrics-table">
             <thead>
               <tr>

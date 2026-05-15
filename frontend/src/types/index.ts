@@ -22,7 +22,6 @@ export interface BenchmarkMetrics {
   architecture: 'star' | 'hierarchical';
   totalExecutionTimeMs: number;
   agentMetrics: AgentMetric[];
-  messageCount?: number;
 }
 
 export interface WSEvent {

@@ -26,7 +26,6 @@ from agents.hierarchical.supervisors import (
     SupervisorAnalitico,
     SupervisorContexto,
 )
-from core.message_counter import MessageCounter
 from core.metrics import MetricsCollector
 
 if TYPE_CHECKING:
@@ -88,9 +87,8 @@ class CoordenadorGeral(AgenteBDI):
         """Executa o pipeline completo da arquitetura hierárquica.
 
         Pipeline:
-        1. Cria MessageCounter para esta análise (Req 11.1).
-        2. Instancia 3 supervisores com IDs únicos (Req 10.1).
-        3. Delega para SupervisorDominio.run() (Req 10.1).
+        1. Instancia 3 supervisores com IDs únicos (Req 10.1).
+        2. Delega para SupervisorDominio.run() (Req 10.1).
         4. Comunicação lateral: SupervisorDominio → SupervisorAnalitico
            via receive_from_peer (despesas + indicadores) (Req 10.5).
         5. Comunicação lateral: SupervisorDominio → SupervisorContexto
@@ -126,9 +124,6 @@ class CoordenadorGeral(AgenteBDI):
         import time as _time
         _coord_start = _time.time()
 
-        # -- 1. MessageCounter para esta análise (Req 11.1, 11.2) --
-        counter = MessageCounter()
-
         result: dict[str, Any] = {}
         dominio_data: dict[str, Any] = {}
         contexto_data: dict[str, Any] = {}
@@ -151,12 +146,9 @@ class CoordenadorGeral(AgenteBDI):
                 analysis_id=analysis_id,
                 date_from=date_from,
                 date_to=date_to,
-                counter=counter,
                 health_params=params.get("health_params", []),
             )
             mc_dominio.stop()
-            # Req 11.1: coordinator → supervisor call (ida + volta)
-            counter.increment(2)
             logger.info(
                 "CoordenadorGeral %s: SupervisorDominio completed — %d despesas, %d indicadores",
                 self.agent_id,
@@ -189,25 +181,19 @@ class CoordenadorGeral(AgenteBDI):
             "date_to": date_to,
             "health_params": params.get("health_params", []),
         })
-        # Req 11.1: lateral communication (ida + volta)
-        counter.increment(2)
 
         # -- 5. Comunicação lateral: SupervisorDominio → SupervisorContexto (Req 10.5) --
         #    Repassa despesas para análise de tendências orçamentárias.
         sup_contexto.receive_from_peer({
             "despesas": dominio_data.get("despesas", []),
         })
-        # Req 11.1: lateral communication (ida + volta)
-        counter.increment(2)
 
         # -- 6. Delegar para SupervisorContexto (Req 10.4) --
         mc_contexto = MetricsCollector(sup_contexto_id, "supervisor_contexto")
         mc_contexto.start()
         try:
-            contexto_data = sup_contexto.run(counter=counter)
+            contexto_data = sup_contexto.run()
             mc_contexto.stop()
-            # Req 11.1: coordinator → supervisor call (ida + volta)
-            counter.increment(2)
             logger.info(
                 "CoordenadorGeral %s: SupervisorContexto completed",
                 self.agent_id,
@@ -234,8 +220,6 @@ class CoordenadorGeral(AgenteBDI):
         sup_analitico.receive_from_peer({
             "contexto_orcamentario": contexto_data.get("contexto_orcamentario", {}),
         })
-        # Req 11.1: lateral communication (ida + volta)
-        counter.increment(2)
 
         # -- 8. Delegar para SupervisorAnalitico (Req 10.3) --
         mc_analitico = MetricsCollector(sup_analitico_id, "supervisor_analitico")
@@ -244,12 +228,9 @@ class CoordenadorGeral(AgenteBDI):
             analitico_data = sup_analitico.run(
                 analysis_id=analysis_id,
                 ws_queue=ws_queue,
-                counter=counter,
                 use_llm=params.get("use_llm", True),
             )
             mc_analitico.stop()
-            # Req 11.1: coordinator → supervisor call (ida + volta)
-            counter.increment(2)
             result.update(analitico_data)
             logger.info(
                 "CoordenadorGeral %s: SupervisorAnalitico completed — %d correlacoes, %d anomalias",
@@ -304,7 +285,6 @@ class CoordenadorGeral(AgenteBDI):
         result["despesas"] = dominio_data.get("despesas", [])
         result["indicadores"] = dominio_data.get("indicadores", [])
         result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
-        result["message_count"] = counter.count
 
         # -- 11. Send benchmark metrics event (Req 11.2) --
         agent_metrics = []
@@ -356,15 +336,13 @@ class CoordenadorGeral(AgenteBDI):
                 "workersTimeMs": round(workers_time_ms, 2),
                 "overheadTimeMs": overhead_ms,
                 "agentMetrics": agent_metrics,
-                "messageCount": counter.count,
             },
         })
 
         self.beliefs["result"] = result
         logger.info(
-            "CoordenadorGeral %s: pipeline complete — %d messages exchanged",
+            "CoordenadorGeral %s: pipeline complete",
             self.agent_id,
-            counter.count,
         )
 
         return result

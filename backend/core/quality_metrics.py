@@ -143,30 +143,6 @@ def compute_latency_breakdown(agent_metrics: list[dict]) -> dict[str, Any]:
     return breakdown
 
 
-def compute_communication_efficiency(
-    message_count: int,
-    num_agents: int,
-) -> dict[str, Any]:
-    """E3 — Calcula a eficiência de comunicação.
-
-    Mensagens por agente: quanto menor, mais eficiente a topologia
-    em termos de overhead de comunicação.
-
-    Args:
-        message_count: Total de mensagens trocadas.
-        num_agents: Número de agentes na topologia.
-
-    Returns:
-        Dict com messages_per_agent e total_messages.
-    """
-    ratio = message_count / num_agents if num_agents > 0 else 0.0
-    return {
-        "total_messages": message_count,
-        "num_agents": num_agents,
-        "messages_per_agent": round(ratio, 2),
-    }
-
-
 # =========================================================================
 # B. Qualidade da Resposta
 # =========================================================================
@@ -686,8 +662,6 @@ def compute_all_quality_metrics(
     hier_result: dict[str, Any],
     star_agent_metrics: list[dict],
     hier_agent_metrics: list[dict],
-    star_message_count: int,
-    hier_message_count: int,
     use_llm_judge: bool = False,
     use_llm: bool = True,
 ) -> dict[str, Any]:
@@ -701,18 +675,12 @@ def compute_all_quality_metrics(
         hier_result: Resultado completo da topologia hierárquica.
         star_agent_metrics: Métricas por agente da estrela.
         hier_agent_metrics: Métricas por agente da hierárquica.
-        star_message_count: Total de mensagens da estrela.
-        hier_message_count: Total de mensagens da hierárquica.
         use_llm_judge: Se True, também executa avaliação via LLM.
         use_llm: Se False, LLM Judge é desabilitado independente de use_llm_judge.
 
     Returns:
         Dict com todas as métricas organizadas por eixo.
     """
-    # Número de agentes por topologia
-    STAR_AGENTS = 8
-    HIER_AGENTS = 11  # 8 agentes + 3 supervisores
-
     metrics: dict[str, Any] = {}
 
     # --- A. Eficiência ---
@@ -722,18 +690,12 @@ def compute_all_quality_metrics(
                 star_agent_metrics
             ),
             "latency_breakdown": compute_latency_breakdown(star_agent_metrics),
-            "communication_efficiency": compute_communication_efficiency(
-                star_message_count, STAR_AGENTS
-            ),
         },
         "hierarchical": {
             "coordination_overhead": compute_coordination_overhead(
                 hier_agent_metrics
             ),
             "latency_breakdown": compute_latency_breakdown(hier_agent_metrics),
-            "communication_efficiency": compute_communication_efficiency(
-                hier_message_count, HIER_AGENTS
-            ),
         },
     }
 
@@ -823,8 +785,6 @@ def generate_comparative_report(
     quality: dict[str, Any],
     star_agent_metrics: list[dict],
     hier_agent_metrics: list[dict],
-    star_message_count: int,
-    hier_message_count: int,
     data_coverage: dict[str, Any] | None = None,
     star_wall_clock_ms: float = 0,
     hier_wall_clock_ms: float = 0,
@@ -839,12 +799,9 @@ def generate_comparative_report(
         quality: Dict retornado por compute_all_quality_metrics().
         star_agent_metrics: Métricas por agente da estrela.
         hier_agent_metrics: Métricas por agente da hierárquica.
-        star_message_count: Total de mensagens da estrela.
-        hier_message_count: Total de mensagens da hierárquica.
         data_coverage: Dict com cobertura de dados e gaps detectados.
         star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
         hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
-        data_coverage: Dict com cobertura de dados e gaps detectados.
 
     Returns:
         Texto formatado do relatório comparativo.
@@ -890,19 +847,6 @@ def generate_comparative_report(
     )
     sections.append(
         f"    Hierárquica:  {hier_overhead.get('overhead_percent', 0):.1f}%"
-    )
-    sections.append("")
-
-    star_comm = star_eff.get("communication_efficiency", {})
-    hier_comm = hier_eff.get("communication_efficiency", {})
-    sections.append(f"  Comunicação:")
-    sections.append(
-        f"    Estrela:      {star_message_count} mensagens "
-        f"({star_comm.get('messages_per_agent', 0):.1f}/agente)"
-    )
-    sections.append(
-        f"    Hierárquica:  {hier_message_count} mensagens "
-        f"({hier_comm.get('messages_per_agent', 0):.1f}/agente)"
     )
     sections.append("")
 

@@ -435,7 +435,7 @@ Os agentes analíticos processam dados **em memória** — não acessam Neo4j. R
 │                                                                 │
 │  Dados dos agentes     ┌──────────────┐                        │
 │  de domínio ──────────►│ Correlação   │──► Spearman por par     │
-│  (dados cruzados)      │              │    (classificação)      │
+│  (dados cruzados)      │              │    subfunção-indicador  │
 │                        └──────────────┘                        │
 │                                                                 │
 │  Dados dos agentes     ┌──────────────┐                        │
@@ -450,11 +450,11 @@ Os agentes analíticos processam dados **em memória** — não acessam Neo4j. R
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### AgenteCorrelacao — Correlação Estatística Spearman
+### AgenteCorrelacao — Correlação Estatística (Spearman)
 
 **Arquivo:** `agents/analytical/correlacao.py`
 
-Calcula a força da relação entre gastos e indicadores de saúde usando Spearman (rank/monotônico). Spearman é baseado em ranks — robusto a outliers e captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
+Calcula correlação de Spearman entre gastos e indicadores de saúde. Spearman é baseado em ranks — robusto a outliers, captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
 
 ```
 Entrada: dados cruzados (despesa × indicador por subfunção e ano)
@@ -488,7 +488,7 @@ Saída:
 
 **Comportamento:**
 - Pares com < 2 pontos de dados → retorna 0.0 (não é possível calcular correlação)
-- Pares com ≥ 2 pontos → calcula Spearman normalmente
+- Pares com ≥ 2 pontos → calcula correlação Spearman normalmente
 
 **Classificação (baseada no |Spearman|):**
 
@@ -719,29 +719,30 @@ Se o usuário seleciona apenas `dengue` e `vacinacao`, somente `AgenteVigilancia
                                                      texto (streaming)
 ```
 
-### Pipeline (10 passos)
+### Pipeline
+
+O método `run()` executa o pipeline completo de forma linear (sem delegar ao ciclo BDI via `run_cycle()`). O orquestrador herda de `AgenteBDI` por uniformidade de interface e para permitir extensão futura (ex: deliberação sobre ordem de execução ou replanejamento dinâmico), mas opera como agente de coordenação com pipeline determinístico. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo BDI para decidir quais dados consultar e como processar resultados. Os métodos BDI (`perceive`, `deliberate`, `plan`) são mantidos por conformidade de interface, mas a lógica real está no `run()`:
 
 ```
-Passo 1:  Instancia agentes com IDs únicos; agentes de domínio são
+Passo 1:  Instancia 8 agentes com IDs únicos; agentes de domínio são
           instanciados condicionalmente conforme health_params do usuário
           (via mapeamento INDICADOR_TO_AGENT)
-Passo 2:  Cria MessageCounter
-Passo 3:  Executa apenas os agentes de domínio relevantes em SEQUÊNCIA
+Passo 2:  Executa apenas os agentes de domínio relevantes em SEQUÊNCIA
           Vigilância → Hospitalar → Primária → Mortalidade
-Passo 4:  Deduplica despesas (mortalidade retorna todas as subfunções)
-Passo 5:  Cruza dados: cross_domain_data(despesas, indicadores)
-Passo 6:  Detecta lacunas: detect_data_gaps()
-Passo 7:  AgenteContextoOrcamentario.analyze_trends(despesas)
-Passo 8:  AgenteCorrelacao.compute(dados_cruzados)
-Passo 9:  AgenteAnomalias.detect(dados_cruzados)
-Passo 10: TextSynthesizer.generate(correlações, anomalias, contexto)
+Passo 3:  Deduplica despesas (mortalidade retorna todas as subfunções)
+Passo 4:  Cruza dados: cross_domain_data(despesas, indicadores)
+Passo 5:  Detecta lacunas: detect_data_gaps()
+Passo 6:  AgenteContextoOrcamentario.analyze_trends(despesas)
+Passo 7:  AgenteCorrelacao.compute(dados_cruzados)
+Passo 8:  AgenteAnomalias.detect(dados_cruzados)
+Passo 9:  TextSynthesizer.generate(correlações, anomalias, contexto)
 ```
 
 **Características:**
+- Pipeline linear no método `run()` — não usa `run_cycle()` / `_execute_intention()`
 - Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
 - Ponto único de falha: se o orquestrador falhar, toda a análise falha
 - Ativação condicional: apenas agentes de domínio relevantes aos `health_params` são instanciados
-- Mensagens esperadas: variável (depende dos health_params); máximo ~16 (8 agentes × 2)
 - Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
 
 ---
@@ -799,6 +800,7 @@ Passo 8:  Persiste métricas para 8 agentes + 3 supervisores
 - Comunicação lateral via `receive_from_peer()` — supervisores trocam dados diretamente
 - Mensagens esperadas: ~24+ (agentes + supervisores + comunicação lateral)
 - Métricas coletadas para 11 entidades (8 agentes + 3 supervisores)
+- Supervisores implementam o ciclo BDI por uniformidade de interface, mas `_execute_intention()` é um no-op (marca `completed`). A deliberação é determinística e a execução real ocorre no método `run()` chamado pelo coordenador.
 
 ### Degradação Graciosa
 
@@ -919,26 +921,6 @@ Cobertura: despesas 60%, indicadores 100%
 ```
 
 O resultado é passado ao sintetizador para que o texto mencione explicitamente quais dados estão faltando.
-
-### Contagem de Mensagens
-
-**Arquivo:** `backend/core/message_counter.py`
-
-Cada chamada entre agentes = 2 mensagens (ida + volta):
-
-```
-Estrela:                          Hierárquica:
-Orquestrador → Agente (ida)       Coordenador → Supervisor (ida)
-Agente → Orquestrador (volta)     Supervisor → Coordenador (volta)
-= 2 mensagens por chamada         Supervisor → Agente (ida)
-                                  Agente → Supervisor (volta)
-8 agentes × 2 = ~16 mensagens    + comunicação lateral entre supervisores
-(máximo; depende dos              = ~24+ mensagens
-health_params selecionados)
-```
-
-A diferença na contagem de mensagens é uma das métricas comparativas entre as topologias.
-
 
 ---
 
@@ -1237,20 +1219,22 @@ class AgenteContextoOrcamentario(AgenteBDI):
 
 ### H. OrquestradorEstrela — Coordenação central
 
+O `OrquestradorEstrela` herda de `AgenteBDI` por uniformidade de interface e extensibilidade futura, mas opera como agente de coordenação com pipeline determinístico — não exerce deliberação autônoma sobre a ordem de execução. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo BDI. Os métodos BDI (`perceive`, `deliberate`, `plan`) são mantidos por conformidade de interface mas não são invocados durante a execução real:
+
 ```python
 # backend/agents/star/orchestrator.py
 
 class OrquestradorEstrela(AgenteBDI):
     def run(self, analysis_id, params, ws_queue):
-        counter = MessageCounter()
+        # Configura crenças (para conformidade BDI)
+        self.update_beliefs({...})
 
-        # Fase 1: Domínio (sequencial)
+        # Fase 1: Domínio (sequencial, ativação condicional)
         for agent_id, agent_type, agent in domain_agents:
             mc = MetricsCollector(agent_id, agent_type)
             mc.start()
             try:
                 result = agent.query(analysis_id, date_from, date_to)
-                counter.increment(2)  # ida + volta
                 all_despesas.extend(result["despesas"])
                 all_indicadores.extend(result["indicadores"])
             except Exception as exc:
@@ -1266,9 +1250,14 @@ class OrquestradorEstrela(AgenteBDI):
         contexto = agente_contexto.analyze_trends(unique_despesas)
         correlacoes = agente_correlacao.compute(dados_cruzados)
         anomalias = agente_anomalias.detect(dados_cruzados)
-        texto = sintetizador.generate(
-            correlacoes, anomalias, contexto, data_coverage, use_llm=True
-        )
+
+        # Streaming via StreamingAdapter
+        adapter = StreamingAdapter(ws_queue, analysis_id, "star")
+        token_gen = sintetizador.generate_stream(correlacoes, anomalias, contexto)
+        texto = adapter.stream_tokens(token_gen)
+
+        # Persiste métricas e envia evento WebSocket com benchmarks
+        return {despesas, indicadores, correlacoes, anomalias, texto, ...}
 ```
 
 ### I. CoordenadorGeral — Hierarquia com comunicação lateral

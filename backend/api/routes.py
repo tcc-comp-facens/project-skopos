@@ -196,8 +196,6 @@ async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = Non
         hier_result=hier_result,
         star_agent_metrics=star_agent_metrics,
         hier_agent_metrics=hier_agent_metrics,
-        star_message_count=star_result.get("message_count", 0),
-        hier_message_count=hier_result.get("message_count", 0),
         use_llm_judge=use_llm_judge,
         use_llm=use_llm,
     )
@@ -233,8 +231,6 @@ async def get_comparative_report(analysis_id: str):
         quality=quality,
         star_agent_metrics=[],
         hier_agent_metrics=[],
-        star_message_count=star_result.get("message_count", 0),
-        hier_message_count=hier_result.get("message_count", 0),
     )
     active_results[analysis_id]["comparative_report"] = report
     return {"report": report}

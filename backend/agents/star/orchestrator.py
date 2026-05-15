@@ -11,6 +11,14 @@ Pipeline:
   2. Cruzamento de dados: despesas × indicadores por subfunção
   3. Fase Analítica: contexto orçamentário, correlação, anomalias, síntese
 
+Nota arquitetural: o orquestrador herda de AgenteBDI por uniformidade
+de interface e para permitir extensão futura (ex: deliberação sobre
+ordem de execução ou replanejamento dinâmico), mas opera como agente
+de coordenação com pipeline determinístico. A autonomia deliberativa
+reside nos agentes de nível folha (domínio, analíticos, contexto),
+que efetivamente exercem o ciclo BDI para decidir quais dados
+consultar e como processar resultados.
+
 Requisitos: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 11.1, 11.2
 """
 
@@ -31,7 +39,6 @@ from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
-from core.message_counter import MessageCounter
 from core.metrics import MetricsCollector
 from core.streaming_adapter import StreamingAdapter
 
@@ -58,6 +65,10 @@ class OrquestradorEstrela(AgenteBDI):
     orquestrador (Req 9.3). Distribui tarefas via chamadas de
     método Python, registra métricas de tempo de execução por agente
     (Req 9.7), e trata falhas com resultados parciais (Req 9.8).
+
+    Herda de AgenteBDI por uniformidade de interface, mas opera como
+    agente de coordenação com pipeline determinístico — não exerce
+    deliberação autônoma sobre a ordem de execução.
 
     Attributes:
         neo4j_client: Cliente Neo4j para queries e persistência.
@@ -150,9 +161,6 @@ class OrquestradorEstrela(AgenteBDI):
         agente_anomalias = AgenteAnomalias(anom_id)
         sintetizador = TextSynthesizer(sint_id)
 
-        # -- 2. MessageCounter para esta análise (Req 11.1, 11.2) --
-        counter = MessageCounter()
-
         # Collectors for metrics persistence (Req 9.7)
         collectors: list[tuple[str, str, MetricsCollector]] = []
 
@@ -200,8 +208,6 @@ class OrquestradorEstrela(AgenteBDI):
                 # Req 9.3: orchestrator intermediates ALL communication
                 result = agent.query(analysis_id, date_from, date_to)
                 mc.stop()
-                # Req 11.1: 2 messages per call (ida + volta)
-                counter.increment(2)
                 all_despesas.extend(result.get("despesas", []))
                 all_indicadores.extend(result.get("indicadores", []))
                 logger.info(
@@ -255,7 +261,6 @@ class OrquestradorEstrela(AgenteBDI):
         try:
             contexto_orcamentario = agente_contexto.analyze_trends(unique_despesas)
             mc_ctx.stop()
-            counter.increment(2)
             logger.info(
                 "OrquestradorEstrela: contexto_orcamentario computed for %d subfunções",
                 len(contexto_orcamentario),
@@ -280,7 +285,6 @@ class OrquestradorEstrela(AgenteBDI):
         try:
             correlacoes = agente_correlacao.compute(dados_cruzados)
             mc_corr.stop()
-            counter.increment(2)
             logger.info(
                 "OrquestradorEstrela: computed %d correlações", len(correlacoes)
             )
@@ -304,7 +308,6 @@ class OrquestradorEstrela(AgenteBDI):
         try:
             anomalias = agente_anomalias.detect(dados_cruzados)
             mc_anom.stop()
-            counter.increment(2)
             logger.info(
                 "OrquestradorEstrela: detected %d anomalias", len(anomalias)
             )
@@ -357,7 +360,6 @@ class OrquestradorEstrela(AgenteBDI):
                 adapter.stream_text(texto_analise)
 
             mc_sint.stop()
-            counter.increment(2)
             logger.info(
                 "OrquestradorEstrela: synthesis complete (%d chars)",
                 len(texto_analise),
@@ -425,7 +427,6 @@ class OrquestradorEstrela(AgenteBDI):
                 "workersTimeMs": round(workers_time_ms, 2),
                 "overheadTimeMs": overhead_ms,
                 "agentMetrics": agent_metrics,
-                "messageCount": counter.count,
             },
         })
 
@@ -441,15 +442,13 @@ class OrquestradorEstrela(AgenteBDI):
             "correlacoes": correlacoes,
             "anomalias": anomalias,
             "texto_analise": texto_analise,
-            "message_count": counter.count,
             "data_coverage": data_coverage,
         }
 
         self.beliefs["result"] = result
         logger.info(
-            "OrquestradorEstrela %s: pipeline complete — %d messages exchanged",
+            "OrquestradorEstrela %s: pipeline complete",
             self.agent_id,
-            counter.count,
         )
 
         return result

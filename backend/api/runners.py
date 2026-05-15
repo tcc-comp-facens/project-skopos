@@ -28,7 +28,6 @@ def _persist_topology_result(
     neo4j_client: Neo4jClient,
     analysis_id: str,
     architecture: str,
-    message_count: int,
     texto_analise: str,
 ) -> None:
     """Persist topology completion metadata in Neo4j (Req 11.3, 11.4)."""
@@ -38,7 +37,6 @@ def _persist_topology_result(
         query = """
         MATCH (a:Analise {id: $analysisId})
         SET a.starStatus       = 'completed',
-            a.starMessageCount = $messageCount,
             a.starTextAnalysis = $textoAnalise,
             a.starCompletedAt  = $completedAt
         """
@@ -46,7 +44,6 @@ def _persist_topology_result(
         query = """
         MATCH (a:Analise {id: $analysisId})
         SET a.hierStatus       = 'completed',
-            a.hierMessageCount = $messageCount,
             a.hierTextAnalysis = $textoAnalise,
             a.hierCompletedAt  = $completedAt
         """
@@ -55,7 +52,6 @@ def _persist_topology_result(
         session.run(
             query,
             analysisId=analysis_id,
-            messageCount=message_count,
             textoAnalise=texto_analise,
             completedAt=completed_at,
         )
@@ -80,7 +76,6 @@ def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
             neo4j_client,
             analysis_id,
             architecture="star",
-            message_count=result.get("message_count", 0),
             texto_analise=result.get("texto_analise", ""),
         )
 
@@ -125,7 +120,6 @@ def run_hierarchical(analysis_id: str, params: dict[str, Any], ws_queue: Queue) 
             neo4j_client,
             analysis_id,
             architecture="hierarchical",
-            message_count=result.get("message_count", 0),
             texto_analise=result.get("texto_analise", ""),
         )
 

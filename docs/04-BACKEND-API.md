@@ -244,14 +244,6 @@ mc.persist(neo4j_client, analysis_id, "star")
 
 Também suporta context manager: `with MetricsCollector(...) as mc:`
 
-### MessageCounter (`backend/core/message_counter.py`)
-
-Contador atômico thread-safe (`threading.Lock`):
-- `increment(n=2)` — cada chamada entre agentes = 2 mensagens (ida + volta)
-- `count` — property thread-safe para leitura
-- Persistido no Neo4j como `starMessageCount` / `hierMessageCount`
-- Enviado via WebSocket como parte do evento `metric`
-
 ### StreamingAdapter (`backend/core/streaming_adapter.py`)
 
 Adaptador de streaming para WebSocket. Encapsula a lógica de chunking (~80 chars) e envio de eventos para a fila compartilhada. Não é um agente BDI — é infraestrutura de transporte reutilizável pelo orquestrador estrela, coordenador hierárquico e relatório comparativo.
@@ -362,34 +354,6 @@ percentual_fase = (tempo_fase / tempo_total) × 100
 - **Fase supervisores:** 0% (estrela) / < 15% (hierárquica)
 
 **Significado para o TCC:** Identifica gargalos no pipeline. Se a fase analítica domina (por causa da chamada LLM), ambas as topologias terão perfis semelhantes nessa fase, e a diferença real estará nas fases de domínio e supervisores. Permite argumentar sobre onde otimizações teriam maior impacto.
-
----
-
-#### E3 — Eficiência de Comunicação
-
-**Função:** `compute_communication_efficiency(message_count, num_agents)`
-
-**O que mede:** O overhead de comunicação por agente, indicando quão "tagarela" é a topologia.
-
-**Como é calculado:**
-
-```
-messages_per_agent = total_messages / num_agents
-```
-
-Onde:
-- `total_messages` = valor do `MessageCounter` (cada chamada de método entre agentes = 2 mensagens: ida + volta)
-- `num_agents` = 8 (estrela) ou 11 (hierárquica: 8 agentes + 3 supervisores)
-
-**Contagem esperada de mensagens:**
-- **Estrela:** ~16 mensagens (8 agentes × 2 mensagens cada) → ~2.0 msg/agente
-- **Hierárquica:** ~24+ mensagens (agentes + supervisores + comunicação lateral entre supervisores) → ~2.2+ msg/agente
-
-**Valores-alvo:**
-- **Estrela:** 2.0 msg/agente (ideal — comunicação mínima hub-spoke)
-- **Hierárquica:** 2.0-3.0 msg/agente é bom, > 3.5 indica overhead de comunicação lateral excessivo
-
-**Significado para o TCC:** Demonstra quantitativamente que a topologia hierárquica requer mais comunicação por agente devido à comunicação lateral entre supervisores (`receive_from_peer()`). Permite comparar o trade-off: mais mensagens na hierárquica compram degradação graciosa e escalabilidade.
 
 ---
 
@@ -814,6 +778,5 @@ O relatório é transmitido via WebSocket em chunks de 80 chars com `architectur
 
 Ao completar cada topologia (mesmo com erros parciais), `_persist_topology_result()` atualiza o nó `Analise`:
 - `starStatus` / `hierStatus` → `"completed"`
-- `starMessageCount` / `hierMessageCount` → total de mensagens
 - `starTextAnalysis` / `hierTextAnalysis` → texto gerado
 - `starCompletedAt` / `hierCompletedAt` → timestamp ISO 8601 UTC

@@ -47,7 +47,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
     done_count = 0
     loop = asyncio.get_event_loop()
     captured_agent_metrics: dict[str, list[dict]] = {"star": [], "hierarchical": []}
-    captured_message_counts: dict[str, int] = {"star": 0, "hierarchical": 0}
     captured_wall_clock: dict[str, float] = {"star": 0, "hierarchical": 0}
 
     try:
@@ -72,7 +71,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                 arch = payload.get("architecture", "")
                 if arch in captured_agent_metrics:
                     captured_agent_metrics[arch] = payload.get("agentMetrics", [])
-                    captured_message_counts[arch] = payload.get("messageCount", 0)
                     captured_wall_clock[arch] = payload.get("totalExecutionTimeMs", 0)
 
             await websocket.send_json(event)
@@ -98,10 +96,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     hier_agent_metrics=captured_agent_metrics.get(
                         "hierarchical", []
                     ),
-                    star_message_count=captured_message_counts.get("star", 0),
-                    hier_message_count=captured_message_counts.get(
-                        "hierarchical", 0
-                    ),
                     use_llm_judge=False,
                     use_llm=results.get("use_llm", True),
                 )
@@ -118,10 +112,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     star_agent_metrics=captured_agent_metrics.get("star", []),
                     hier_agent_metrics=captured_agent_metrics.get(
                         "hierarchical", []
-                    ),
-                    star_message_count=captured_message_counts.get("star", 0),
-                    hier_message_count=captured_message_counts.get(
-                        "hierarchical", 0
                     ),
                     data_coverage=star_result.get("data_coverage"),
                     star_wall_clock_ms=captured_wall_clock.get("star", 0),

@@ -57,7 +57,7 @@ A comparação é feita com base em:
 | LLM (primário) | Groq | llama-3.3-70b-versatile | Geração de análises textuais; baixa latência |
 | Métricas | psutil | latest | Coleta de CPU e memória por agente em tempo real |
 | Estatística | SciPy | latest | Spearman (correlação) |
-| ETL DataSUS | PySUS | latest | Download automatizado de dados do FTP DataSUS |
+| ETL DataSUS | PySUS | >=0.11.0 | Download automatizado de dados do FTP DataSUS |
 | ETL SIOPS | openpyxl + xlrd | latest | Leitura de planilhas .xlsx e .xls |
 | Manipulação de dados | pandas | latest | Transformação e filtragem de DataFrames |
 | Containerização | Docker + Docker Compose | latest | Orquestração de Neo4j, backend e frontend |
@@ -68,7 +68,7 @@ A comparação é feita com base em:
 ### Dependências Backend (requirements.txt)
 
 ```
-fastapi, uvicorn[standard], neo4j, pysus, psutil, pytest,
+fastapi, uvicorn[standard], neo4j, pysus>=0.11.0, psutil, pytest,
 python-dotenv, httpx, groq, openpyxl,
 xlrd, pandas, scipy
 ```
@@ -204,7 +204,7 @@ O `entrypoint.sh` do backend executa automaticamente:
 1. Aguarda Neo4j ficar pronto (30 tentativas, 2s entre cada)
 2. Carrega planilhas SIOPS de `backend/data/*.xls` e `*.xlsx`
 3. Baixa/cacheia dados DataSUS para os anos detectados
-4. Executa seed de fallback (dados mínimos 2019-2021)
+4. Executa seed de fallback (indicadores COVID 2018-2022)
 5. Inicia FastAPI via uvicorn na porta 8000
 
 ### Execução Local (desenvolvimento)
@@ -278,7 +278,6 @@ python download_pysus.py 2019 2025
 | `test_data_crossing.py` | Cruzamento de dados, deduplicação, detecção de gaps |
 | `test_sintetizador.py` | TextSynthesizer (fallback, seções, streaming) |
 | `test_streaming_adapter.py` | StreamingAdapter (chunking, formato de evento) |
-| `test_message_counter.py` | MessageCounter (thread-safety, incremento) |
 | `test_orchestrator_star.py` | OrquestradorEstrela (health_params filtering, degradação, métricas) |
 | `test_domain_agents.py` | Agente de domínio (filtro subfunção, fallback) |
 
@@ -328,7 +327,7 @@ project-skopos/
 ├── backend/
 │   ├── Dockerfile                    # Python 3.11-slim
 │   ├── entrypoint.sh                # ETL automático + uvicorn
-│   ├── requirements.txt             # 16 dependências Python
+│   ├── requirements.txt             # 13 dependências Python
 │   ├── .env.example                 # Template de variáveis de ambiente
 │   ├── main.py                      # Entry point — cria app, CORS, registra routers
 │   ├── conftest.py                  # Configuração pytest (sys.path)
@@ -363,7 +362,6 @@ project-skopos/
 │   ├── core/                        # Utilitários
 │   │   ├── llm_client.py            # Cliente LLM (Groq, cadeia de fallback entre modelos)
 │   │   ├── metrics.py               # MetricsCollector (psutil)
-│   │   ├── message_counter.py       # MessageCounter (thread-safe)
 │   │   ├── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
 │   │   └── streaming_adapter.py     # StreamingAdapter (chunking de texto para ws_queue)
 │   │
@@ -373,7 +371,7 @@ project-skopos/
 │   ├── etl/
 │   │   ├── siops_loader.py          # Ingestão planilhas FNS (.xls/.xlsx)
 │   │   ├── datasus_loader.py        # Ingestão DataSUS (PySUS + cache)
-│   │   ├── seed_data.py             # Dados fallback Sorocaba 2019-2021
+│   │   ├── seed_data.py             # Seed COVID (fallback — dados não disponíveis via PySUS)
 │   │   └── detect_years.py          # Auto-detecção de anos
 │   │
 │   ├── data/                        # Planilhas FNS + cache DataSUS
@@ -385,7 +383,6 @@ project-skopos/
 │       ├── test_correlacao.py
 │       ├── test_data_crossing.py
 │       ├── test_domain_agents.py
-│       ├── test_message_counter.py
 │       ├── test_orchestrator_star.py
 │       ├── test_sintetizador.py
 │       └── test_streaming_adapter.py

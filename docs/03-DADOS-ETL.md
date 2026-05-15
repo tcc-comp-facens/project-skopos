@@ -207,6 +207,21 @@ O sistema tenta cada variante em ordem até encontrar uma que exista no DataFram
 
 ## Pipeline ETL
 
+### Execução local (`backend/run_etl.py`)
+
+Script de conveniência para rodar o pipeline ETL completo fora do Docker. Requer Neo4j rodando e variáveis configuradas em `backend/.env`.
+
+**Etapas executadas:**
+1. Verifica conexão com Neo4j
+2. Carrega todas as planilhas SIOPS (`.xls`/`.xlsx` em `backend/data/`)
+3. Carrega DataSUS (download ou cache)
+4. Executa seed de fallback
+
+**Comando:**
+```bash
+cd backend && python run_etl.py
+```
+
 ### Execução automática (Docker)
 
 O `backend/entrypoint.sh` executa o ETL automaticamente ao iniciar o container:
@@ -246,6 +261,8 @@ python -m etl.siops_loader data/PlanilhaDetalhada.xls
 ### DataSUS Loader (`backend/etl/datasus_loader.py`)
 
 **Entrada:** Download automático via PySUS ou cache local
+
+**Compatibilidade PySUS:** O loader utiliza exclusivamente a API do PySUS 2.x (`pysus.sinan()`, `pysus.sim()`, `pysus.sih()`, `pysus.pni()`). Não há fallback para a API legacy.
 
 **Estratégia de cache (3 níveis):**
 1. Cache local: `backend/data/datasus/{sistema}_{tipo}_{ano}.parquet`
@@ -293,15 +310,20 @@ python download_pysus.py 2019 2025
 
 ### Seed Data (`backend/etl/seed_data.py`)
 
-Dados hardcoded de Sorocaba 2019-2021 como fallback:
-- 12 registros de despesas (4 subfunções × 3 anos)
-- 15 registros de indicadores (5 tipos × 3 anos)
+Dados hardcoded de COVID-19 de Sorocaba (2018-2022) como fallback:
+- Apenas 5 registros de indicadores de COVID — dados não disponíveis via PySUS/SINAN (foram notificados pelo e-SUS Notifica / SIVEP-Gripe)
+- Despesas SIOPS não precisam de seed — são carregadas das planilhas FNS
+- Demais indicadores (dengue, vacinação, internações, mortalidade) são obtidos diretamente do DataSUS via ETL
 
-Garante que o sistema funcione mesmo sem acesso ao FTP ou planilhas SIOPS.
+Garante que o sistema tenha dados de COVID mesmo sem acesso ao FTP DataSUS.
 
 ### Detect Years (`backend/etl/detect_years.py`)
 
 Auto-detecta anos disponíveis nos arquivos de repasses FNS em `backend/data/` para limitar downloads DataSUS apenas aos anos relevantes.
+
+**Estratégia de extração de ano:**
+- Busca célula "Ano:" nos metadados da planilha (primeiras 7 linhas)
+- Retorna `None` se não encontrar o ano nos metadados
 
 ---
 
@@ -311,7 +333,7 @@ Auto-detecta anos disponíveis nos arquivos de repasses FNS em `backend/data/` p
 
 | Label | Chave natural | Campos principais |
 |-------|---------------|-------------------|
-| `Analise` | `id` (UUID) | dateFrom, dateTo, healthParams (JSON), starStatus, hierStatus, starTextAnalysis, hierTextAnalysis, starMessageCount, hierMessageCount, starCompletedAt, hierCompletedAt, createdAt |
+| `Analise` | `id` (UUID) | dateFrom, dateTo, healthParams (JSON), starStatus, hierStatus, starTextAnalysis, hierTextAnalysis, starCompletedAt, hierCompletedAt, createdAt |
 | `DespesaSIOPS` | `subfuncao + ano` | id (UUID), subfuncao (int), subfuncaoNome (str), ano (int), valor (float), fonte ("siops"), importedAt (ISO 8601). **Nota:** apesar do nome, os dados vêm do portal FNS (repasses federais), não do SIOPS. |
 | `IndicadorDataSUS` | `sistema + tipo + ano` | id (UUID), sistema (str), tipo (str), ano (int), valor (float), fonte ("datasus"), importedAt (ISO 8601) |
 | `MetricaExecucao` | `id` (UUID) | architecture (str), agentId (str), agentType (str), executionTimeMs (float), cpuPercent (float), recordedAt (ISO 8601) |

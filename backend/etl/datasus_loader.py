@@ -146,6 +146,10 @@ def _read_pysus_result(result) -> pd.DataFrame:
     if isinstance(result, (str, Path)):
         return pd.read_parquet(result)
 
+    # Caso 4: PySUS 2.x retorna DataFrame diretamente
+    if isinstance(result, pd.DataFrame):
+        return result
+
     raise TypeError(f"Formato de resultado PySUS não reconhecido: {type(result)}")
 
 
@@ -155,9 +159,9 @@ def _download_sinan(disease: str, tipo: str, year: int) -> Optional[pd.DataFrame
         return _load_cache("sinan", tipo, year)
 
     try:
-        from pysus.online_data import SINAN
+        import pysus
         logger.info("SINAN %s: baixando ano %d do FTP...", disease, year)
-        result = SINAN.download(diseases=disease, years=year)
+        result = pysus.sinan(disease, year)
 
         df = _read_pysus_result(result)
 
@@ -181,9 +185,9 @@ def _download_sim(year: int) -> Optional[pd.DataFrame]:
         return _load_cache("sim", "mortalidade", year)
 
     try:
-        from pysus.online_data import SIM
+        import pysus
         logger.info("SIM: baixando ano %d do FTP...", year)
-        result = SIM.download(groups="CID10", states="SP", years=year)
+        result = pysus.sim("SP", year)
 
         df = _read_pysus_result(result)
 
@@ -207,10 +211,22 @@ def _download_sih(year: int) -> Optional[pd.DataFrame]:
         return _load_cache("sih", "internacoes", year)
 
     try:
-        from pysus.online_data import SIH
-        logger.info("SIH: baixando ano %d do FTP...", year)
         months = list(range(1, 13))
-        result = SIH.download(states="SP", years=year, months=months, groups="RD")
+        import pysus
+        logger.info("SIH: baixando ano %d do FTP...", year)
+        # PySUS 2.x: sih(state, year, month) — baixa mês a mês e concatena
+        frames = []
+        for m in months:
+            try:
+                r = pysus.sih("SP", year, m)
+                df_m = _read_pysus_result(r)
+                frames.append(df_m)
+            except Exception:
+                pass
+        if not frames:
+            raise RuntimeError(f"SIH {year}: nenhum mês baixado com sucesso")
+        import pandas as pd
+        result = pd.concat(frames, ignore_index=True)
 
         df = _read_pysus_result(result)
 
@@ -234,9 +250,9 @@ def _download_pni(year: int) -> Optional[pd.DataFrame]:
         return _load_cache("si_pni", "vacinacao", year)
 
     try:
-        from pysus.online_data import PNI
+        import pysus
         logger.info("SI-PNI: baixando ano %d do FTP...", year)
-        result = PNI.download(group="CPNI", states="SP", years=year)
+        result = pysus.pni("SP", year)
 
         df = _read_pysus_result(result)
 
@@ -259,7 +275,7 @@ def _download_pni(year: int) -> Optional[pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 
-def load(neo4j_client, year_from: int = 2019, year_to: int = 2025,
+def load(neo4j_client, year_from: int = 2018, year_to: int = 2022,
          siops_years: Optional[set[int]] = None) -> dict:
     """Baixa (ou lê do cache) dados DataSUS e persiste no Neo4j.
 
@@ -356,8 +372,8 @@ if __name__ == "__main__":
             year_to = max(siops_years_list)
             print(f"Anos SIOPS detectados: {siops_years_list} -> buscando {year_from}-{year_to}")
         else:
-            year_from = 2019
-            year_to = 2025
+            year_from = 2018
+            year_to = 2022
             print(f"Nenhum SIOPS encontrado, usando padrao {year_from}-{year_to}")
 
     from db.neo4j_client import Neo4jClient
