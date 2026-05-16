@@ -26,7 +26,6 @@ const QUALITY_METRICS = [
 
 const RESILIENCE_METRICS = [
   { key: 'R1' as const, label: 'Partial result coverage' },
-  { key: 'R2' as const, label: 'Graceful degradation score' },
 ];
 
 /**
@@ -103,7 +102,6 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         },
         resilience: {
           R1: extractNumber(starRes?.partial_result_coverage) ?? 0,
-          R2: extractNumber(starRes?.graceful_degradation) ?? 0,
         },
       },
       hierarchical: {
@@ -120,7 +118,6 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         },
         resilience: {
           R1: extractNumber(hierRes?.partial_result_coverage) ?? 0,
-          R2: extractNumber(hierRes?.graceful_degradation) ?? 0,
         },
       },
     };

@@ -17,7 +17,6 @@ Q. Qualidade da Resposta:
 
 R. Resiliência:
    - R1: Partial result coverage (agentes que completaram com sucesso)
-   - R2: Graceful degradation score (qualidade sob falha simulada)
 
 Requisitos: 11.1, 11.2, 11.3, 11.4
 """
@@ -600,55 +599,6 @@ def compute_partial_result_coverage(result: dict[str, Any]) -> dict[str, Any]:
         "completed": completed,
         "total": total,
         "components": components,
-    }
-
-
-def compute_graceful_degradation(
-    full_result: dict[str, Any],
-    degraded_result: dict[str, Any],
-) -> dict[str, Any]:
-    """R2 — Calcula o score de degradação graciosa.
-
-    Compara o resultado completo (sem falhas) com um resultado
-    degradado (com falha simulada de agente) para medir quanto
-    a qualidade cai.
-
-    Args:
-        full_result: Resultado sem falhas.
-        degraded_result: Resultado com falha simulada.
-
-    Returns:
-        Dict com degradation_score (0.0 a 1.0, onde 1.0 = sem degradação).
-    """
-    full_coverage = compute_partial_result_coverage(full_result)
-    degraded_coverage = compute_partial_result_coverage(degraded_result)
-
-    full_score = full_coverage["score"]
-    degraded_score = degraded_coverage["score"]
-
-    # Degradation score: quanto do resultado original foi preservado
-    preservation = degraded_score / full_score if full_score > 0 else 0.0
-
-    # Comparar correlações e anomalias se ambos existirem
-    corr_preserved = 1.0
-    anom_preserved = 1.0
-
-    full_corr = len(full_result.get("correlacoes", []))
-    degraded_corr = len(degraded_result.get("correlacoes", []))
-    if full_corr > 0:
-        corr_preserved = degraded_corr / full_corr
-
-    full_anom = len(full_result.get("anomalias", []))
-    degraded_anom = len(degraded_result.get("anomalias", []))
-    if full_anom > 0:
-        anom_preserved = degraded_anom / full_anom
-
-    return {
-        "preservation_score": round(preservation, 4),
-        "correlacoes_preserved": round(corr_preserved, 4),
-        "anomalias_preserved": round(anom_preserved, 4),
-        "full_coverage": full_coverage,
-        "degraded_coverage": degraded_coverage,
     }
 
 

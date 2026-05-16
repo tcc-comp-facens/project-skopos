@@ -53,7 +53,6 @@ export interface QualityScores {
 
 export interface ResilienceMetrics {
   R1: number; // partial result coverage
-  R2: number; // graceful degradation score
 }
 
 export interface ArchitectureQualityMetrics {

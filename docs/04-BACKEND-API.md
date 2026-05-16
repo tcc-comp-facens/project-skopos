@@ -9,7 +9,7 @@
 5. [Métricas de Qualidade e Eficiência — Detalhamento Completo](#métricas-de-qualidade-e-eficiência--detalhamento-completo)
    - [E. Eficiência dos Agentes](#e-eficiência-dos-agentes) (E1, E2, E3)
    - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q2, Q2+, Q3, Q4)
-   - [R. Resiliência](#r-resiliência) (R1, R2)
+   - [R. Resiliência](#r-resiliência) (R1)
    - [Métricas Complementares dos Agentes Analíticos](#métricas-complementares-agentes-analíticos)
    - [Resumo de Valores-Alvo](#resumo-de-valores-alvo)
 6. [Relatório Comparativo](#relatório-comparativo)
@@ -283,7 +283,7 @@ Calculadas automaticamente após ambas as topologias completarem, organizadas em
 |------|----------|-----------------------|
 | **E. Eficiência** | E1, E2, E3 | Qual topologia usa melhor seus recursos computacionais e de comunicação? |
 | **Q. Qualidade** | Q1, Q2, Q2+, Q3, Q4 | Os resultados são corretos, fiéis aos dados e bem estruturados? |
-| **R. Resiliência** | R1, R2 | O sistema se comporta bem quando algo falha? |
+| **R. Resiliência** | R1 | O sistema se comporta bem quando algo falha? |
 
 ---
 
@@ -589,44 +589,6 @@ score = componentes_presentes / 7
 
 ---
 
-#### R2 — Degradação Graciosa
-
-**Função:** `compute_graceful_degradation(full_result, degraded_result)`
-
-**O que mede:** Quanto da qualidade do resultado é preservada quando um agente falha, comparando o resultado completo (sem falhas) com um resultado degradado (com falha simulada).
-
-**Como é calculado:**
-
-1. Calcula R1 para o resultado completo e para o resultado degradado
-2. Calcula a taxa de preservação:
-
-```
-preservation_score = score_degradado / score_completo
-```
-
-3. Adicionalmente, compara a preservação de correlações e anomalias:
-
-```
-corr_preserved = num_correlações_degradado / num_correlações_completo
-anom_preserved = num_anomalias_degradado / num_anomalias_completo
-```
-
-**Valores retornados:**
-- `preservation_score`: 0.0 a 1.0 (1.0 = sem degradação)
-- `correlacoes_preserved`: 0.0 a 1.0
-- `anomalias_preserved`: 0.0 a 1.0
-- `full_coverage`: resultado de R1 para o resultado completo
-- `degraded_coverage`: resultado de R1 para o resultado degradado
-
-**Valores-alvo:**
-- `preservation_score` ≥ 0.85: excelente — sistema mantém quase toda a funcionalidade
-- `preservation_score` ≥ 0.70: bom — degradação controlada
-- `preservation_score` < 0.50: ruim — falha cascata
-
-**Significado para o TCC:** Esta é a métrica mais importante para diferenciar as topologias em cenários de falha. A hierárquica, com 3 supervisores independentes, pode continuar operando se um supervisor falha (ex: `SupervisorContexto` falha → perde apenas contexto orçamentário, mas correlações e anomalias permanecem). A estrela, com ponto único de falha, tende a perder mais componentes. Permite argumentar que a hierárquica é mais adequada para ambientes de produção onde falhas são esperadas.
-
----
-
 ### Métricas Complementares (Agentes Analíticos)
 
 Além das métricas de qualidade do módulo `quality_metrics.py`, os agentes analíticos produzem métricas de domínio que alimentam as métricas de qualidade:
@@ -746,7 +708,6 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 | Q3 Completude | ≥ 0.75 | Texto abrangente |
 | Q4 Estrutura | 1.0 (4/4 seções) | Texto bem organizado |
 | R1 Cobertura | 1.0 (7/7 componentes) | Pipeline completo |
-| R2 Degradação | ≥ 0.85 | Resiliência a falhas |
 
 ---
 
