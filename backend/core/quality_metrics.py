@@ -7,7 +7,6 @@ Módulo centralizado que calcula métricas complementares às já existentes
 E. Eficiência dos Agentes:
    - E1: Overhead de coordenação (tempo supervisores / tempo total)
    - E2: Latency breakdown por fase (domínio / analítico / síntese)
-   - E3: Communication efficiency (mensagens / agente)
 
 Q. Qualidade da Resposta:
    - Q1: Deterministic consistency (outputs numéricos idênticos entre topologias)
@@ -501,67 +500,6 @@ def compute_completeness(
     }
 
 
-def compute_structural_quality(texto: str) -> dict[str, Any]:
-    """Q4 — Verifica se o texto contém as seções estruturais esperadas.
-
-    O sintetizador deve produzir 4 seções:
-    1. Resumo Executivo
-    2. Análise das Correlações
-    3. Discussão das Anomalias
-    4. Contexto Orçamentário
-
-    Args:
-        texto: Texto gerado pelo sintetizador.
-
-    Returns:
-        Dict com score (0.0 a 1.0) e presença de cada seção.
-    """
-    if not texto:
-        return {
-            "score": 0.0,
-            "sections_found": 0,
-            "sections_expected": 4,
-            "sections": {},
-        }
-
-    texto_lower = texto.lower()
-
-    expected_sections = {
-        "resumo_executivo": [
-            "resumo executivo", "resumo", "executive summary",
-        ],
-        "correlacoes": [
-            "correlações", "correlacoes", "análise das correlações",
-            "analise das correlacoes", "correlação", "correlacao",
-        ],
-        "anomalias": [
-            "anomalias", "discussão das anomalias", "anomalia",
-            "ineficiências", "ineficiencias",
-        ],
-        "contexto_orcamentario": [
-            "contexto orçamentário", "contexto orcamentario",
-            "orçamentário", "orcamentario", "tendência", "tendencia",
-        ],
-    }
-
-    sections: dict[str, bool] = {}
-    found_count = 0
-
-    for section_name, keywords in expected_sections.items():
-        found = any(kw in texto_lower for kw in keywords)
-        sections[section_name] = found
-        if found:
-            found_count += 1
-
-    score = found_count / len(expected_sections)
-
-    return {
-        "score": round(score, 4),
-        "sections_found": found_count,
-        "sections_expected": len(expected_sections),
-        "sections": sections,
-    }
-
 
 # =========================================================================
 # C. Resiliência
@@ -666,9 +604,6 @@ def compute_all_quality_metrics(
                 star_result.get("contexto_orcamentario", {}),
                 star_result.get("texto_analise", ""),
             ),
-            "structural_quality": compute_structural_quality(
-                star_result.get("texto_analise", ""),
-            ),
         },
         "hierarchical": {
             "faithfulness": compute_faithfulness(
@@ -680,9 +615,6 @@ def compute_all_quality_metrics(
                 hier_result.get("correlacoes", []),
                 hier_result.get("anomalias", []),
                 hier_result.get("contexto_orcamentario", {}),
-                hier_result.get("texto_analise", ""),
-            ),
-            "structural_quality": compute_structural_quality(
                 hier_result.get("texto_analise", ""),
             ),
         },
@@ -823,10 +755,9 @@ def generate_comparative_report(
         arch_qual = qual.get(arch_key, {})
         faith = arch_qual.get("faithfulness", {}).get("score", 0)
         comp = arch_qual.get("completeness", {}).get("score", 0)
-        struct = arch_qual.get("structural_quality", {}).get("score", 0)
         sections.append(
             f"  {arch_name}: fidelidade {faith:.0%} | "
-            f"completude {comp:.0%} | estrutura {struct:.0%}"
+            f"completude {comp:.0%}"
         )
     sections.append("")
 

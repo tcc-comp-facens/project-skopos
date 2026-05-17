@@ -70,7 +70,7 @@ Aba destinada a avaliadores técnicos e contexto do TCC:
 
 - `<LlmControls>` — toggles LLM e LLM Judge
 - Dois `<ArchitecturePanel>` lado a lado (Estrela e Hierárquica) com benchmarks
-- `<QualityMetricsSection>` — cards de métricas E1-E3, Q1-Q4, R1
+- `<QualityMetricsSection>` — cards de métricas E1-E2, Q1-Q3, R1
 - `<ComparativeSection>` — relatório comparativo + LLM Judge
 - NÃO exibe controles de data/parâmetros de saúde
 
@@ -89,8 +89,8 @@ Toggles de LLM e LLM Judge:
 ### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)
 
 Cards de métricas de qualidade organizados em três grupos:
-- **Eficiência**: E1, E2, E3
-- **Qualidade**: Q1, Q2, Q3, Q4
+- **Eficiência**: E1, E2
+- **Qualidade**: Q1, Q2, Q3
 - **Resiliência**: R1
 
 Cada `<ScoreCard>` exibe valores de ambas as arquiteturas lado a lado.

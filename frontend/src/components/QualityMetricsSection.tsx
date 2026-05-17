@@ -14,14 +14,12 @@ export interface QualityMetricsSectionProps {
 const EFFICIENCY_METRICS = [
   { key: 'E1' as const, label: 'Overhead de coordenação' },
   { key: 'E2' as const, label: 'Latency breakdown' },
-  { key: 'E3' as const, label: 'Communication efficiency' },
 ];
 
 const QUALITY_METRICS = [
   { key: 'Q1' as const, label: 'Consistência determinística' },
   { key: 'Q2' as const, label: 'Faithfulness' },
   { key: 'Q3' as const, label: 'Completeness' },
-  { key: 'Q4' as const, label: 'Structural quality' },
 ];
 
 const RESILIENCE_METRICS = [
@@ -61,7 +59,7 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
 
   const data = raw as Record<string, unknown>;
 
-  // Formato frontend: { star: { efficiency: { E1, E2, E3 }, ... }, hierarchical: {...} }
+  // Formato frontend: { star: { efficiency: { E1, E2 }, ... }, hierarchical: {...} }
   if (data.star && data.hierarchical &&
       typeof data.star === 'object' && typeof data.hierarchical === 'object') {
     const star = data.star as Record<string, unknown>;
@@ -92,13 +90,11 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         efficiency: {
           E1: extractNumber(starEff.coordination_overhead) ?? 0,
           E2: extractNumber(starEff.latency_breakdown) ?? 0,
-          E3: extractNumber(starEff.communication_efficiency) ?? 0,
         },
         quality: {
           Q1: extractNumber(qual.deterministic_consistency) ?? 0,
           Q2: extractNumber(starQual?.faithfulness) ?? 0,
           Q3: extractNumber(starQual?.completeness) ?? 0,
-          Q4: extractNumber(starQual?.structural_quality) ?? 0,
         },
         resilience: {
           R1: extractNumber(starRes?.partial_result_coverage) ?? 0,
@@ -108,13 +104,11 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         efficiency: {
           E1: extractNumber(hierEff.coordination_overhead) ?? 0,
           E2: extractNumber(hierEff.latency_breakdown) ?? 0,
-          E3: extractNumber(hierEff.communication_efficiency) ?? 0,
         },
         quality: {
           Q1: extractNumber(qual.deterministic_consistency) ?? 0,
           Q2: extractNumber(hierQual?.faithfulness) ?? 0,
           Q3: extractNumber(hierQual?.completeness) ?? 0,
-          Q4: extractNumber(hierQual?.structural_quality) ?? 0,
         },
         resilience: {
           R1: extractNumber(hierRes?.partial_result_coverage) ?? 0,

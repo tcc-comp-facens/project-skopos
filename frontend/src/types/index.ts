@@ -41,14 +41,12 @@ export type WinnerArchitecture = 'star' | 'hierarchical' | null;
 export interface EfficiencyMetrics {
   E1: number; // overhead de coordenação
   E2: number; // latency breakdown
-  E3: number; // communication efficiency
 }
 
 export interface QualityScores {
   Q1: number; // consistência determinística
   Q2: number; // faithfulness
   Q3: number; // completeness
-  Q4: number; // structural quality
 }
 
 export interface ResilienceMetrics {

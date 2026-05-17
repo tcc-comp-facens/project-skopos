@@ -7,8 +7,8 @@
 3. [Integração com LLM](#integração-com-llm)
 4. [Métricas de Execução](#métricas-de-execução)
 5. [Métricas de Qualidade e Eficiência — Detalhamento Completo](#métricas-de-qualidade-e-eficiência--detalhamento-completo)
-   - [E. Eficiência dos Agentes](#e-eficiência-dos-agentes) (E1, E2, E3)
-   - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q2, Q2+, Q3, Q4)
+   - [E. Eficiência dos Agentes](#e-eficiência-dos-agentes) (E1, E2)
+   - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q2, Q2+, Q3)
    - [R. Resiliência](#r-resiliência) (R1)
    - [Métricas Complementares dos Agentes Analíticos](#métricas-complementares-agentes-analíticos)
    - [Resumo de Valores-Alvo](#resumo-de-valores-alvo)
@@ -281,8 +281,8 @@ Calculadas automaticamente após ambas as topologias completarem, organizadas em
 
 | Eixo | Métricas | Pergunta que responde |
 |------|----------|-----------------------|
-| **E. Eficiência** | E1, E2, E3 | Qual topologia usa melhor seus recursos computacionais e de comunicação? |
-| **Q. Qualidade** | Q1, Q2, Q2+, Q3, Q4 | Os resultados são corretos, fiéis aos dados e bem estruturados? |
+| **E. Eficiência** | E1, E2 | Qual topologia usa melhor seus recursos computacionais e de comunicação? |
+| **Q. Qualidade** | Q1, Q2, Q2+, Q3 | Os resultados são corretos, fiéis aos dados e bem estruturados? |
 | **R. Resiliência** | R1 | O sistema se comporta bem quando algo falha? |
 
 ---
@@ -518,39 +518,6 @@ score = corr_coverage × 0.4 + anom_coverage × 0.4 + ctx_coverage × 0.2
 
 ---
 
-#### Q4 — Qualidade Estrutural
-
-**Função:** `compute_structural_quality(texto)`
-
-**O que mede:** Se o texto gerado segue a estrutura esperada com as 4 seções obrigatórias definidas no prompt do sintetizador.
-
-**Como é calculado:**
-
-Busca palavras-chave no texto (case-insensitive) para cada seção esperada:
-
-| Seção | Palavras-chave buscadas |
-|-------|------------------------|
-| `resumo_executivo` | "resumo executivo", "resumo", "executive summary" |
-| `correlacoes` | "correlações", "correlacoes", "análise das correlações", "correlação" |
-| `anomalias` | "anomalias", "discussão das anomalias", "anomalia", "ineficiências" |
-| `contexto_orcamentario` | "contexto orçamentário", "orcamentario", "tendência", "tendencia" |
-
-```
-score = seções_encontradas / 4
-```
-
-**Valores retornados:**
-- `score`: 0.0, 0.25, 0.50, 0.75 ou 1.0
-- `sections_found`: 0 a 4
-- `sections_expected`: 4
-- `sections`: dict com `true`/`false` por seção
-
-**Valor-alvo:** 1.0 (100%) — todas as 4 seções presentes
-
-**Significado para o TCC:** Garante que o LLM seguiu o prompt estruturado. Se o score é < 1.0, indica que o LLM ignorou parte da instrução. Também serve como validação do fallback: quando o LLM está indisponível, o texto estruturado gerado automaticamente deve sempre atingir 1.0.
-
----
-
 ### R. Resiliência
 
 #### R1 — Cobertura de Resultados Parciais
@@ -701,12 +668,10 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 |---------|-----------|---------------|
 | E1 Overhead | Estrela ~0%, Hierárquica < 15% | Custo aceitável de coordenação |
 | E2 Breakdown | Fase analítica 30-50% | LLM é o gargalo esperado |
-| E3 Comunicação | ≤ 2.0 msg/agente (estrela), ≤ 3.0 (hierárquica) | Comunicação eficiente |
 | Q1 Consistência | `true` (sempre) | Resultados numéricos idênticos |
 | Q2 Fidelidade | ≥ 0.80 | Texto reflete os dados |
 | Q2+ LLM Judge | ≥ 4 (de 5) | Avaliação semântica positiva |
 | Q3 Completude | ≥ 0.75 | Texto abrangente |
-| Q4 Estrutura | 1.0 (4/4 seções) | Texto bem organizado |
 | R1 Cobertura | 1.0 (7/7 componentes) | Pipeline completo |
 
 ---
@@ -719,7 +684,7 @@ Gerado após ambas as topologias completarem, consolida todas as métricas em te
 
 ### Seções do relatório
 
-1. **Eficiência Operacional** — tempo total, overhead de coordenação, comunicação (mensagens por agente)
+1. **Eficiência Operacional** — tempo total, overhead de coordenação, latency breakdown por fase
 2. **Qualidade da Resposta** — consistência determinística, fidelidade, completude e qualidade estrutural por topologia
 3. **Resiliência** — cobertura de resultados parciais por topologia
 4. **Conclusão** — vencedor por eixo (eficiência, qualidade, consistência) e veredicto geral
