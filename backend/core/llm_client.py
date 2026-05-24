@@ -35,8 +35,8 @@ RETRY_BASE_DELAY = 10.0  # segundos
 # Cadeia de fallback — ordem de prioridade
 MODEL_CHAIN: list[str] = [
     "llama-3.3-70b-versatile",
-    "qwen/qwen3-32b",
     "meta-llama/llama-4-scout-17b-16e-instruct",
+    "qwen/qwen3-32b",
 ]
 
 # Acumulador global de tokens (thread-safe via _lock)

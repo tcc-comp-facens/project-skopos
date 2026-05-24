@@ -52,8 +52,8 @@ describe('AnalysisControls', () => {
     fireEvent.click(screen.getByTestId('toggle-dengue'));
     fireEvent.click(screen.getByTestId('submit-button'));
     expect(onSubmit).toHaveBeenCalledWith({
-      dateFrom: 2019,
-      dateTo: 2021,
+      dateFrom: 2018,
+      dateTo: 2022,
       healthParams: {
         dengue: true,
         covid: false,

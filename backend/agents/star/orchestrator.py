@@ -324,6 +324,14 @@ class OrquestradorEstrela(AgenteBDI):
             })
         collectors.append((anom_id, "anomalias", mc_anom))
 
+        # ============================================================
+        # Wall-clock: mede apenas o pipeline BDI (sem LLM/sintetizador)
+        # A geração de texto depende da disponibilidade da API Groq,
+        # não reflete a eficiência da arquitetura multiagente.
+        # ============================================================
+        _orch_end = _time.time()
+        wall_clock_ms = round((_orch_end - _orch_start) * 1000, 2)
+
         # -- Sintetizador (Req 9.6) --
         texto_analise: str = ""
         mc_sint = MetricsCollector(sint_id, "sintetizador")
@@ -395,6 +403,9 @@ class OrquestradorEstrela(AgenteBDI):
         agent_metrics = []
         workers_time_ms = 0.0
         for _, agent_type, mc in collectors:
+            # Exclui sintetizador — é um serviço LLM, não agente BDI
+            if agent_type == "sintetizador":
+                continue
             try:
                 m = mc.collect()
                 agent_metrics.append({
@@ -406,9 +417,6 @@ class OrquestradorEstrela(AgenteBDI):
             except Exception:
                 pass
 
-        # Wall-clock total time (what the user perceives)
-        _orch_end = _time.time()
-        wall_clock_ms = round((_orch_end - _orch_start) * 1000, 2)
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({

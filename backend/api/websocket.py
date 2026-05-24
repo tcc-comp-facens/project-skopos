@@ -98,6 +98,8 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     ),
                     use_llm_judge=False,
                     use_llm=results.get("use_llm", True),
+                    star_wall_clock_ms=captured_wall_clock.get("star", 0),
+                    hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
                 )
                 await websocket.send_json({
                     "analysisId": analysis_id,
@@ -106,6 +108,8 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     "payload": quality,
                 })
                 active_results[analysis_id]["quality_metrics"] = quality
+                active_results[analysis_id]["star_wall_clock_ms"] = captured_wall_clock.get("star", 0)
+                active_results[analysis_id]["hier_wall_clock_ms"] = captured_wall_clock.get("hierarchical", 0)
 
                 report = generate_comparative_report(
                     quality=quality,
@@ -116,6 +120,8 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     data_coverage=star_result.get("data_coverage"),
                     star_wall_clock_ms=captured_wall_clock.get("star", 0),
                     hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
+                    star_result=star_result,
+                    hier_result=hier_result,
                 )
                 active_results[analysis_id]["comparative_report"] = report
 

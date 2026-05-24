@@ -20,8 +20,8 @@ const HEALTH_PARAMS = [
 type HealthParamKey = typeof HEALTH_PARAMS[number]['key'];
 
 export function AnalysisControls({ onSubmit }: AnalysisControlsProps) {
-  const [dateFrom, setDateFrom] = useState(2019);
-  const [dateTo, setDateTo] = useState(2021);
+  const [dateFrom, setDateFrom] = useState(2018);
+  const [dateTo, setDateTo] = useState(2022);
   const [params, setParams] = useState<Record<HealthParamKey, boolean>>({
     dengue: false,
     covid: false,

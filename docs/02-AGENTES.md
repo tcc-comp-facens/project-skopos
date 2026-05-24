@@ -761,7 +761,8 @@ Passo 5:  Detecta lacunas: detect_data_gaps()
 Passo 6:  AgenteContextoOrcamentario.analyze_trends(despesas)
 Passo 7:  AgenteCorrelacao.compute(dados_cruzados)
 Passo 8:  AgenteAnomalias.detect(dados_cruzados)
-Passo 9:  TextSynthesizer.generate(correlações, anomalias, contexto)
+Passo 9:  *** Captura wall-clock (exclui sintetizador) ***
+Passo 10: TextSynthesizer.generate(correlações, anomalias, contexto)
 ```
 
 **Características:**
@@ -769,6 +770,7 @@ Passo 9:  TextSynthesizer.generate(correlações, anomalias, contexto)
 - Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
 - Ponto único de falha: se o orquestrador falhar, toda a análise falha
 - Ativação condicional: apenas agentes de domínio relevantes aos `health_params` são instanciados
+- Métricas de benchmark excluem o sintetizador do breakdown por agente (é serviço LLM, não agente BDI) — o overhead do orquestrador é calculado como `wall_clock - soma_workers`
 - Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
 
 ---
@@ -817,8 +819,14 @@ Passo 5:  SupervisorContexto.run()
           → Executa AgenteContextoOrcamentario
 Passo 6:  Comunicação lateral: Contexto → Analítico (contexto orçamentário)
 Passo 7:  SupervisorAnalitico.run()
-          → Cruza dados, executa correlação, anomalias, TextSynthesizer
-Passo 8:  Persiste métricas para 8 agentes + 3 supervisores
+          → Cruza dados, executa correlação, anomalias
+          → Marca _bdi_end_time (fim da parte BDI)
+          → TextSynthesizer (streaming LLM)
+Passo 8:  Coordenador usa _bdi_end_time para medir supervisor analítico
+          sem incluir tempo do sintetizador/LLM
+Passo 9:  *** Captura wall-clock (subtrai tempo do sintetizador) ***
+Passo 10: Persiste métricas para agentes + 3 supervisores
+          (exclui sintetizador do breakdown — é serviço LLM, não agente BDI)
 ```
 
 **Características:**

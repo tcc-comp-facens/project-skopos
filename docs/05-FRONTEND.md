@@ -107,7 +107,7 @@ Formulário de entrada (renderizado dentro de `UserTab`, sempre visível):
 
 | Campo | Tipo | Default | Descrição |
 |-------|------|---------|-----------|
-| `dateFrom` | number input | 2019 | Ano de início |
+| `dateFrom` | number input | 2018 | Ano de início |
 | `dateTo` | number input | 2021 | Ano de fim |
 | `dengue` | toggle button | ativo | SINAN-DENG — Dengue |
 | `covid` | toggle button | ativo | SINAN-INFL — COVID-19 |

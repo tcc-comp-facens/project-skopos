@@ -38,7 +38,7 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS e registra o
 **Request body:**
 ```json
 {
-  "dateFrom": 2019,
+  "dateFrom": 2018,
   "dateTo": 2023,
   "healthParams": {
     "dengue": true,
@@ -54,7 +54,7 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS e registra o
 
 | Campo | Tipo | Default | Descrição |
 |-------|------|---------|-----------|
-| `dateFrom` | `int` | `2019` | Ano inicial do período |
+| `dateFrom` | `int` | `2018` | Ano inicial do período |
 | `dateTo` | `int` | `2021` | Ano final do período |
 | `healthParams` | `object` | — | Parâmetros de saúde (pelo menos um `true`) |
 | `useLlm` | `bool` | `true` | Se `true`, usa LLM para síntese textual; se `false`, gera texto estruturado (fallback) |
@@ -86,6 +86,9 @@ Computa métricas de qualidade em três eixos após ambas as topologias completa
 
 **Query parameters:**
 - `use_llm_judge` (bool, default `false`) — habilita avaliação Q2+ via LLM-as-Judge (consome 1 chamada LLM extra por topologia)
+
+**Comportamento:**
+- Usa o tempo real (wall-clock) de cada topologia (`star_wall_clock_ms`, `hier_wall_clock_ms`) armazenado em `active_results` para o cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes — consistente com o cálculo feito via WebSocket.
 
 **Cache:**
 - Resultado cacheado em `active_results` para requests subsequentes sem `use_llm_judge`
@@ -243,6 +246,17 @@ mc.persist(neo4j_client, analysis_id, "star")
 ```
 
 Também suporta context manager: `with MetricsCollector(...) as mc:`
+
+### Wall-clock e exclusão do sintetizador
+
+Ambas as topologias excluem o tempo do `TextSynthesizer` (chamada LLM) do `totalExecutionTimeMs` reportado no evento `metric`, pois esse tempo depende da disponibilidade e latência da API Groq — não reflete a eficiência da arquitetura multiagente em si.
+
+| Topologia | Estratégia |
+|-----------|-----------|
+| **Estrela** | Captura `_orch_end` *antes* de iniciar o sintetizador. O wall-clock mede apenas o pipeline BDI (domínio → cruzamento → contexto → correlação → anomalias). |
+| **Hierárquica** | Captura `_coord_end` após todo o pipeline (incluindo sintetizador), e subtrai `sint_time_ms` extraído dos collectors do `SupervisorAnalitico` (busca `agentType == "sintetizador"`). |
+
+Isso garante que a comparação de eficiência entre topologias reflita apenas a orquestração e processamento de dados, não a variabilidade da API LLM.
 
 ### StreamingAdapter (`backend/core/streaming_adapter.py`)
 
@@ -660,7 +674,7 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 
 ### Função Agregadora
 
-`compute_all_quality_metrics()` calcula todas as métricas de uma vez e retorna dict organizado por eixo, pronto para envio via WebSocket. Parâmetros fixos: estrela = 8 agentes, hierárquica = 11 agentes (8 + 3 supervisores). Aceita `use_llm` (default `True`) que, quando `False`, desabilita a avaliação Q2+ (LLM-as-Judge) independente de `use_llm_judge`, pois não faz sentido avaliar fidelidade semântica de texto gerado pelo fallback estruturado.
+`compute_all_quality_metrics()` calcula todas as métricas de uma vez e retorna dict organizado por eixo, pronto para envio via WebSocket. Parâmetros fixos: estrela = 8 agentes, hierárquica = 11 agentes (8 + 3 supervisores). Aceita `use_llm` (default `True`) que, quando `False`, desabilita a avaliação Q2+ (LLM-as-Judge) independente de `use_llm_judge`, pois não faz sentido avaliar fidelidade semântica de texto gerado pelo fallback estruturado. Aceita `star_wall_clock_ms` e `hier_wall_clock_ms` (default `0`) para usar o tempo real (wall-clock) percebido pelo usuário no cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes.
 
 ### Resumo de Valores-Alvo
 
@@ -687,7 +701,7 @@ Gerado após ambas as topologias completarem, consolida todas as métricas em te
 1. **Eficiência Operacional** — tempo total, overhead de coordenação, latency breakdown por fase
 2. **Qualidade da Resposta** — consistência determinística, fidelidade, completude e qualidade estrutural por topologia
 3. **Resiliência** — cobertura de resultados parciais por topologia
-4. **Conclusão** — vencedor por eixo (eficiência, qualidade, consistência) e veredicto geral
+4. **Conclusão** — vencedor por eixo (qualidade, eficiência, consistência) e veredicto geral. Prioridade: qualidade (faithfulness) > eficiência. A topologia com melhor fidelidade vence; em caso de empate, eficiência é usada como desempate.
 
 O relatório é transmitido via WebSocket em chunks de 80 chars com `architecture: "both"`.
 

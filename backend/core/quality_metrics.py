@@ -552,6 +552,8 @@ def compute_all_quality_metrics(
     hier_agent_metrics: list[dict],
     use_llm_judge: bool = False,
     use_llm: bool = True,
+    star_wall_clock_ms: float = 0,
+    hier_wall_clock_ms: float = 0,
 ) -> dict[str, Any]:
     """Calcula todas as métricas de qualidade e eficiência.
 
@@ -565,6 +567,8 @@ def compute_all_quality_metrics(
         hier_agent_metrics: Métricas por agente da hierárquica.
         use_llm_judge: Se True, também executa avaliação via LLM.
         use_llm: Se False, LLM Judge é desabilitado independente de use_llm_judge.
+        star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
+        hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
 
     Returns:
         Dict com todas as métricas organizadas por eixo.
@@ -572,18 +576,27 @@ def compute_all_quality_metrics(
     metrics: dict[str, Any] = {}
 
     # --- A. Eficiência ---
+    star_breakdown = compute_latency_breakdown(star_agent_metrics)
+    hier_breakdown = compute_latency_breakdown(hier_agent_metrics)
+
+    # Usa wall-clock real se disponível (evita dupla contagem de supervisores)
+    if star_wall_clock_ms > 0:
+        star_breakdown["total_ms"] = round(star_wall_clock_ms, 2)
+    if hier_wall_clock_ms > 0:
+        hier_breakdown["total_ms"] = round(hier_wall_clock_ms, 2)
+
     metrics["efficiency"] = {
         "star": {
             "coordination_overhead": compute_coordination_overhead(
                 star_agent_metrics
             ),
-            "latency_breakdown": compute_latency_breakdown(star_agent_metrics),
+            "latency_breakdown": star_breakdown,
         },
         "hierarchical": {
             "coordination_overhead": compute_coordination_overhead(
                 hier_agent_metrics
             ),
-            "latency_breakdown": compute_latency_breakdown(hier_agent_metrics),
+            "latency_breakdown": hier_breakdown,
         },
     }
 
@@ -670,6 +683,8 @@ def generate_comparative_report(
     data_coverage: dict[str, Any] | None = None,
     star_wall_clock_ms: float = 0,
     hier_wall_clock_ms: float = 0,
+    star_result: dict[str, Any] | None = None,
+    hier_result: dict[str, Any] | None = None,
 ) -> str:
     """Gera relatório textual comparativo entre as duas topologias.
 
@@ -684,6 +699,8 @@ def generate_comparative_report(
         data_coverage: Dict com cobertura de dados e gaps detectados.
         star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
         hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
+        star_result: Resultado completo da topologia estrela (correlações, anomalias).
+        hier_result: Resultado completo da topologia hierárquica.
 
     Returns:
         Texto formatado do relatório comparativo.
@@ -751,14 +768,94 @@ def generate_comparative_report(
             sections.append(f"    - {d}")
     sections.append("")
 
+    # Detalhar correlações e anomalias de cada topologia
+    _src = star_result if star_result else {}
+    star_corrs = _src.get("correlacoes", [])
+    star_anoms = _src.get("anomalias", [])
+
+    if star_corrs:
+        sections.append("  Correlações (ambas topologias — idênticas):")
+        for c in star_corrs:
+            sf = c.get("subfuncao", "?")
+            sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
+            tipo = c.get("tipo_indicador", "?")
+            sp = c.get("spearman", 0)
+            cls = c.get("classificacao", "?")
+            n = c.get("n_pontos", "?")
+            sections.append(
+                f"    • {sf_nome} (sf{sf}) × {tipo}: "
+                f"ρ={sp:.4f} ({cls}, n={n})"
+            )
+        sections.append("")
+
+    if star_anoms:
+        # Ordena por ano (mais antigo primeiro)
+        sorted_anoms = sorted(star_anoms, key=lambda a: (a.get("ano", 0), a.get("subfuncao", 0)))
+        sections.append(f"  Anomalias ({len(sorted_anoms)} detectadas):")
+        sections.append("")
+        # Cabeçalho da tabela
+        sections.append(f"    {'Ano':<6}{'Subfunção':<28}{'Indicador':<16}{'Diagnóstico'}")
+        sections.append(f"    {'─'*6}{'─'*28}{'─'*16}{'─'*20}")
+        for a in sorted_anoms:
+            sf = a.get("subfuncao", "?")
+            sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
+            tipo = a.get("tipo_indicador", "?")
+            ano = str(a.get("ano", "?"))
+            tipo_a = a.get("tipo_anomalia", "?")
+            label = "ineficiência" if tipo_a == "alto_gasto_baixo_resultado" else "eficiência"
+            sections.append(
+                f"    {ano:<6}{sf_nome:<28}{tipo:<16}{label}"
+            )
+        sections.append("")
+
     for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
         arch_qual = qual.get(arch_key, {})
-        faith = arch_qual.get("faithfulness", {}).get("score", 0)
-        comp = arch_qual.get("completeness", {}).get("score", 0)
+        faith_data = arch_qual.get("faithfulness", {})
+        comp_data = arch_qual.get("completeness", {})
+        faith = faith_data.get("score", 0)
+        comp = comp_data.get("score", 0)
         sections.append(
             f"  {arch_name}: fidelidade {faith:.0%} | "
             f"completude {comp:.0%}"
         )
+
+        # Detalhar faithfulness (hits/misses)
+        faith_hits = faith_data.get("hits", 0)
+        faith_total = faith_data.get("total_checkpoints", 0)
+        faith_misses = faith_data.get("misses", 0)
+        if faith_total > 0:
+            sections.append(
+                f"    Q2: {faith_hits}/{faith_total} checkpoints verificados"
+            )
+            if faith_misses > 0:
+                details = faith_data.get("details", [])
+                for d in details:
+                    if not d.get("found"):
+                        d_type = d.get("type", "?")
+                        sf = d.get("subfuncao", "?")
+                        tipo = d.get("tipo_indicador", "?")
+                        if d_type == "anomalia":
+                            ano = d.get("ano", "?")
+                            sections.append(
+                                f"      ✗ Anomalia não mencionada: {ano} sf{sf} × {tipo}"
+                            )
+                        else:
+                            sections.append(
+                                f"      ✗ Correlação alta não mencionada: sf{sf} × {tipo}"
+                            )
+
+        # Detalhar completeness
+        comp_details = comp_data.get("details", {})
+        corr_d = comp_details.get("correlacoes", {})
+        anom_d = comp_details.get("anomalias", {})
+        ctx_d = comp_details.get("contexto", {})
+        if comp_details:
+            sections.append(
+                f"    Q3: correlações {corr_d.get('found', 0)}/{corr_d.get('total', 0)} | "
+                f"anomalias {anom_d.get('found', 0)}/{anom_d.get('total', 0)} | "
+                f"contexto {ctx_d.get('found', 0)}/{ctx_d.get('total', 0)}"
+            )
+
     sections.append("")
 
     # ── 3. Resiliência ──
@@ -772,46 +869,52 @@ def generate_comparative_report(
             f"({arch_resil.get('completed', 0)}/{arch_resil.get('total', 0)} componentes)"
         )
         components = arch_resil.get("components", {})
+        present = [k for k, v in components.items() if v]
         missing = [k for k, v in components.items() if not v]
+        if present:
+            sections.append(f"    ✓ {', '.join(present)}")
         if missing:
-            sections.append(f"    Ausentes: {', '.join(missing)}")
+            sections.append(f"    ✗ Ausentes: {', '.join(missing)}")
     sections.append("")
 
     # ── Conclusão ──
+    # Prioridade: qualidade (fidelidade) > eficiência.
+    # A resposta mais confiável é preferida sobre a mais rápida.
     sections.append("━━━ Conclusão ━━━")
     sections.append("")
 
-    star_wins = 0
-    hier_wins = 0
-
-    if star_total < hier_total:
-        star_wins += 1
-        sections.append("  • Eficiência: Estrela")
-    elif hier_total < star_total:
-        hier_wins += 1
-        sections.append("  • Eficiência: Hierárquica")
-    else:
-        sections.append("  • Eficiência: Empate")
-
     star_faith = qual.get("star", {}).get("faithfulness", {}).get("score", 0)
     hier_faith = qual.get("hierarchical", {}).get("faithfulness", {}).get("score", 0)
+
     if star_faith > hier_faith:
-        star_wins += 1
         sections.append("  • Qualidade: Estrela")
     elif hier_faith > star_faith:
-        hier_wins += 1
         sections.append("  • Qualidade: Hierárquica")
     else:
         sections.append("  • Qualidade: Empate")
+
+    if star_total < hier_total:
+        sections.append("  • Eficiência: Estrela")
+    elif hier_total < star_total:
+        sections.append("  • Eficiência: Hierárquica")
+    else:
+        sections.append("  • Eficiência: Empate")
 
     if consistency.get("all_identical"):
         sections.append("  • Consistência: Idêntica")
 
     sections.append("")
-    if star_wins > hier_wins:
+
+    # Decisão final: qualidade tem peso maior que eficiência
+    if star_faith > hier_faith:
         sections.append("  → Topologia Estrela apresentou melhor desempenho geral.")
-    elif hier_wins > star_wins:
+    elif hier_faith > star_faith:
         sections.append("  → Topologia Hierárquica apresentou melhor desempenho geral.")
+    elif star_total < hier_total:
+        # Empate em qualidade — desempata por eficiência
+        sections.append("  → Topologia Estrela apresentou melhor desempenho geral (desempate por eficiência).")
+    elif hier_total < star_total:
+        sections.append("  → Topologia Hierárquica apresentou melhor desempenho geral (desempate por eficiência).")
     else:
         sections.append("  → Ambas as topologias apresentaram desempenho equivalente.")
 

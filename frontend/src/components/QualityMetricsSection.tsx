@@ -97,7 +97,7 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
           Q3: extractNumber(starQual?.completeness) ?? 0,
         },
         resilience: {
-          R1: extractNumber(starRes?.partial_result_coverage) ?? 0,
+          R1: extractNumber(starRes) ?? 0,
         },
       },
       hierarchical: {
@@ -111,7 +111,7 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
           Q3: extractNumber(hierQual?.completeness) ?? 0,
         },
         resilience: {
-          R1: extractNumber(hierRes?.partial_result_coverage) ?? 0,
+          R1: extractNumber(hierRes) ?? 0,
         },
       },
     };

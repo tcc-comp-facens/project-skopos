@@ -19,14 +19,21 @@ export function parseWinner(report: string): WinnerArchitecture {
   if (!report) return null;
 
   const lines = report.split('\n');
+  // Busca a ÚLTIMA linha com "→" — é a conclusão final do relatório.
+  // Linhas anteriores com "→" são comparações parciais (ex: "→ Estrela foi 50% mais rápida").
+  let lastArrow = '';
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith('→')) {
-      const lower = trimmed.toLowerCase();
-      if (lower.includes('estrela')) return 'star';
-      if (lower.includes('hierárquica') || lower.includes('hierarquica')) {
-        return 'hierarchical';
-      }
+      lastArrow = trimmed;
+    }
+  }
+
+  if (lastArrow) {
+    const lower = lastArrow.toLowerCase();
+    if (lower.includes('estrela')) return 'star';
+    if (lower.includes('hierárquica') || lower.includes('hierarquica')) {
+      return 'hierarchical';
     }
   }
   return null;

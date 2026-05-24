@@ -209,17 +209,56 @@ O sistema tenta cada variante em ordem até encontrar uma que exista no DataFram
 
 ### Execução local (`backend/run_etl.py`)
 
-Script de conveniência para rodar o pipeline ETL completo fora do Docker. Requer Neo4j rodando e variáveis configuradas em `backend/.env`.
+Script para rodar o pipeline ETL completo **antes** do `docker compose up`. Faz o trabalho pesado (download FTP via PySUS) na máquina local, que tem memória suficiente. Os dados são salvos como cache em `data/datasus/` (parquets) e persistidos no Neo4j.
+
+Quando o container sobe, o `entrypoint.sh` apenas sincroniza os parquets já existentes com o Neo4j — sem download, sem PySUS, sem risco de OOM.
+
+**Detecção automática de ambiente local:**
+O script detecta se `NEO4J_URI` contém o hostname Docker (`neo4j`) e substitui automaticamente por `localhost` para acesso via porta exposta. Isso permite usar o mesmo `.env` tanto no Docker quanto localmente sem edição manual.
+
+**Requisitos:**
+- Neo4j rodando (local ou Docker, porta 7687 acessível)
+- Variáveis em `.env` (`NEO4J_URI=bolt://neo4j:7687` ou `bolt://localhost:7687` — ambos funcionam graças à auto-detecção)
+- Dependências instaladas (`pip install -r requirements.txt`)
+- Memória suficiente para downloads PySUS (~1-2GB para SP inteiro)
 
 **Etapas executadas:**
 1. Verifica conexão com Neo4j
-2. Carrega todas as planilhas SIOPS (`.xls`/`.xlsx` em `backend/data/`)
-3. Carrega DataSUS (download ou cache)
-4. Executa seed de fallback
+2. Detecta anos disponíveis via `detect_siops_years()`
+3. Carrega todas as planilhas SIOPS (`.xls`/`.xlsx` em `backend/data/`)
+4. Carrega DataSUS (download FTP ou cache-only, conforme flags)
+5. Executa seed de fallback (COVID)
 
-**Comando:**
+**Flags:**
+
+| Flag | Descrição |
+|------|-----------|
+| `--skip-download` | Pula downloads FTP, usa apenas cache existente (chama `load_from_cache`) |
+| `--year-from YYYY` | Ano inicial (default: detecta dos arquivos SIOPS) |
+| `--year-to YYYY` | Ano final (default: detecta dos arquivos SIOPS) |
+
+**Fluxo recomendado:**
 ```bash
+# 1. Sobe só o Neo4j
+docker compose up neo4j -d
+
+# 2. ETL pesado local (download + persistência)
 cd backend && python run_etl.py
+
+# 3. Sobe tudo (backend lê do cache, sem download)
+docker compose up --build
+```
+
+**Variações de uso:**
+```bash
+# Sem downloads (usa apenas cache existente)
+cd backend && python run_etl.py --skip-download
+
+# Com intervalo de anos específico
+cd backend && python run_etl.py --year-from 2019 --year-to 2023
+
+# Combinando flags
+cd backend && python run_etl.py --skip-download --year-from 2020 --year-to 2022
 ```
 
 ### Execução automática (Docker)
@@ -260,7 +299,9 @@ python -m etl.siops_loader data/PlanilhaDetalhada.xls
 
 ### DataSUS Loader (`backend/etl/datasus_loader.py`)
 
-**Entrada:** Download automático via PySUS ou cache local
+**Dois modos de operação:**
+1. **cache-only** (padrão no Docker): lê apenas parquets já existentes em `data/datasus/` ou `datasus_cache/`. Zero risco de OOM — não importa PySUS nem acessa rede.
+2. **download** (manual, fora do Docker): baixa dados via PySUS do FTP, filtra Sorocaba, salva cache local e persiste no Neo4j.
 
 **Compatibilidade PySUS:** O loader utiliza exclusivamente a API do PySUS 2.x (`pysus.sinan()`, `pysus.sim()`, `pysus.sih()`, `pysus.pni()`). Não há fallback para a API legacy.
 
@@ -269,14 +310,23 @@ python -m etl.siops_loader data/PlanilhaDetalhada.xls
 2. Cache global: `datasus_cache/{sistema}_{tipo}_{ano}.parquet` (pré-baixado por `download_pysus.py`)
 3. Download FTP: via biblioteca PySUS (último recurso)
 
-**Processo por sistema:**
+**Estrutura interna:**
+
+A função `load()` itera sobre uma lista declarativa de indicadores `(sistema, tipo, download_fn)`, processando cada combinação sistema/tipo/ano em um loop unificado. Helpers extraídos:
+- `_load_or_download(sistema, tipo, year, has_siops, download_fn)` — resolve cache vs download FTP
+- `_persist_one(neo4j_client, sistema, tipo, year, valor)` — persistência unitária no Neo4j
+
+**Processo por indicador/ano:**
 1. Verifica se cache local ou global existe
-2. Se não: baixa via PySUS do FTP DataSUS
+2. Se não: baixa via PySUS do FTP DataSUS (funções `_download_sinan`, `_download_sim`, `_download_sih`, `_download_pni`)
 3. Lê resultado (ParquetSet, lista de paths, ou path único)
 4. Identifica coluna de município (tenta múltiplas variantes)
 5. Filtra para Sorocaba (IBGE 355220, com tratamento de zeros à esquerda)
 6. Salva cache local como Parquet
-7. Conta registros e persiste como `IndicadorDataSUS` via MERGE
+7. Persiste imediatamente como `IndicadorDataSUS` via `_persist_one()` (persistência incremental)
+8. Libera DataFrame da memória (`del df` + `gc.collect()`) antes de processar o próximo indicador/ano
+
+**Persistência incremental:** Cada indicador é salvo no Neo4j imediatamente após ser processado, em vez de acumular todos os registros e persistir em batch ao final. Isso evita perda de dados caso o processo seja interrompido (ex: OOM kill durante download de arquivos grandes do SIH).
 
 **Sistemas baixados:**
 - SINAN dengue (`disease="DENG"`)
@@ -285,9 +335,13 @@ python -m etl.siops_loader data/PlanilhaDetalhada.xls
 - SIM mortalidade (`groups="CID10"`, `states="SP"`)
 - SIH internações (`states="SP"`, `groups="RD"`, `months=1-12`)
 
-**Comando:**
+**Comandos:**
 ```bash
-python -m etl.datasus_loader 2019 2023
+# Modo cache-only (startup Docker / entrypoint):
+python -m etl.datasus_loader
+
+# Modo download (manual, requer memória suficiente):
+python -m etl.datasus_loader --download [year_from] [year_to]
 ```
 
 ### Download Direto FTP (`download_pysus.py`)

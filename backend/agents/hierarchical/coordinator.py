@@ -230,7 +230,12 @@ class CoordenadorGeral(AgenteBDI):
                 ws_queue=ws_queue,
                 use_llm=params.get("use_llm", True),
             )
-            mc_analitico.stop()
+            # Stop usando o timestamp BDI (exclui tempo do sintetizador/LLM)
+            bdi_end = getattr(sup_analitico, "_bdi_end_time", None)
+            if bdi_end and mc_analitico._start_time:
+                mc_analitico._end_time = bdi_end
+            else:
+                mc_analitico.stop()
             result.update(analitico_data)
             logger.info(
                 "CoordenadorGeral %s: SupervisorAnalitico completed — %d correlacoes, %d anomalias",
@@ -306,6 +311,9 @@ class CoordenadorGeral(AgenteBDI):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     m = agent_mc.collect()
+                    # Exclui sintetizador — é um serviço LLM, não agente BDI
+                    if m.get("agentType") == "sintetizador":
+                        continue
                     agent_metrics.append({
                         "agentName": m["agentType"],
                         "executionTimeMs": m["executionTimeMs"],
@@ -315,9 +323,22 @@ class CoordenadorGeral(AgenteBDI):
                 except Exception:
                     pass
 
-        # Wall-clock total time (what the user perceives)
+        # Wall-clock total time — exclui tempo do sintetizador (LLM)
+        # porque depende da disponibilidade da API Groq, não da arquitetura.
         _coord_end = _time.time()
-        wall_clock_ms = round((_coord_end - _coord_start) * 1000, 2)
+        wall_clock_ms_raw = round((_coord_end - _coord_start) * 1000, 2)
+
+        # Subtrair tempo do sintetizador (último collector do SupervisorAnalitico)
+        sint_time_ms = 0.0
+        for agent_mc in getattr(sup_analitico, "_collectors", []):
+            try:
+                m = agent_mc.collect()
+                if m.get("agentType") == "sintetizador":
+                    sint_time_ms = m.get("executionTimeMs", 0)
+            except Exception:
+                pass
+
+        wall_clock_ms = round(max(0, wall_clock_ms_raw - sint_time_ms), 2)
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({

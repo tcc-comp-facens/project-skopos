@@ -198,6 +198,8 @@ async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = Non
         hier_agent_metrics=hier_agent_metrics,
         use_llm_judge=use_llm_judge,
         use_llm=use_llm,
+        star_wall_clock_ms=results.get("star_wall_clock_ms", 0),
+        hier_wall_clock_ms=results.get("hier_wall_clock_ms", 0),
     )
 
     active_results[analysis_id]["quality_metrics"] = quality
@@ -231,6 +233,8 @@ async def get_comparative_report(analysis_id: str):
         quality=quality,
         star_agent_metrics=[],
         hier_agent_metrics=[],
+        star_result=star_result,
+        hier_result=hier_result,
     )
     active_results[analysis_id]["comparative_report"] = report
     return {"report": report}

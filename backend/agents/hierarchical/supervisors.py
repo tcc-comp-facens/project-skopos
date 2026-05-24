@@ -400,6 +400,10 @@ class SupervisorAnalitico(AgenteBDI):
             )
         self._collectors.append(mc_anom)
 
+        # Marca fim da parte BDI (antes do sintetizador/LLM)
+        import time as _time
+        self._bdi_end_time = _time.time()
+
         # -- 5. Sintetizador --
         texto_analise: str = ""
         mc_sint = MetricsCollector(sint_id, "sintetizador")

@@ -18,8 +18,8 @@ class HealthParams(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
-    dateFrom: int = 2019
-    dateTo: int = 2021
+    dateFrom: int = 2018
+    dateTo: int = 2022
     healthParams: HealthParams
     useLlm: bool = True
     useLlmJudge: bool = False

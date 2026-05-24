@@ -4,12 +4,17 @@ ETL — Ingestão de dados DataSUS para Sorocaba (IBGE 355220).
 Baixa dados via PySUS, salva em data/datasus/ como cache local.
 Na próxima execução, lê do cache se já existir.
 
+Persistência incremental: cada indicador é salvo no Neo4j imediatamente
+após ser processado, evitando perda de dados caso o processo seja
+interrompido (ex: OOM kill no Docker).
+
 Uso:
     python -m etl.datasus_loader [year_from] [year_to]
 
 Sem argumentos, auto-detecta anos dos arquivos SIOPS em data/.
 """
 
+import gc
 import sys
 import uuid
 import logging
@@ -83,30 +88,16 @@ def _save_cache(df: pd.DataFrame, sistema: str, tipo: str, year: int) -> None:
 
 
 def _load_cache(sistema: str, tipo: str, year: int) -> pd.DataFrame:
-    # Tenta cache local primeiro, depois cache global (pysus/)
+    """Carrega DataFrame do cache local ou global.
+
+    Prioridade: cache local → cache global.
+    """
     path = _cache_path(sistema, tipo, year)
     if not path.exists():
         path = _global_cache_path(sistema, tipo, year)
     df = pd.read_parquet(path)
     logger.info("Cache carregado: %s (%d linhas)", path.name, len(df))
     return df
-
-
-def _persist_batch(session, records: list[dict]) -> int:
-    imported_at = datetime.now(timezone.utc).isoformat()
-    count = 0
-    for rec in records:
-        session.run(
-            _MERGE_QUERY,
-            id=str(uuid.uuid4()),
-            sistema=rec["sistema"],
-            tipo=rec["tipo"],
-            ano=rec["ano"],
-            valor=rec["valor"],
-            importedAt=imported_at,
-        )
-        count += 1
-    return count
 
 
 # ---------------------------------------------------------------------------
@@ -206,36 +197,45 @@ def _download_sim(year: int) -> Optional[pd.DataFrame]:
 
 
 def _download_sih(year: int) -> Optional[pd.DataFrame]:
-    """Baixa SIH via PySUS, filtra Sorocaba e cacheia."""
+    """Baixa SIH via PySUS, filtra Sorocaba mês a mês e cacheia.
+
+    Estratégia de baixo consumo de memória: cada mês é baixado, filtrado
+    para Sorocaba e descartado antes de baixar o próximo. Apenas os registros
+    de Sorocaba (~2-3k por mês) são mantidos em memória.
+    """
     if _has_cache("sih", "internacoes", year) or _has_global_cache("sih", "internacoes", year):
         return _load_cache("sih", "internacoes", year)
 
     try:
-        months = list(range(1, 13))
         import pysus
-        logger.info("SIH: baixando ano %d do FTP...", year)
-        # PySUS 2.x: sih(state, year, month) — baixa mês a mês e concatena
-        frames = []
-        for m in months:
+        logger.info("SIH: baixando ano %d do FTP (mês a mês, filtro incremental)...", year)
+
+        sorocaba_frames: list[pd.DataFrame] = []
+        for m in range(1, 13):
             try:
                 r = pysus.sih("SP", year, m)
                 df_m = _read_pysus_result(r)
-                frames.append(df_m)
-            except Exception:
-                pass
-        if not frames:
-            raise RuntimeError(f"SIH {year}: nenhum mês baixado com sucesso")
-        import pandas as pd
-        result = pd.concat(frames, ignore_index=True)
 
-        df = _read_pysus_result(result)
+                # Filtra Sorocaba IMEDIATAMENTE — descarta SP inteiro
+                mun_col = _find_mun_col(list(df_m.columns), _SIH_MUN_COLS)
+                if mun_col is not None:
+                    filtered = _filter_sorocaba(df_m, mun_col)
+                    if len(filtered) > 0:
+                        sorocaba_frames.append(filtered)
+                        logger.debug("SIH %d/%02d: %d registros Sorocaba", year, m, len(filtered))
 
-        mun_col = _find_mun_col(list(df.columns), _SIH_MUN_COLS)
-        if mun_col is None:
-            logger.warning("SIH %d: coluna municipio nao encontrada", year)
+                # Libera o DataFrame bruto de SP (~1M+ linhas) imediatamente
+                del df_m
+                gc.collect()
+
+            except Exception as exc:
+                logger.debug("SIH %d/%02d: falha — %s", year, m, exc)
+
+        if not sorocaba_frames:
+            logger.warning("SIH %d: nenhum registro de Sorocaba encontrado", year)
             return None
 
-        sorocaba = _filter_sorocaba(df, mun_col)
+        sorocaba = pd.concat(sorocaba_frames, ignore_index=True)
         _save_cache(sorocaba, "sih", "internacoes", year)
         return sorocaba
 
@@ -275,86 +275,180 @@ def _download_pni(year: int) -> Optional[pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 
+def _persist_one(neo4j_client, sistema: str, tipo: str, year: int, valor: float) -> None:
+    """Persiste um único indicador no Neo4j imediatamente.
+
+    Estratégia de persistência incremental: cada registro é salvo assim que
+    processado, garantindo que dados não sejam perdidos em caso de OOM kill.
+    """
+    imported_at = datetime.now(timezone.utc).isoformat()
+    with neo4j_client._driver.session() as session:
+        session.run(
+            _MERGE_QUERY,
+            id=str(uuid.uuid4()),
+            sistema=sistema,
+            tipo=tipo,
+            ano=year,
+            valor=valor,
+            importedAt=imported_at,
+        )
+
+
 def load(neo4j_client, year_from: int = 2018, year_to: int = 2022,
          siops_years: Optional[set[int]] = None) -> dict:
     """Baixa (ou lê do cache) dados DataSUS e persiste no Neo4j.
 
     Se siops_years for fornecido, só baixa dados novos do FTP para esses anos.
     Dados já em cache são carregados independentemente.
+
+    Persistência incremental: cada indicador é salvo no Neo4j imediatamente
+    após ser processado, evitando perda de dados caso o processo seja
+    interrompido (ex: OOM kill no Docker).
     """
     logger.info("DataSUS ETL: Sorocaba (%s), anos %d-%d.", MUNICIPIO_SOROCABA, year_from, year_to)
     if siops_years:
         logger.info("DataSUS ETL: anos SIOPS disponíveis = %s (só baixa novos para estes)", sorted(siops_years))
 
-    records: list[dict] = []
+    counts: dict[str, int] = {}
+
+    # Definição dos indicadores a processar: (sistema, tipo, download_fn_factory)
+    # download_fn_factory recebe (year) e retorna DataFrame ou None
+    indicators = [
+        ("sinan", "dengue", lambda y: _download_sinan("DENG", "dengue", y)),
+        ("sinan", "covid", lambda y: _download_sinan("INFL", "covid", y)),
+        ("si_pni", "vacinacao", _download_pni),
+        ("sim", "mortalidade", _download_sim),
+        ("sih", "internacoes", _download_sih),
+    ]
 
     for year in range(year_from, year_to + 1):
-        # Se não tem planilha SIOPS para este ano E não tem cache, pula
         has_siops = siops_years is None or year in siops_years
 
-        # Dengue
-        if has_siops or _has_cache("sinan", "dengue", year) or _has_global_cache("sinan", "dengue", year):
-            df = _download_sinan("DENG", "dengue", year) if has_siops else _load_cache("sinan", "dengue", year) if (_has_cache("sinan", "dengue", year) or _has_global_cache("sinan", "dengue", year)) else None
-        else:
-            df = None
-        if df is not None and len(df) > 0:
-            records.append({"sistema": "sinan", "tipo": "dengue", "ano": year,
-                            "valor": float(len(df)), "fonte": "datasus"})
+        for sistema, tipo, download_fn in indicators:
+            has_local = _has_cache(sistema, tipo, year)
+            has_global = _has_global_cache(sistema, tipo, year)
 
-        # COVID
-        if has_siops or _has_cache("sinan", "covid", year) or _has_global_cache("sinan", "covid", year):
-            df = _download_sinan("INFL", "covid", year) if has_siops else _load_cache("sinan", "covid", year) if (_has_cache("sinan", "covid", year) or _has_global_cache("sinan", "covid", year)) else None
-        else:
-            df = None
-        if df is not None and len(df) > 0:
-            records.append({"sistema": "sinan", "tipo": "covid", "ano": year,
-                            "valor": float(len(df)), "fonte": "datasus"})
+            # Pula se não tem SIOPS para este ano E não tem cache
+            if not has_siops and not has_local and not has_global:
+                continue
 
-        # Vacinação
-        if has_siops or _has_cache("si_pni", "vacinacao", year) or _has_global_cache("si_pni", "vacinacao", year):
-            df = _download_pni(year) if has_siops else _load_cache("si_pni", "vacinacao", year) if (_has_cache("si_pni", "vacinacao", year) or _has_global_cache("si_pni", "vacinacao", year)) else None
-        else:
-            df = None
-        if df is not None and len(df) > 0:
-            records.append({"sistema": "si_pni", "tipo": "vacinacao", "ano": year,
-                            "valor": float(len(df)), "fonte": "datasus"})
+            # Carrega do cache ou baixa do FTP
+            try:
+                if has_local or has_global:
+                    df = _load_cache(sistema, tipo, year)
+                elif has_siops:
+                    df = download_fn(year)
+                else:
+                    df = None
+            except Exception as exc:
+                logger.warning("%s/%s/%d: falha ao carregar — %s", sistema, tipo, year, exc)
+                df = None
 
-        # Mortalidade
-        if has_siops or _has_cache("sim", "mortalidade", year) or _has_global_cache("sim", "mortalidade", year):
-            df = _download_sim(year) if has_siops else _load_cache("sim", "mortalidade", year) if (_has_cache("sim", "mortalidade", year) or _has_global_cache("sim", "mortalidade", year)) else None
-        else:
-            df = None
-        if df is not None and len(df) > 0:
-            records.append({"sistema": "sim", "tipo": "mortalidade", "ano": year,
-                            "valor": float(len(df)), "fonte": "datasus"})
+            if df is not None and len(df) > 0:
+                valor = float(len(df))
+                _persist_one(neo4j_client, sistema, tipo, year, valor)
+                counts[sistema] = counts.get(sistema, 0) + 1
+                logger.info("Persistido: %s/%s/%d = %.0f", sistema, tipo, year, valor)
 
-        # Internações
-        if has_siops or _has_cache("sih", "internacoes", year) or _has_global_cache("sih", "internacoes", year):
-            df = _download_sih(year) if has_siops else _load_cache("sih", "internacoes", year) if (_has_cache("sih", "internacoes", year) or _has_global_cache("sih", "internacoes", year)) else None
-        else:
-            df = None
-        if df is not None and len(df) > 0:
-            records.append({"sistema": "sih", "tipo": "internacoes", "ano": year,
-                            "valor": float(len(df)), "fonte": "datasus"})
+            # Libera memória imediatamente — crítico para evitar OOM em containers
+            del df
+            gc.collect()
 
-    if not records:
+    if not counts:
         logger.warning("DataSUS ETL: nenhum registro obtido.")
         return {"sinan": 0, "si_pni": 0, "sim": 0, "sih": 0}
 
-    counts: dict[str, int] = {}
-    with neo4j_client._driver.session() as session:
-        _persist_batch(session, records)
-    for rec in records:
-        counts[rec["sistema"]] = counts.get(rec["sistema"], 0) + 1
-
     logger.info("DataSUS ETL concluido: %s", counts)
+    return counts
+
+
+def load_from_cache(neo4j_client, year_from: int = 2018, year_to: int = 2022) -> dict:
+    """Persiste indicadores DataSUS no Neo4j usando APENAS cache local.
+
+    Não importa PySUS, não acessa rede, não faz download FTP.
+    Consome memória mínima (~poucos MB por parquet de Sorocaba).
+    Seguro para rodar dentro de containers com memória limitada.
+
+    Varre todos os parquets em CACHE_DIR e GLOBAL_CACHE_DIR, filtra pelo
+    range de anos solicitado, e persiste no Neo4j os que ainda não existem.
+
+    Args:
+        neo4j_client: Cliente Neo4j conectado.
+        year_from: Ano inicial do período.
+        year_to: Ano final do período.
+
+    Returns:
+        Dicionário com contagem por sistema (ex: {"sinan": 3, "si_pni": 2}).
+    """
+    logger.info(
+        "DataSUS cache-only: sincronizando parquets %d-%d com Neo4j.",
+        year_from, year_to,
+    )
+
+    # Descobre o que já existe no Neo4j para evitar writes desnecessários
+    with neo4j_client._driver.session() as session:
+        result = session.run(
+            "MATCH (i:IndicadorDataSUS) "
+            "RETURN i.sistema AS s, i.tipo AS t, i.ano AS a"
+        )
+        existing = {(rec["s"], rec["t"], rec["a"]) for rec in result}
+
+    counts: dict[str, int] = {}
+
+    # Varre ambos os diretórios de cache
+    cache_dirs = [CACHE_DIR, GLOBAL_CACHE_DIR]
+    seen: set[tuple[str, str, int]] = set()
+
+    for cache_dir in cache_dirs:
+        if not cache_dir.exists():
+            continue
+        for path in sorted(cache_dir.glob("*.parquet")):
+            # Parse nome: sistema_tipo_year.parquet
+            parts = path.stem.split("_")
+            if len(parts) < 3:
+                continue
+            try:
+                year = int(parts[-1])
+            except ValueError:
+                continue
+            tipo = parts[-2]
+            sistema = "_".join(parts[:-2])
+
+            # Filtra por range de anos
+            if year < year_from or year > year_to:
+                continue
+
+            key = (sistema, tipo, year)
+            # Pula se já existe no Neo4j ou já processado nesta execução
+            if key in existing or key in seen:
+                continue
+            seen.add(key)
+
+            try:
+                df = pd.read_parquet(path)
+                if len(df) > 0:
+                    _persist_one(neo4j_client, sistema, tipo, year, float(len(df)))
+                    counts[sistema] = counts.get(sistema, 0) + 1
+                    logger.info("Sincronizado: %s/%s/%d = %d", sistema, tipo, year, len(df))
+                del df
+                gc.collect()
+            except Exception as exc:
+                logger.warning("Cache %s: falha — %s", path.name, exc)
+
+    if not counts:
+        logger.info("DataSUS cache-only: Neo4j já possui todos os indicadores do cache.")
+        return {"sinan": 0, "si_pni": 0, "sim": 0, "sih": 0}
+
+    logger.info("DataSUS cache-only concluido: %s", counts)
     return counts
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    args = sys.argv[1:]
+    # Parse args: --download habilita FTP, sem flag usa cache-only
+    download_mode = "--download" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--download"]
 
     from etl.detect_years import detect_siops_years
     siops_years_list = detect_siops_years()
@@ -383,7 +477,13 @@ if __name__ == "__main__":
         user=os.environ["NEO4J_USER"],
         password=os.environ["NEO4J_PASSWORD"],
     ) as client:
-        result = load(client, year_from=year_from, year_to=year_to,
-                       siops_years=siops_years_set)
+        if download_mode:
+            print("Modo: DOWNLOAD (FTP + cache + Neo4j)")
+            result = load(client, year_from=year_from, year_to=year_to,
+                          siops_years=siops_years_set)
+        else:
+            print("Modo: CACHE-ONLY (sem download, sem PySUS)")
+            result = load_from_cache(client, year_from=year_from, year_to=year_to)
+
         total = sum(result.values())
         print(f"Concluido: {total} registros. Detalhes: {result}")
