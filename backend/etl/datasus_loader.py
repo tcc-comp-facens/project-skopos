@@ -275,6 +275,39 @@ def _download_pni(year: int) -> Optional[pd.DataFrame]:
 # ---------------------------------------------------------------------------
 
 
+def _compute_valor(df: pd.DataFrame, sistema: str) -> float:
+    """Calcula o valor do indicador a partir do DataFrame.
+
+    Para SI-PNI (vacinação), soma a coluna QT_DOSE quando disponível,
+    pois cada linha pode representar um agregado (imuno × mês × faixa etária)
+    e não uma dose individual. Para os demais sistemas, conta linhas
+    (cada linha = 1 notificação/internação/óbito).
+
+    Args:
+        df: DataFrame filtrado para Sorocaba.
+        sistema: Identificador do sistema (sinan, si_pni, sim, sih).
+
+    Returns:
+        Valor numérico do indicador (doses aplicadas ou contagem de registros).
+    """
+    if sistema == "si_pni" and "QT_DOSE" in df.columns:
+        try:
+            # QT_DOSE pode vir como string com separadores brasileiros
+            doses = (
+                df["QT_DOSE"]
+                .astype(str)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+                .str.strip()
+            )
+            total = pd.to_numeric(doses, errors="coerce").sum()
+            if total > 0:
+                return float(total)
+        except Exception:
+            pass
+    return float(len(df))
+
+
 def _persist_one(neo4j_client, sistema: str, tipo: str, year: int, valor: float) -> None:
     """Persiste um único indicador no Neo4j imediatamente.
 
@@ -345,7 +378,7 @@ def load(neo4j_client, year_from: int = 2018, year_to: int = 2022,
                 df = None
 
             if df is not None and len(df) > 0:
-                valor = float(len(df))
+                valor = _compute_valor(df, sistema)
                 _persist_one(neo4j_client, sistema, tipo, year, valor)
                 counts[sistema] = counts.get(sistema, 0) + 1
                 logger.info("Persistido: %s/%s/%d = %.0f", sistema, tipo, year, valor)
@@ -427,9 +460,10 @@ def load_from_cache(neo4j_client, year_from: int = 2018, year_to: int = 2022) ->
             try:
                 df = pd.read_parquet(path)
                 if len(df) > 0:
-                    _persist_one(neo4j_client, sistema, tipo, year, float(len(df)))
+                    valor = _compute_valor(df, sistema)
+                    _persist_one(neo4j_client, sistema, tipo, year, valor)
                     counts[sistema] = counts.get(sistema, 0) + 1
-                    logger.info("Sincronizado: %s/%s/%d = %d", sistema, tipo, year, len(df))
+                    logger.info("Sincronizado: %s/%s/%d = %.0f", sistema, tipo, year, valor)
                 del df
                 gc.collect()
             except Exception as exc:

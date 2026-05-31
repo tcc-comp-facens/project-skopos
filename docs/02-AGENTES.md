@@ -827,6 +827,9 @@ Passo 8:  Coordenador usa _bdi_end_time para medir supervisor analítico
 Passo 9:  *** Captura wall-clock (subtrai tempo do sintetizador) ***
 Passo 10: Persiste métricas para agentes + 3 supervisores
           (exclui sintetizador do breakdown — é serviço LLM, não agente BDI)
+          workers_time_ms soma apenas agentes folha (nível 2);
+          supervisores aparecem no breakdown para exibição mas NÃO
+          são somados (evita dupla contagem — seu tempo engloba subordinados)
 ```
 
 **Características:**
@@ -835,6 +838,7 @@ Passo 10: Persiste métricas para agentes + 3 supervisores
 - Mensagens esperadas: ~24+ (agentes + supervisores + comunicação lateral)
 - Métricas coletadas para 11 entidades (8 agentes + 3 supervisores)
 - Supervisores implementam o ciclo BDI por uniformidade de interface, mas `_execute_intention()` é um no-op (marca `completed`). A deliberação é determinística e a execução real ocorre no método `run()` chamado pelo coordenador.
+- Cálculo de overhead: `overhead = wall_clock - soma dos agentes folha (nível 2)`. Supervisores aparecem no breakdown de métricas para exibição, mas NÃO são somados em `workers_time_ms` — seu tempo já engloba o dos subordinados, somá-los causaria dupla contagem. O overhead captura: tempo dos supervisores fora dos subordinados + comunicação lateral + instanciação.
 
 ### Degradação Graciosa
 

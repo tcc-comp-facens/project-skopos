@@ -292,9 +292,15 @@ class CoordenadorGeral(AgenteBDI):
         result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
 
         # -- 11. Send benchmark metrics event (Req 11.2) --
+        # Overhead = wall_clock - soma dos agentes FOLHA (nível 2).
+        # Supervisores NÃO entram em workers_time porque seu tempo já
+        # engloba o dos subordinados — somar ambos causaria dupla contagem.
+        # O overhead captura: tempo dos supervisores fora dos subordinados
+        # + comunicação lateral (receive_from_peer) + instanciação.
         agent_metrics = []
         workers_time_ms = 0.0
-        # Supervisor metrics
+
+        # Supervisor metrics (para exibição, NÃO somados em workers)
         for mc in metrics_collectors:
             try:
                 m = mc.collect()
@@ -303,10 +309,10 @@ class CoordenadorGeral(AgenteBDI):
                     "executionTimeMs": m["executionTimeMs"],
                     "cpuPercent": m["cpuPercent"],
                 })
-                workers_time_ms += m["executionTimeMs"]
             except Exception:
                 pass
-        # Subordinate agent metrics from each supervisor
+
+        # Subordinate agent metrics (agentes folha — somados em workers)
         for supervisor in (sup_dominio, sup_analitico, sup_contexto):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
