@@ -1,26 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { WS_URL } from '../config';
-import type { WSEvent, BenchmarkMetrics, QualityMetrics } from '../types';
+import type { WSEvent, BenchmarkMetrics, QualityMetrics, UseWebSocketState } from '../types';
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-export interface UseWebSocketState {
-  starText: string;
-  hierText: string;
-  starBenchmarks: BenchmarkMetrics | null;
-  hierBenchmarks: BenchmarkMetrics | null;
-  starLoading: boolean;
-  hierLoading: boolean;
-  starError: string | null;
-  hierError: string | null;
-  comparativeReport: string;
-  comparativeLoading: boolean;
-  qualityMetrics: QualityMetrics | null;
-  llmJudgeText: string;
-  llmJudgeLoading: boolean;
-}
+export type { UseWebSocketState };
 
-const INITIAL_STATE: UseWebSocketState = {
+export const INITIAL_STATE: UseWebSocketState = {
   starText: '',
   hierText: '',
   starBenchmarks: null,

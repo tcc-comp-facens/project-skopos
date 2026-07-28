@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router as api_router
 from api.websocket import router as ws_router
+from api.chat_websocket import router as chat_ws_router
 
 # Re-export shared state and models so existing imports from "main" still work.
 # This keeps backward compatibility with tests that do `from main import ...`.
@@ -51,3 +52,4 @@ app.add_middleware(
 # Register routers
 app.include_router(api_router)
 app.include_router(ws_router)
+app.include_router(chat_ws_router)

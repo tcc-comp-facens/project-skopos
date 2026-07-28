@@ -1,27 +1,30 @@
+import { useEffect, useRef, useState } from 'react';
 import { ArchitecturePanel } from './ArchitecturePanel';
 import { LlmControls } from './LlmControls';
 import { QualityMetricsSection } from './QualityMetricsSection';
 import { ComparativeSection } from './ComparativeSection';
-import type { UseWebSocketState } from '../hooks/useWebSocket';
+import { RoundSelector } from './RoundSelector';
+import { INITIAL_STATE } from '../hooks/useWebSocket';
+import type { ChatRound } from '../types';
 
 /**
  * TechTab — aba técnica destinada a avaliadores e pesquisadores do TCC.
- * Exibe os toggles LLM, os dois painéis de arquitetura lado a lado,
- * as métricas de qualidade e o relatório comparativo.
+ * Exibe os toggles LLM, os dois painéis de arquitetura lado a lado, as
+ * métricas de qualidade e o relatório comparativo — agora navegável por
+ * rodada de chat, já que uma sessão pode disparar várias análises.
+ *
+ * A rodada mais recente é selecionada automaticamente assim que começa;
+ * uma seleção manual do avaliador persiste até a próxima rodada começar.
  *
  * Requirements: 5.4, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 7.1, 8.1
  */
 export interface TechTabProps {
-  // Toggles LLM
   useLlm: boolean;
   useLlmJudge: boolean;
   onUseLlmChange: (value: boolean) => void;
   onUseLlmJudgeChange: (value: boolean) => void;
-  // Estado WebSocket completo
-  ws: UseWebSocketState;
-  // Estado de submissão
-  submitting: boolean;
-  apiError: string | null;
+  rounds: ChatRound[];
+  isActiveRoundRunning: boolean;
 }
 
 export function TechTab({
@@ -29,11 +32,25 @@ export function TechTab({
   useLlmJudge,
   onUseLlmChange,
   onUseLlmJudgeChange,
-  ws,
-  submitting,
-  apiError,
+  rounds,
+  isActiveRoundRunning,
 }: TechTabProps): JSX.Element {
-  const isAnalysisRunning = ws.starLoading || ws.hierLoading || ws.comparativeLoading;
+  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null);
+  const prevRoundsLengthRef = useRef(0);
+
+  // Segue automaticamente a rodada mais nova assim que ela começa; uma
+  // seleção manual do avaliador (via RoundSelector) persiste até a
+  // próxima rodada ser criada.
+  useEffect(() => {
+    if (rounds.length > prevRoundsLengthRef.current) {
+      const latest = rounds[rounds.length - 1];
+      setSelectedRoundId(latest.id);
+    }
+    prevRoundsLengthRef.current = rounds.length;
+  }, [rounds]);
+
+  const displayed =
+    rounds.find((r) => r.id === selectedRoundId)?.snapshot ?? INITIAL_STATE;
 
   return (
     <div
@@ -43,22 +60,16 @@ export function TechTab({
       aria-labelledby="tab-tech"
       data-testid="tech-tab"
     >
-      {apiError && (
-        <div className="api-error" data-testid="api-error" role="alert">
-          {apiError}
-        </div>
-      )}
-
-      {submitting && (
-        <div className="submitting" data-testid="submitting-indicator">
-          Enviando...
-        </div>
-      )}
+      <RoundSelector
+        rounds={rounds}
+        selectedRoundId={selectedRoundId}
+        onSelectRound={setSelectedRoundId}
+      />
 
       <LlmControls
         useLlm={useLlm}
         useLlmJudge={useLlmJudge}
-        disabled={isAnalysisRunning}
+        disabled={isActiveRoundRunning}
         onUseLlmChange={onUseLlmChange}
         onUseLlmJudgeChange={onUseLlmJudgeChange}
       />
@@ -66,27 +77,27 @@ export function TechTab({
       <div className="panels-container" data-testid="panels-container">
         <ArchitecturePanel
           title="Hierárquica"
-          text={ws.hierText}
-          benchmarks={ws.hierBenchmarks}
-          isLoading={ws.hierLoading}
-          error={ws.hierError}
+          text={displayed.hierText}
+          benchmarks={displayed.hierBenchmarks}
+          isLoading={displayed.hierLoading}
+          error={displayed.hierError}
         />
         <ArchitecturePanel
           title="Estrela"
-          text={ws.starText}
-          benchmarks={ws.starBenchmarks}
-          isLoading={ws.starLoading}
-          error={ws.starError}
+          text={displayed.starText}
+          benchmarks={displayed.starBenchmarks}
+          isLoading={displayed.starLoading}
+          error={displayed.starError}
         />
       </div>
 
-      <QualityMetricsSection qualityMetrics={ws.qualityMetrics} />
+      <QualityMetricsSection qualityMetrics={displayed.qualityMetrics} />
 
       <ComparativeSection
-        comparativeReport={ws.comparativeReport}
-        comparativeLoading={ws.comparativeLoading}
-        llmJudgeText={ws.llmJudgeText}
-        llmJudgeLoading={ws.llmJudgeLoading}
+        comparativeReport={displayed.comparativeReport}
+        comparativeLoading={displayed.comparativeLoading}
+        llmJudgeText={displayed.llmJudgeText}
+        llmJudgeLoading={displayed.llmJudgeLoading}
       />
     </div>
   );

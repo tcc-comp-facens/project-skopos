@@ -1,43 +1,36 @@
-import { AnalysisControls } from './AnalysisControls';
+import { ChatInterface } from './ChatInterface';
 import { WinnerPanel } from './WinnerPanel';
-import type { AnalysisRequest } from '../types';
+import type { UseWebSocketState, WinnerArchitecture } from '../types';
 
 /**
  * UserTab — aba pública destinada ao público geral e servidores públicos.
- * Exibe os controles de análise e o resultado da arquitetura vencedora.
+ * O chat substitui o formulário AnalysisControls; o resultado da rodada
+ * mais recente continua exibido em destaque via WinnerPanel abaixo da
+ * conversa, para manter a leitura completa e acessível ao público leigo.
  *
- * Requirements: 3.6, 4.1, 4.2, 4.3, 4.5, 10.3, 10.4
+ * Requirements: 3.6, 4.1, 4.2, 4.3, 4.5, 10.3, 10.4 + spec realtime-chat-interface
  */
 export interface UserTabProps {
-  // Estado da análise
-  apiError: string | null;
-  submitting: boolean;
-  // Estado WebSocket (apenas o necessário para a aba usuário)
-  starText: string;
-  hierText: string;
-  starLoading: boolean;
-  hierLoading: boolean;
-  starError: string | null;
-  hierError: string | null;
-  winner: 'star' | 'hierarchical' | null;
-  // Callbacks
-  onSubmit: (request: Omit<AnalysisRequest, 'useLlm' | 'useLlmJudge'>) => void;
+  useLlm: boolean;
+  useLlmJudge: boolean;
+  onAnalysisStarted: (analysisId: string, question: string) => void;
+  activeRoundId: string | null;
+  activeRoundWs: UseWebSocketState | null;
+  winner: WinnerArchitecture;
 }
 
 export function UserTab({
-  apiError,
-  submitting,
-  starText,
-  hierText,
-  starLoading,
-  hierLoading,
-  starError,
-  hierError,
+  useLlm,
+  useLlmJudge,
+  onAnalysisStarted,
+  activeRoundId,
+  activeRoundWs,
   winner,
-  onSubmit,
 }: UserTabProps): JSX.Element {
-  const isLoading = starLoading || hierLoading;
-  const bothFailed = !!(starError && hierError);
+  const isLoading =
+    !!activeRoundWs && (activeRoundWs.starLoading || activeRoundWs.hierLoading);
+  const bothFailed =
+    !!activeRoundWs && !!(activeRoundWs.starError && activeRoundWs.hierError);
 
   return (
     <div
@@ -47,22 +40,14 @@ export function UserTab({
       aria-labelledby="tab-user"
       data-testid="user-tab"
     >
-      {apiError && (
-        <div className="api-error" data-testid="api-error" role="alert">
-          {apiError}
-        </div>
-      )}
+      <ChatInterface
+        useLlm={useLlm}
+        useLlmJudge={useLlmJudge}
+        onAnalysisStarted={onAnalysisStarted}
+        activeRoundId={activeRoundId}
+        activeRoundWs={activeRoundWs}
+      />
 
-      {submitting && (
-        <div className="submitting" data-testid="submitting-indicator">
-          Enviando...
-        </div>
-      )}
-
-      {/* Controles sempre visíveis */}
-      <AnalysisControls onSubmit={onSubmit} />
-
-      {/* Estado de carregamento */}
       {isLoading && (
         <div className="user-tab-loading" data-testid="user-tab-loading">
           <div className="spinner" />
@@ -70,23 +55,21 @@ export function UserTab({
         </div>
       )}
 
-      {/* Resultado vencedor */}
-      {!isLoading && winner !== null && (
+      {!isLoading && activeRoundWs && winner !== null && (
         <WinnerPanel
           winner={winner}
-          starText={starText}
-          hierText={hierText}
-          starError={starError}
-          hierError={hierError}
+          starText={activeRoundWs.starText}
+          hierText={activeRoundWs.hierText}
+          starError={activeRoundWs.starError}
+          hierError={activeRoundWs.hierError}
         />
       )}
 
-      {/* Erro em ambas as arquiteturas */}
       {!isLoading && winner === null && bothFailed && (
         <div className="user-tab-error" data-testid="user-tab-error" role="alert">
           Ocorreu um erro na análise. Por favor, tente novamente.
-          {starError && <div>{starError}</div>}
-          {hierError && <div>{hierError}</div>}
+          {activeRoundWs?.starError && <div>{activeRoundWs.starError}</div>}
+          {activeRoundWs?.hierError && <div>{activeRoundWs.hierError}</div>}
         </div>
       )}
     </div>

@@ -14,11 +14,6 @@ Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 10.4
 from __future__ import annotations
 
 import logging
-import threading
-import uuid
-from datetime import datetime, timezone
-from queue import Queue
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -28,13 +23,8 @@ from api.models import (
     health_params_to_list,
     validate_analysis_params,
 )
-from api.state import (
-    active_queues,
-    active_results,
-    active_threads,
-    get_neo4j_client,
-)
-from api.runners import run_star, run_hierarchical
+from api.dispatch import dispatch_analysis, get_available_year_range
+from api.state import active_results
 from core.quality_metrics import compute_all_quality_metrics, generate_comparative_report
 
 logger = logging.getLogger(__name__)
@@ -54,74 +44,31 @@ async def create_analysis(req: AnalysisRequest):
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
-    analysis_id = str(uuid.uuid4())
     health_list = health_params_to_list(req.healthParams)
 
-    neo4j_client = get_neo4j_client()
-    try:
-        neo4j_client.save_analise({
-            "id": analysis_id,
-            "dateFrom": req.dateFrom,
-            "dateTo": req.dateTo,
-            "healthParams": req.healthParams.model_dump(),
-            "starStatus": "pending",
-            "hierStatus": "pending",
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        })
-
-        with neo4j_client._driver.session() as session:
-            session.run(
-                """
-                MATCH (a:Analise {id: $id}), (d:DespesaSIOPS)
-                WHERE d.ano >= $dateFrom AND d.ano <= $dateTo
-                MERGE (a)-[:POSSUI_DESPESA]->(d)
-                """,
-                id=analysis_id,
-                dateFrom=req.dateFrom,
-                dateTo=req.dateTo,
-            )
-            session.run(
-                """
-                MATCH (a:Analise {id: $id}), (i:IndicadorDataSUS)
-                WHERE i.ano >= $dateFrom AND i.ano <= $dateTo
-                  AND i.tipo IN $healthParams
-                MERGE (a)-[:POSSUI_INDICADOR]->(i)
-                """,
-                id=analysis_id,
-                dateFrom=req.dateFrom,
-                dateTo=req.dateTo,
-                healthParams=health_list,
-            )
-    finally:
-        neo4j_client.close()
-
-    ws_queue: Queue = Queue()
-    active_queues[analysis_id] = ws_queue
-
-    params: dict[str, Any] = {
-        "date_from": req.dateFrom,
-        "date_to": req.dateTo,
-        "health_params": health_list,
-        "use_llm": req.useLlm,
-        "use_llm_judge": req.useLlmJudge,
-    }
-
-    t_star = threading.Thread(
-        target=run_star,
-        args=(analysis_id, params, ws_queue),
-        daemon=True,
+    analysis_id = dispatch_analysis(
+        date_from=req.dateFrom,
+        date_to=req.dateTo,
+        health_params=health_list,
+        use_llm=req.useLlm,
+        use_llm_judge=req.useLlmJudge,
+        interpreted_via="form",
     )
-    t_hier = threading.Thread(
-        target=run_hierarchical,
-        args=(analysis_id, params, ws_queue),
-        daemon=True,
-    )
-    active_threads[analysis_id] = [t_star, t_hier]
-    active_results[analysis_id] = {"use_llm_judge": req.useLlmJudge, "use_llm": req.useLlm}
-    t_star.start()
-    t_hier.start()
 
     return AnalysisResponse(analysisId=analysis_id)
+
+
+@router.get("/api/data-range")
+async def get_data_range():
+    """Retorna o intervalo de anos com dados carregados no Neo4j.
+
+    Usado pelo chat para validar períodos solicitados e para compor a
+    mensagem de boas-vindas com o intervalo real disponível.
+    """
+    year_range = get_available_year_range()
+    if year_range is None:
+        return {"minYear": None, "maxYear": None}
+    return {"minYear": year_range[0], "maxYear": year_range[1]}
 
 
 @router.get("/api/analysis/{analysis_id}")

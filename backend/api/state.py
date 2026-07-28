@@ -22,6 +22,11 @@ active_threads: dict[str, list[threading.Thread]] = {}
 # analysisId → {"star": result, "hierarchical": result, "quality_metrics": ..., "comparative_report": ...}
 active_results: dict[str, dict[str, Any]] = {}
 
+# chat sessionId → True enquanto uma rodada de chat está em andamento
+# nessa sessão (garante uma rodada por vez mesmo se o frontend não
+# desabilitar o input a tempo).
+active_chat_sessions: dict[str, bool] = {}
+
 
 def get_neo4j_client() -> Neo4jClient:
     """Create a new Neo4j client instance."""

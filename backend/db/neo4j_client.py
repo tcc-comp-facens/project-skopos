@@ -153,7 +153,9 @@ class Neo4jClient:
 
         Campos esperados em `analise`:
           id, dateFrom, dateTo, healthParams (dict ou str JSON),
-          starStatus, hierStatus, createdAt (opcional)
+          starStatus, hierStatus, createdAt (opcional),
+          sourceQuestion (opcional, texto original da pergunta no chat),
+          interpretedVia (opcional, "regex" | "llm" | "form")
 
         Requisitos: 12.3, 12.5
         """
@@ -174,7 +176,9 @@ class Neo4jClient:
             a.hierStatus        = $hierStatus,
             a.hierTextAnalysis  = $hierTextAnalysis,
             a.hierCompletedAt   = $hierCompletedAt,
-            a.createdAt         = $createdAt
+            a.createdAt         = $createdAt,
+            a.sourceQuestion    = $sourceQuestion,
+            a.interpretedVia    = $interpretedVia
         """
         with self._driver.session() as session:
             session.run(
@@ -190,7 +194,31 @@ class Neo4jClient:
                 hierTextAnalysis=analise.get("hierTextAnalysis"),
                 hierCompletedAt=analise.get("hierCompletedAt"),
                 createdAt=created_at,
+                sourceQuestion=analise.get("sourceQuestion"),
+                interpretedVia=analise.get("interpretedVia"),
             )
+
+    def get_year_range(self) -> tuple[int, int] | None:
+        """
+        Retorna (ano_min, ano_max) entre os anos de DespesaSIOPS e
+        IndicadorDataSUS carregados no banco, ou None se não houver dados.
+
+        Usado para validar períodos solicitados via chat contra os dados
+        realmente disponíveis, em vez de disparar análises que retornam
+        vazio silenciosamente.
+
+        Requisitos: 3.4 (validação adicional, não descrita na spec original)
+        """
+        query = """
+        MATCH (n)
+        WHERE n:DespesaSIOPS OR n:IndicadorDataSUS
+        RETURN min(n.ano) AS anoMin, max(n.ano) AS anoMax
+        """
+        with self._driver.session() as session:
+            record = session.run(query).single()
+        if record is None or record["anoMin"] is None:
+            return None
+        return (int(record["anoMin"]), int(record["anoMax"]))
 
     def save_metrica(self, metrica: dict, analysis_id: str) -> None:
         """
