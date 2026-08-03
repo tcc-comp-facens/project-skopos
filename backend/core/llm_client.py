@@ -1,15 +1,21 @@
 """
-Cliente LLM centralizado com rate limiting, fallback entre modelos e
-contabilização de tokens.
+Cliente LLM centralizado (DeepSeek) com rate limiting, retry em caso de
+rate limit (429) e contabilização de tokens.
 
-Cadeia de fallback (limites independentes por modelo no Groq free tier):
-  1. llama-3.3-70b-versatile  — melhor qualidade, 100K TPD
-  2. qwen/qwen3-32b           — boa qualidade, 500K TPD
-  3. llama-4-scout-17b-16e    — rápido, 500K TPD
+Usa o modelo `deepseek-v4-flash` com `thinking` desabilitado (resposta
+direta, sem chain-of-thought) — adequado para síntese de texto e
+extração de JSON estruturado. API compatível com o SDK da OpenAI
+(`base_url="https://api.deepseek.com"`).
 
-Serializa chamadas via lock global para evitar estouro de cota,
-com retry automático em caso de 429 (rate limit) antes de avançar
-para o próximo modelo da cadeia.
+Serializa chamadas via lock global para evitar estouro de cota, com
+retry automático em caso de 429.
+
+Observabilidade: todo call site passa um `caller` (tipicamente o
+`agent_id`/`synthesizer_id` de quem disparou a chamada) — logado junto
+com um preview de uma linha do prompt (nível INFO) antes de cada chamada
+real à API. O prompt completo só aparece no log em nível DEBUG
+(`LOG_LEVEL=DEBUG`), para não derramar dados de análise no log em produção
+por padrão.
 """
 
 from __future__ import annotations
@@ -27,17 +33,15 @@ _lock = threading.Lock()
 
 # Timestamp da última chamada
 _last_call_time = 0.0
-_MIN_INTERVAL = 2.0  # Groq free tier: 30 RPM
+_MIN_INTERVAL = 2.0  # intervalo mínimo entre chamadas
 
-MAX_RETRIES = 2  # retries por modelo antes de cair para o próximo
+MAX_RETRIES = 2  # retries antes de desistir
 RETRY_BASE_DELAY = 10.0  # segundos
 
-# Cadeia de fallback — ordem de prioridade
-MODEL_CHAIN: list[str] = [
-    "llama-3.3-70b-versatile",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "qwen/qwen3-32b",
-]
+MODEL = "deepseek-v4-flash"
+
+# thinking desabilitado — resposta direta, sem reasoning_content
+_THINKING_DISABLED = {"type": "disabled"}
 
 # Acumulador global de tokens (thread-safe via _lock)
 _token_usage: dict[str, int] = {
@@ -48,20 +52,44 @@ _token_usage: dict[str, int] = {
 }
 
 
-def _generate_groq(prompt: str, model: str) -> tuple[Optional[str], dict[str, int]]:
-    """Chama a API do Groq e retorna (texto, token_usage).
+def _has_api_key() -> bool:
+    return bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
 
-    Remove tags <think>...</think> de modelos de raciocínio (ex: Qwen3)
-    que incluem processo de pensamento na resposta.
+
+def _strip_think_tags(text: str) -> str:
+    """Remove tags <think>...</think>, caso apareçam na resposta."""
+    import re
+
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+
+
+def _preview(text: str, max_chars: int = 300) -> str:
+    """Reduz um texto a uma linha única e truncada, para log em nível INFO.
+
+    Colapsa quebras de linha (o prompt completo, com dados de análise
+    embutidos, pode ter várias linhas e milhares de caracteres) — o texto
+    integral só é logado em DEBUG por quem chama `logger.debug` separadamente.
     """
-    from groq import Groq
+    single_line = " ".join(text.split())
+    if len(single_line) > max_chars:
+        return single_line[:max_chars] + f"… (+{len(text) - max_chars} chars)"
+    return single_line
 
-    client = Groq(api_key=os.environ["GROQ_API_KEY"])
-    response = client.chat.completions.create(
+
+def _client():
+    from openai import OpenAI
+
+    return OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
+
+
+def _generate(prompt: str, model: str) -> tuple[Optional[str], dict[str, int]]:
+    """Chama a API do DeepSeek e retorna (texto, token_usage)."""
+    response = _client().chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
         max_tokens=4096,
+        extra_body={"thinking": _THINKING_DISABLED},
     )
 
     usage: dict[str, int] = {}
@@ -73,12 +101,7 @@ def _generate_groq(prompt: str, model: str) -> tuple[Optional[str], dict[str, in
         }
 
     text = response.choices[0].message.content or ""
-
-    # Remover tags <think>...</think> de modelos de raciocínio (Qwen3, etc.)
-    import re
-    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
-
-    return text, usage
+    return _strip_think_tags(text), usage
 
 
 def _accumulate_tokens(usage: dict[str, int]) -> None:
@@ -93,6 +116,16 @@ def _accumulate_tokens(usage: dict[str, int]) -> None:
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     """Verifica se a exceção é um erro de rate limit (429)."""
+    try:
+        import openai
+
+        if isinstance(exc, openai.RateLimitError):
+            return True
+        if isinstance(exc, openai.APIStatusError) and getattr(exc, "status_code", None) == 429:
+            return True
+    except ImportError:
+        pass
+
     exc_str = str(exc)
     return (
         "429" in exc_str
@@ -101,8 +134,8 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     )
 
 
-def _try_model(prompt: str, model: str) -> Optional[str]:
-    """Tenta gerar com um modelo específico, com retry em caso de 429.
+def _try_model(prompt: str, model: str, caller: str) -> Optional[str]:
+    """Tenta gerar com retry em caso de 429.
 
     Chamado dentro do _lock global. Retorna o texto gerado ou None
     se falhar após MAX_RETRIES tentativas de rate limit.
@@ -116,17 +149,18 @@ def _try_model(prompt: str, model: str) -> Optional[str]:
         elapsed = time.time() - _last_call_time
         if elapsed < _MIN_INTERVAL:
             wait = _MIN_INTERVAL - elapsed
-            logger.info("LLM rate limit: aguardando %.1fs", wait)
+            logger.info("LLM [%s]: rate limit — aguardando %.1fs", caller, wait)
             time.sleep(wait)
 
         try:
             _last_call_time = time.time()
-            text, usage = _generate_groq(prompt, model)
+            text, usage = _generate(prompt, model)
             _accumulate_tokens(usage)
 
             if usage:
                 logger.info(
-                    "LLM (%s): tokens — prompt=%d, completion=%d, total=%d",
+                    "LLM [%s] (%s): tokens — prompt=%d, completion=%d, total=%d",
+                    caller,
                     model,
                     usage.get("prompt_tokens", 0),
                     usage.get("completion_tokens", 0),
@@ -134,65 +168,64 @@ def _try_model(prompt: str, model: str) -> Optional[str]:
                 )
 
             if text:
-                logger.info("LLM (%s): resposta gerada com sucesso", model)
+                logger.info(
+                    "LLM [%s] (%s): resposta recebida (%d chars)", caller, model, len(text)
+                )
                 return text
 
-            logger.warning("LLM (%s): resposta vazia", model)
+            logger.warning("LLM [%s] (%s): resposta vazia", caller, model)
             return None
 
         except Exception as exc:
             if _is_rate_limit_error(exc):
                 delay = RETRY_BASE_DELAY * (attempt + 1)
                 logger.warning(
-                    "LLM (%s): cota excedida (tentativa %d/%d), aguardando %.0fs",
-                    model, attempt + 1, MAX_RETRIES, delay,
+                    "LLM [%s] (%s): cota excedida (tentativa %d/%d), aguardando %.0fs",
+                    caller, model, attempt + 1, MAX_RETRIES, delay,
                 )
                 time.sleep(delay)
             else:
                 raise
 
-    # Esgotou retries de rate limit para este modelo
+    # Esgotou retries de rate limit
     return None
 
 
-def generate(prompt: str, model: Optional[str] = None) -> Optional[str]:
-    """Chama o LLM com fallback entre modelos, rate limiting e contabilização.
-
-    Se um modelo específico é passado, usa apenas ele (sem fallback).
-    Caso contrário, percorre a cadeia MODEL_CHAIN até obter resposta.
+def generate(
+    prompt: str, model: Optional[str] = None, *, caller: str = "desconhecido"
+) -> Optional[str]:
+    """Chama o LLM (DeepSeek) com rate limiting, retry e contabilização.
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Se None, usa a cadeia de fallback.
+        model: Modelo específico (opcional). Default: MODEL ("deepseek-v4-flash").
+        caller: Identificador de quem está chamando (tipicamente `agent_id`
+            ou `synthesizer_id`) — usado só para logging/observabilidade,
+            não afeta o comportamento da chamada.
 
     Returns:
-        Texto gerado, ou None se todos os modelos falharem ou API key ausente.
+        Texto gerado, ou None se falhar ou API key ausente.
     """
-    if not os.environ.get("GROQ_API_KEY", "").strip():
-        logger.warning("LLM: GROQ_API_KEY não configurada")
+    if not _has_api_key():
+        logger.warning("LLM [%s]: DEEPSEEK_API_KEY não configurada", caller)
         return None
 
-    models = [model] if model else MODEL_CHAIN
+    resolved_model = model or MODEL
+    logger.info(
+        "LLM [%s]: enviando prompt (model=%s, %d chars) — %s",
+        caller, resolved_model, len(prompt), _preview(prompt),
+    )
+    logger.debug("LLM [%s]: prompt completo:\n%s", caller, prompt)
 
     with _lock:
-        for current_model in models:
-            try:
-                result = _try_model(prompt, current_model)
-                if result:
-                    return result
-                # Resposta vazia ou rate limit esgotado — tentar próximo modelo
-                logger.warning(
-                    "LLM (%s): falhou, tentando próximo modelo da cadeia",
-                    current_model,
-                )
-            except Exception as exc:
-                # Erro não-429 — logar e tentar próximo modelo
-                logger.error(
-                    "LLM (%s): erro inesperado — %s, tentando próximo modelo",
-                    current_model, exc,
-                )
+        try:
+            result = _try_model(prompt, resolved_model, caller)
+            if result:
+                return result
+            logger.warning("LLM [%s]: falhou", caller)
+        except Exception as exc:
+            logger.error("LLM [%s]: erro inesperado — %s", caller, exc)
 
-    logger.error("LLM: todos os modelos da cadeia falharam")
     return None
 
 
@@ -211,22 +244,19 @@ def reset_token_usage() -> None:
         _token_usage["call_count"] = 0
 
 
-def _stream_groq(prompt: str, model: str):
-    """Chama a API do Groq em modo streaming e yield tokens incrementalmente.
+def _stream_response(prompt: str, model: str):
+    """Chama a API do DeepSeek em modo streaming e yield tokens incrementalmente.
 
-    Remove tags <think>...</think> acumulando o texto e filtrando antes de yield.
-    Yields tokens conforme chegam da API.
+    Com `thinking` desabilitado a resposta não deveria conter blocos
+    <think>/reasoning_content, mas o filtro é mantido defensivamente.
     """
-    import re
-    from groq import Groq
-
-    client = Groq(api_key=os.environ["GROQ_API_KEY"])
-    stream = client.chat.completions.create(
+    stream = _client().chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
         max_tokens=4096,
         stream=True,
+        extra_body={"thinking": _THINKING_DISABLED},
     )
 
     buffer = ""
@@ -243,7 +273,6 @@ def _stream_groq(prompt: str, model: str):
         # Detectar e pular blocos <think>...</think>
         if "<think>" in buffer and not inside_think:
             inside_think = True
-            # Yield tudo antes do <think>
             pre = buffer.split("<think>")[0]
             if pre:
                 yield pre
@@ -251,76 +280,83 @@ def _stream_groq(prompt: str, model: str):
 
         if inside_think:
             if "</think>" in buffer:
-                # Fim do bloco think — descartar e continuar
                 after = buffer.split("</think>", 1)[1].lstrip()
                 buffer = after
                 inside_think = False
                 if buffer:
                     yield buffer
                     buffer = ""
-            # Enquanto dentro de <think>, não yield nada
             continue
 
-        # Fora de <think> — yield o token diretamente
         yield token
         buffer = ""
 
 
-def generate_stream(prompt: str, model: str | None = None):
-    """Streaming com fallback entre modelos. Yields tokens conforme chegam.
+def generate_stream(prompt: str, model: str | None = None, *, caller: str = "desconhecido"):
+    """Streaming via DeepSeek, com retry em caso de 429. Yields tokens conforme chegam.
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Se None, usa a cadeia de fallback.
+        model: Modelo específico (opcional). Default: MODEL ("deepseek-v4-flash").
+        caller: Identificador de quem está chamando — só para
+            logging/observabilidade (ver `generate`).
 
     Yields:
         Tokens de texto conforme são gerados pelo LLM.
     """
     global _last_call_time
 
-    if not os.environ.get("GROQ_API_KEY", "").strip():
-        logger.warning("LLM: GROQ_API_KEY não configurada")
+    if not _has_api_key():
+        logger.warning("LLM [%s]: DEEPSEEK_API_KEY não configurada", caller)
         return
 
-    models = [model] if model else MODEL_CHAIN
+    resolved_model = model or MODEL
+    logger.info(
+        "LLM [%s]: enviando prompt em modo streaming (model=%s, %d chars) — %s",
+        caller, resolved_model, len(prompt), _preview(prompt),
+    )
+    logger.debug("LLM [%s]: prompt completo (streaming):\n%s", caller, prompt)
+
+    total_chars = 0
 
     with _lock:
-        for current_model in models:
-            for attempt in range(MAX_RETRIES):
-                elapsed = time.time() - _last_call_time
-                if elapsed < _MIN_INTERVAL:
-                    wait = _MIN_INTERVAL - elapsed
-                    time.sleep(wait)
+        for attempt in range(MAX_RETRIES):
+            elapsed = time.time() - _last_call_time
+            if elapsed < _MIN_INTERVAL:
+                wait = _MIN_INTERVAL - elapsed
+                logger.info("LLM [%s]: rate limit — aguardando %.1fs", caller, wait)
+                time.sleep(wait)
 
-                try:
-                    _last_call_time = time.time()
-                    got_tokens = False
-                    for token in _stream_groq(prompt, current_model):
-                        got_tokens = True
-                        yield token
+            try:
+                _last_call_time = time.time()
+                got_tokens = False
+                for token in _stream_response(prompt, resolved_model):
+                    got_tokens = True
+                    total_chars += len(token)
+                    yield token
 
-                    _token_usage["call_count"] += 1
-                    if got_tokens:
-                        logger.info("LLM stream (%s): concluído", current_model)
-                        return
-                    else:
-                        logger.warning("LLM stream (%s): resposta vazia", current_model)
-                        break  # próximo modelo
+                _token_usage["call_count"] += 1
+                if got_tokens:
+                    logger.info(
+                        "LLM [%s] (%s): streaming concluído (%d chars)",
+                        caller, resolved_model, total_chars,
+                    )
+                else:
+                    logger.warning(
+                        "LLM [%s] (%s): streaming retornou resposta vazia", caller, resolved_model
+                    )
+                return
 
-                except Exception as exc:
-                    if _is_rate_limit_error(exc):
-                        delay = RETRY_BASE_DELAY * (attempt + 1)
-                        logger.warning(
-                            "LLM stream (%s): 429 (tentativa %d/%d), aguardando %.0fs",
-                            current_model, attempt + 1, MAX_RETRIES, delay,
-                        )
-                        time.sleep(delay)
-                    else:
-                        logger.error(
-                            "LLM stream (%s): erro — %s", current_model, exc,
-                        )
-                        break  # próximo modelo
+            except Exception as exc:
+                if _is_rate_limit_error(exc):
+                    delay = RETRY_BASE_DELAY * (attempt + 1)
+                    logger.warning(
+                        "LLM [%s] (%s): 429 (tentativa %d/%d), aguardando %.0fs",
+                        caller, resolved_model, attempt + 1, MAX_RETRIES, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("LLM [%s] (%s): erro — %s", caller, resolved_model, exc)
+                    return
 
-            logger.warning("LLM stream (%s): falhou, próximo modelo", current_model)
-
-    logger.error("LLM stream: todos os modelos falharam")
+    logger.error("LLM [%s]: todas as tentativas falharam", caller)

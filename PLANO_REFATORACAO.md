@@ -1,0 +1,243 @@
+# Plano de Refatoração — Agentes e Métricas de Avaliação
+
+> Documento de planejamento. **Nenhuma mudança de código foi feita ainda.** Este arquivo é o checklist de execução para as próximas sessões, derivado do diagnóstico repositório-vs-literatura (ver histórico da conversa) e da leitura do survey `s44336-024-00009-2.pdf` (Li et al., 2024) + pesquisa acadêmica complementar.
+
+---
+
+## 1. Objetivos da Refatoração
+
+O sistema hoje usa LLM em exatamente dois pontos (síntese textual final e, como *fallback* de baixa prioridade, extração de parâmetros no chat). Todo o resto — decisão de quais dados consultar, priorização de achados, comunicação entre agentes, verificação do texto gerado — é 100% regra fixa. A adoção recente do framework CoALA (Sumers et al., 2023) foi só uma renomeação de classes (`AgenteBDI`→`AgenteCoALA`, `deliberate`→`propose_actions`, etc.); a "arquitetura cognitiva" que o nome sugere ainda não existe de fato, porque o loop `propose_actions → evaluate_and_select` nunca tem candidatos concorrentes reais para arbitrar.
+
+Esta refatoração tem cinco objetivos concretos:
+
+1. **Substituir totalmente a extração de parâmetros por regex por um agente de interpretação de intenção baseado em LLM.** Não é uma troca de prioridade (LLM-primário com regex de apoio) — é remoção completa do regex. Esse agente também aplica um *guardrail* de escopo (rejeita prompts fora do domínio orçamentário/saúde pública) e produz um formato de entrada estruturado único, compartilhado pelas duas arquiteturas.
+2. **Preparar os agentes de busca (domínio) para a complexidade crescente da base de dados**, dando a eles capacidade de interpretar via LLM o que precisa ser buscado e de construir as consultas — hoje desnecessário (a base é simples e o mapeamento é 1:1), mas arquiteturalmente necessário à medida que novas fontes de dados forem incorporadas por outro desenvolvedor.
+3. **Dar conteúdo real ao loop de decisão CoALA em pontos onde há candidatos concorrentes de verdade** — priorização de achados antes da síntese, verificação pós-síntese, e comunicação lateral semântica na hierárquica — sem tocar nos cálculos estatísticos determinísticos (Spearman, mediana, variação YoY), que devem continuar sem LLM.
+4. **Implementar um novo conjunto de métricas de avaliação**, fundamentado em literatura de benchmarking de MAS, que meça o sistema *já refatorado* — incluindo eixos hoje ausentes (custo de tokens, volume de comunicação, escalabilidade) e substituindo os pontos mais fracos das métricas atuais (Q2 por substring matching → faithfulness claim-based).
+
+### Não-objetivos (explicitamente fora de escopo deste plano)
+
+- Não substituir Spearman (`AgenteCorrelacao`), mediana (`AgenteAnomalias`) ou cálculo de variação YoY (`AgenteContextoOrcamentario`) por LLM — não há embasamento acadêmico para isso e a literatura CoALA endossa manter ações internas simbólicas quando o problema é bem definido.
+- **Atenção — isso não inclui os agentes de domínio/busca** (`AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade`). Estes passam a usar LLM (Etapa 2 abaixo) — a exceção acima vale só para os 3 agentes puramente estatísticos.
+- Não reescrever a API `/api/analysis/{id}/quality` nem o payload do WebSocket — as novas métricas são *adicionadas*, não substituem a estrutura E/Q/R atual (exceto Q2, ver Etapa 6).
+- Não alterar a fonte de dados (SIOPS/DataSUS) nem o pipeline ETL.
+
+---
+
+## 2. Etapas de Execução
+
+Ordem de execução obrigatória: **1 → 2 → 3 → 4 → 5 → 6**, com a Etapa 6 (métricas) sempre por último, pois ela mede o comportamento do sistema já refatorado — medir antes seria comparar métricas novas contra uma arquitetura que ainda vai mudar.
+
+| Etapa | Nome | Depende de | Esforço estimado |
+|---|---|---|---|
+| 1 | Agente de Interpretação de Intenção (substitui totalmente o regex; guardrail de escopo) | — | Médio |
+| 2 | Agentes de busca com LLM (interpretação + construção de queries) | Etapa 1 | Médio |
+| 3 | Priorização de achados via LLM (loop CoALA real) | — (recomenda-se após 1–2) | Médio |
+| 4 | Verificação pós-síntese (self-check) | Etapa 3 | Médio |
+| 5 | Comunicação lateral semântica (hierárquica) | — (independente) | Médio |
+| 6 | Novas métricas de avaliação | Etapas 1, 2, 3, 4, 5 | Alto |
+
+---
+
+### Etapa 1 — Agente de Interpretação de Intenção (substituição total do regex)
+
+**O que será feito:**
+- [ ] Remover completamente `backend/core/intent_interpreter.py` como está hoje — sem regex convivendo com LLM, nem como fallback, nem como fast-path. `DATE_RANGE_PATTERNS`, `LAST_N_YEARS_PATTERN`, `SINGLE_YEAR_PATTERN`, `HEALTH_ALIASES` e toda a lógica de casamento de padrão deixam de existir.
+- [ ] Criar um novo agente CoALA — `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_intencao.py`), seguindo o mesmo padrão arquitetural dos demais agentes (`working_memory`/`semantic_memory`/`procedural_memory`), no lugar da classe utilitária `IntentInterpreter`.
+- [ ] **Guardrail de escopo como primeira ação do ciclo.** `propose_actions` só propõe `extrair_parametros` depois que `working_memory["escopo"]` existir. O próprio ciclo é encadeado em duas passadas dentro do método público `parse(texto)`:
+  1. 1ª passada: `propose_actions` retorna só `[{"goal": "classificar_escopo"}]`; a ação correspondente (`_act_classificar_escopo`) chama o LLM com um prompt que classifica se o texto é sobre dados orçamentários/saúde pública de Sorocaba-SP, e grava `working_memory["escopo"] = "dentro" | "fora"`.
+  2. 2ª passada (mesma chamada de `parse`, novo `propose_actions` interno): se `escopo == "fora"`, propõe `recusar` (gera a mensagem de rejeição, sem chamar LLM de novo); se `escopo == "dentro"`, propõe `extrair_parametros` (extrai `date_from`/`date_to`/`health_params` estruturados).
+  - **Decisão de custo (registrar explicitamente como trade-off, não como prescrição da literatura):** para não dobrar o custo de toda mensagem, a classificação de escopo e a extração de parâmetros podem ser combinadas num único prompt/chamada LLM quando `escopo == "dentro"` (o modelo já devolve `{"em_escopo": true, "date_from":..., "date_to":..., "health_params":[...]}` na mesma resposta) — nesse caso as "duas passadas" acima são lógicas (a checagem de escopo é avaliada antes de qualquer parâmetro extraído ser usado), não necessariamente duas chamadas de rede. A alternativa mais alinhada ao padrão de "topical rail" da literatura (ver D14/D15 na Seção 3) seria manter as duas chamadas fisicamente separadas — mais robusta a prompt injection, mais cara. Registrar qual das duas foi escolhida na implementação real.
+  - Quando `escopo == "fora"`: **nenhuma arquitetura é instanciada.** Nem `OrquestradorEstrela` nem `CoordenadorGeral` são chamados, nenhuma query Neo4j é disparada. O fluxo termina na camada de chat com a mensagem de recusa.
+- [ ] **Como a rejeição é comunicada ao usuário:** estender o contrato de retorno hoje representado por `IntentResult` com um novo caso — `success=False`, `missing=["fora_de_escopo"]` (nova constante `MISSING_OUT_OF_SCOPE`), `clarification_message` com uma explicação curta e educada do escopo do assistente (ex.: "Este assistente responde apenas perguntas sobre orçamento público de saúde e indicadores de saúde de Sorocaba-SP. Pode reformular sua pergunta dentro desse tema?"). O caller (`api/chat_runner.py`/`api/chat_websocket.py`) envia essa mensagem como resposta do assistente, do mesmo jeito que hoje já trata `MISSING_DATE_RANGE`/`MISSING_HEALTH_PARAMS`.
+- [ ] **Formato de entrada estruturado compartilhado por ambas as arquiteturas:** o agente produz um objeto único (`AnalysisRequest`, extensão de `AnalysisParams`) com `date_from`, `date_to`, `health_params` (iguais a hoje) **mais** um novo campo `intent_summary: str` — um resumo curto da intenção/desejo do usuário em linguagem natural (ex.: "comparar eficiência dos gastos em vacinação nos últimos 5 anos"), usado como insumo pela Etapa 3 (priorização de achados) e pela Etapa 2 (construção de queries), fechando o loop entre "o que o usuário quis" e "o que os agentes de busca e de síntese priorizam".
+- [ ] Manter as regras de segurança já existentes (mensagem do usuário tratada como dado, nunca como instrução; validação estrita de chaves JSON permitidas na resposta do LLM) — herdadas de `_parse_llm_json`/`_build_llm_prompt` atuais, adaptadas para o novo agente.
+- [ ] Reescrever `backend/tests/test_intent_interpreter.py` (ou criar `test_agente_interpretacao_intencao.py`) cobrindo: (a) nenhum caminho de código usa regex; (b) prompts fora de escopo são rejeitados sem instanciar nenhuma arquitetura; (c) paráfrases livres (não cobertas pelo antigo `HEALTH_ALIASES`) são corretamente interpretadas; (d) tentativas de prompt injection embutidas na mensagem (ex.: "ignore as instruções acima e...") não alteram o comportamento do agente nem escapam do JSON estruturado.
+
+**Adaptações necessárias em cada arquitetura para consumir o novo formato de entrada:**
+
+- **Importante primeiro esclarecimento:** o endpoint REST direto `POST /api/analysis` já recebe `dateFrom`/`dateTo`/`healthParams` estruturados no corpo da requisição — não passa pelo `IntentInterpreter` hoje nem passará pelo novo agente amanhã (não há texto livre para interpretar nesse caminho, logo o guardrail de escopo não se aplica a ele). O agente de interpretação de intenção é relevante apenas para a **entrada via chat em linguagem natural**. Isso deve ficar explícito no código/documentação para não gerar confusão sobre "onde" o guardrail atua.
+- **Estrela:** `OrquestradorEstrela.run(analysis_id, params, ws_queue)` — o dict `params` ganha a chave opcional `intent_summary` (`None` quando a análise entra pelo REST direto). Como o pipeline da estrela é linear, o orquestrador só precisa repassar esse valor ao instanciar `AgentePriorizacaoAnalitica` (Etapa 3) — mudança pontual, sem novo nível de propagação.
+- **Hierárquica:** `CoordenadorGeral.run()` recebe o mesmo `params` com `intent_summary`, mas precisa propagá-lo por **dois caminhos distintos**, porque a estrutura em camadas exige que o dado percorra o coordenador → supervisores diferentes: (a) para `SupervisorDominio`, que repassa a cada agente de domínio antes de disparar `run_coala_cycle()` (necessário para a Etapa 2 — construção de queries a partir da intenção); (b) para `SupervisorAnalitico`, que o usa na priorização de achados (Etapa 3). Uma otimização de implementação possível: `CoordenadorGeral` só precisa entregar `intent_summary` a `SupervisorDominio`, que já usa `receive_from_peer()`/comunicação lateral existente para repassá-lo adiante a `SupervisorAnalitico` junto com despesas/indicadores — evita duplicar o ponto de entrada do dado no coordenador.
+- Em ambas as arquiteturas: o contrato antigo (`dateFrom`/`dateTo`/`healthParams` sem `intent_summary`) continua funcionando — `intent_summary` é um campo aditivo opcional, não quebra chamadas REST diretas existentes.
+
+**Por que essa mudança está sendo feita (racional técnico):**
+Regex cobre um vocabulário fechado (a lista `HEALTH_ALIASES` precisava ser mantida manualmente a cada nova forma de escrever um indicador) — frágil por construção e não escala conforme a base de dados ganha novas fontes/indicadores (responsabilidade de outro dev). Além do argumento de robustez de NLU (ver D1), a remoção *total* do regex — e não apenas sua demoção a fallback — tem um segundo racional técnico específico deste plano: manter um atalho de regex correria o risco de contornar o guardrail de escopo para mensagens que casassem acidentalmente com um padrão de data/indicador sem passar pela classificação de escopo do LLM. Eliminar o regex garante que **toda** mensagem passa pelo guardrail, sem exceção. Ver justificativa D1, D14 e D15 na Seção 3.
+
+**Dependências:** Nenhuma. É a etapa fundacional — Etapa 2 depende dela.
+
+**Critério de aceite:** (1) nenhuma ocorrência de `re.compile`/regex de extração de parâmetros permanece no código; (2) uma mensagem fora de escopo (ex.: "qual é a previsão do tempo em Sorocaba amanhã?") é rejeitada com a mensagem de recusa, sem nenhuma thread de `OrquestradorEstrela`/`CoordenadorGeral` sendo lançada; (3) uma mensagem dentro de escopo com paráfrase livre é corretamente traduzida em `AnalysisRequest`, incluindo `intent_summary` não-vazio.
+
+---
+
+### Etapa 2 — Agentes de busca com LLM (interpretação + construção de queries)
+
+**O que será feito:**
+- [ ] Adicionar uma nova ação (`goal: "planejar_consulta"`) à `procedural_memory` de cada um dos 4 agentes de domínio (`AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade`), executada **antes** de `consultar_despesas`/`consultar_indicadores`.
+- [ ] Essa ação recebe o `AnalysisRequest` estruturado (produzido na Etapa 1, incluindo `intent_summary`) e o `semantic_memory` do próprio agente (hoje `subfuncao`/`tipos_indicador` fixos) e usa uma chamada LLM para produzir um plano de consulta explícito — uma lista de filtros (códigos de subfunção, aliases de tipo de indicador) a aplicar nas chamadas subsequentes a `neo4j_client.get_despesas`/`get_indicadores`. Isso substitui a leitura direta e hardcoded de `self.semantic_memory["subfuncao"]` como único filtro.
+- [ ] **Fast-path determinístico como otimização de custo, não como substituto da arquitetura:** quando o `AnalysisRequest` mapeia 1:1 e sem ambiguidade para o `semantic_memory` estático já conhecido pelo agente (exatamente o caso de hoje — 1 subfunção, indicadores fixos, sem sinônimos novos), pular a chamada LLM e usar a leitura estática atual diretamente. A chamada LLM só é de fato disparada quando: (a) o `intent_summary`/`health_params` não mapeia claramente para os filtros estáticos conhecidos, ou (b) o `semantic_memory` for estendido no futuro com múltiplos indicadores/subfunções por agente (o cenário de crescimento da base). Este fast-path é estritamente uma otimização de custo — a decisão "o que buscar" continua sendo, arquiteturalmente, responsabilidade do passo LLM; o fast-path só evita pagar por uma resposta previsível.
+- [ ] Implementar **cache** do plano de consulta, chaveado por `(tipo_de_agente, hash(AnalysisRequest relevante))` — evita reprocessar o mesmo plano de busca em análises repetidas com os mesmos parâmetros, tanto para o caminho LLM quanto para eventuais chamadas repetidas.
+- [ ] Expor essa etapa **desligada por padrão** via uma flag de configuração (ex.: `USE_LLM_QUERY_PLANNING`, mesmo padrão de `use_llm`/`use_llm_judge` já existentes) — enquanto a base tiver o mapeamento simples de hoje, o sistema roda com o fast-path sempre ativo (comportamento idêntico ao atual, custo zero); a flag existe para ser ligada quando novas fontes de dados tornarem o mapeamento não-trivial.
+- [ ] Atualizar `backend/tests/test_domain_agents.py` para cobrir: (a) fast-path sendo usado no cenário atual (nenhuma chamada LLM disparada); (b) chamada LLM sendo disparada quando o `semantic_memory` é artificialmente estendido em teste para simular um cenário de mapeamento ambíguo; (c) cache evitando chamada duplicada para o mesmo plano.
+
+**Por que essa mudança está sendo feita (racional técnico — importante: preparação arquitetural, não necessidade atual):**
+A base de dados de hoje tem mapeamento 1:1 fixo (subfunção → tipo de indicador) e **não exige LLM para isso agora** — implementar isso hoje sem o fast-path seria over-engineering puro. A justificativa é explicitamente preparatória: a base está sendo expandida por outro desenvolvedor, e cada nova fonte de dados tende a trazer nomenclatura própria e sobreposições (o próprio projeto já enfrenta esse problema hoje no ETL — `siops_loader.py` já precisa de "busca exata e parcial para acomodar variações de nomenclatura entre anos e versões da planilha" no mapeamento grupo-FNS→subfunção, conforme `docs/03-DADOS-ETL.md`). Um agente de busca capaz de interpretar via LLM o que precisa ser buscado é o mecanismo que absorve esse tipo de heterogeneidade sem exigir que alguém edite código de mapeamento fixo a cada nova fonte. Ver justificativa D13 na Seção 3.
+
+**Riscos imediatos e mitigação (base atual é simples — não introduzir custo/latência hoje):**
+- Sem o fast-path, cada análise adicionaria até 4 chamadas LLM extras (uma por agente de domínio) só para reproduzir uma decisão hoje trivial — custo/latência desnecessários.
+- Mitigação primária: fast-path determinístico (acima) mantém custo igual ao atual enquanto a base não mudar.
+- Mitigação secundária: flag desligada por padrão — o caminho LLM só entra em produção quando alguém decidir ligá-la, presumivelmente quando a nova fonte de dados justificar.
+- Mitigação terciária: cache evita reprocessamento mesmo quando o caminho LLM estiver ativo.
+- **Explicitamente não é uma opção**: usar o fallback determinístico como o mecanismo permanente e nunca de fato exercitar o caminho LLM — o objetivo desta etapa é ter a arquitetura pronta, testada e auditável antes de precisar dela, não adiar a decisão indefinidamente escondida atrás do fast-path.
+
+**Dependências:** Etapa 1 completa — os agentes de domínio precisam do `AnalysisRequest` estruturado (incluindo `intent_summary`) como entrada do plano de consulta; sem ele não há o que interpretar além do que o regex antigo já entregava.
+
+**Critério de aceite:** com a flag desligada (padrão), o comportamento e o custo de LLM são idênticos ao sistema pré-Etapa-2; com a flag ligada e um cenário de teste simulando um novo indicador com nome ambíguo, o agente decide corretamente o filtro via LLM e o registra em `episodic_memory`.
+
+---
+
+### Etapa 3 — Priorização de achados via LLM (loop CoALA real)
+
+**O que será feito:**
+- [ ] Criar um novo agente CoALA — `AgentePriorizacaoAnalitica` (`backend/agents/analytical/priorizacao.py`) — que recebe `correlacoes`, `anomalias`, `contexto_orcamentario` já calculados e o `intent_summary` (Etapa 1) e decide **quais destacar e em que ordem** antes de montar o prompt do `TextSynthesizer`.
+- [ ] Implementar `propose_actions` para gerar **candidatos de ênfase narrativa** reais (ex.: "focar em ineficiências", "focar em tendência orçamentária", "focar em achados estatisticamente mais fortes", "focar no que o usuário pediu explicitamente via `intent_summary`") — isto é o primeiro lugar do sistema onde `propose_actions` gera mais de um candidato de verdade.
+- [ ] Implementar `evaluate_and_select` combinando (a) um score determinístico simples (ex.: magnitude do Spearman, nº de anomalias por tipo) com (b) uma chamada LLM que escolhe/pondera entre os candidatos propostos, informada pelo `intent_summary` — isto é o primeiro uso real de `evaluate_and_select` no sistema (hoje é passthrough em todo agente).
+- [ ] `TextSynthesizer._build_prompt` passa a receber a saída priorizada (ordem/ênfase) em vez do dump bruto de todas as correlações e anomalias sem hierarquia.
+- [ ] Integrar a chamada no pipeline: `OrquestradorEstrela.run()` e `SupervisorAnalitico.run()` (hierárquica) precisam de fato invocar `run_coala_cycle()` deste novo agente — hoje nenhum orquestrador invoca o ciclo CoALA em nada além dos agentes-folha.
+- [ ] **Importante — não deve afetar Q1:** a saída de `AgenteCorrelacao`/`AgenteAnomalias` (os dados brutos usados na métrica de consistência determinística Q1) não deve ser alterada por este agente — ele só decide *o que aparece primeiro/com mais destaque no texto*, nunca recalcula ou filtra os dados analíticos em si.
+
+**Por que essa mudança está sendo feita (racional técnico):**
+Hoje o sintetizador recebe todos os achados sem hierarquia e delega implicitamente ao prompt a decisão de "o que é mais importante" — decisão que fica invisível, não testável e não auditável. Extrair essa decisão para um agente CoALA explícito torna o processo de priorização uma etapa observável (aparece em `episodic_memory`, pode ser logada, pode ser testada) e é um dos únicos lugares do sistema onde existem, de fato, planos alternativos concorrentes que fazem sentido avaliar via LLM — exatamente o caso de uso que CoALA descreve para `propose→evaluate→select`. Ver justificativa D2 na Seção 3.
+
+**Dependências:** Nenhuma dependência técnica rígida das Etapas 1–2, mas recomenda-se executar depois, tanto para reaproveitar `intent_summary` (Etapa 1) quanto para não editar os mesmos arquivos de orquestração em paralelo com a Etapa 2.
+
+**Critério de aceite:** dado o mesmo conjunto de correlações/anomalias, o texto final muda de ênfase (ordem/qual achado é discutido primeiro) quando os dados de entrada mudam de magnitude relativa ou quando o `intent_summary` muda — testável com fixtures onde se varia artificialmente qual anomalia é "mais extrema" ou o que o usuário pediu.
+
+---
+
+### Etapa 4 — Verificação pós-síntese (self-check)
+
+**O que será feito:**
+- [ ] Criar `backend/core/claim_verifier.py` com duas funções: `extract_claims(texto: str) -> list[str]` (via LLM, extrai afirmações factuais discretas do texto gerado) e `verify_claims(claims: list[str], dados: dict) -> list[dict]` (via LLM, para cada claim retorna `{claim, suportado: bool, justificativa}` comparando contra `correlacoes`/`anomalias`/`contexto_orcamentario` brutos).
+- [ ] No pipeline de síntese (`TextSynthesizer.generate`/`generate_stream`, chamado a partir de `OrquestradorEstrela`/`SupervisorAnalitico`), adicionar uma passada opcional de verificação **após** o texto ser gerado: se `verify_claims` encontrar afirmações não suportadas, uma única chamada adicional ao LLM pede uma revisão focada só nessas afirmações (padrão Chain-of-Verification — CoVe). Sem loop: no máximo 1 correção por análise.
+- [ ] Tornar esse passo opcional via flag (mesmo padrão de `use_llm_judge` já existente), para não forçar custo extra em toda análise.
+- [ ] Reutilizar `claim_verifier.py` na Etapa 6 para reformular a métrica Q2 (ver lá) — este módulo é compartilhado entre o pipeline de execução e o cálculo de métricas.
+
+**Por que essa mudança está sendo feita (racional técnico):**
+A métrica Q2 atual (checklist por substring/regex) não verifica se o que o texto afirma é *correto*, só se as palavras certas aparecem — um texto pode citar "subfunção 305" e "2020" ao lado de uma conclusão inventada e ainda pontuar bem em Q2. Um passo de verificação real, rodando antes do texto chegar ao usuário, é tanto uma melhoria de qualidade de produto quanto a base para uma métrica de fidelidade mais forte. Ver justificativa D3 na Seção 3.
+
+**Dependências:** Etapa 3 completa — a verificação deve rodar sobre o texto já priorizado (senão seria descartada/refeita quando a Etapa 3 entrar).
+
+**Critério de aceite:** injetando propositalmente uma alucinação num texto de teste (afirmação não suportada pelos dados), `verify_claims` a marca como não suportada; a passada de correção remove ou corrige a afirmação no texto final.
+
+---
+
+### Etapa 5 — Comunicação lateral semântica (hierárquica)
+
+**O que será feito:**
+- [ ] Em `backend/agents/hierarchical/coordinator.py` e `supervisors.py`: quando `SupervisorDominio` envia dados para `SupervisorAnalitico`/`SupervisorContexto` via `receive_from_peer()`, e quando `SupervisorContexto` envia para `SupervisorAnalitico`, acompanhar o payload de dados brutos com um **resumo textual curto gerado por LLM** (1–2 frases) descrevendo o que aquele supervisor concluiu antes de repassar — ex.: `SupervisorContexto` não manda só o dict de tendências, manda também "gasto em Vigilância Epidemiológica caiu de forma consistente nos últimos 2 anos".
+- [ ] Adicionar essa geração de resumo como uma nova ação (`goal: "resumir_para_par"`) na `procedural_memory` de cada supervisor emissor — mantendo o padrão CoALA já usado no resto do código (ação registrada, com fallback determinístico simples — ex.: template de texto sem LLM — caso o LLM falhe).
+- [ ] `SupervisorAnalitico` passa a ter acesso a esses resumos e pode (opcionalmente, reaproveitando a Etapa 3) usá-los como insumo adicional na priorização de achados.
+- [ ] **Escopo explicitamente limitado à hierárquica** — a estrela não tem comunicação lateral por definição de topologia (é hub-and-spoke), então essa mudança amplia a diferença de custo entre as duas arquiteturas. Isso deve ser tratado como um resultado a discutir no TCC, não escondido nas métricas.
+
+**Por que essa mudança está sendo feita (racional técnico):**
+Hoje `receive_from_peer()` é só transporte de dado (despesas, indicadores, contexto brutos) — não há nada que distinga essa "comunicação lateral" de uma simples atribuição de variável compartilhada. A literatura descreve interação cooperativa como troca de informação **interpretada**, que alimenta decisão colaborativa — dar conteúdo semântico à comunicação lateral é o que torna a hierárquica genuinamente diferente da estrela em *processo*, não só em tempo de execução, o que fortalece o argumento comparativo central do TCC. Ver justificativa D4 na Seção 3.
+
+**Dependências:** Nenhuma dependência técnica das Etapas 1–4. Pode ser feita em paralelo, mas evitar tocar `supervisors.py` ao mesmo tempo que a Etapa 3 mexe em `SupervisorAnalitico.run()`, e evitar tocar `SupervisorDominio` ao mesmo tempo que a Etapa 2, para não gerar conflito de merge.
+
+**Critério de aceite:** logs/testes mostram que `SupervisorAnalitico` recebe, além dos dados brutos, um resumo textual não-vazio de cada supervisor upstream; se o LLM falhar, o fallback determinístico (template) ainda popula o campo sem quebrar o pipeline.
+
+---
+
+### Etapa 6 — Novas métricas de avaliação (obrigatoriamente por último)
+
+**O que será feito:**
+
+*Custo:*
+- [ ] `compute_token_cost(architecture: str)` em `core/quality_metrics.py`, lendo `core.llm_client.get_token_usage()`.
+  - **Pré-requisito técnico obrigatório**: `core/llm_client.py` hoje mantém um único contador global `_token_usage` protegido por um `_lock` compartilhado. Como estrela e hierárquica rodam em **threads concorrentes** (`api/runners.py` lança as duas como threads daemon), esse contador global não distingue qual topologia gastou quais tokens. Antes de implementar essa métrica, é preciso refatorar a contabilização de tokens para ser **por análise + por topologia** (ex.: um objeto acumulador passado explicitamente para `generate`/`generate_stream`, ou contabilização thread-local), não um contador global cumulativo.
+  - Com as Etapas 1 e 2 novas, o custo de tokens agora inclui também a interpretação de intenção (1x por mensagem de chat, fora do escopo de "por topologia" — é anterior à bifurcação estrela/hierárquica) e o planejamento de consulta dos agentes de domínio (só quando a flag da Etapa 2 estiver ligada) — a métrica deve reportar esses dois separadamente do custo de síntese/priorização/verificação por topologia.
+
+*Comunicação:*
+- [ ] `compute_communication_volume(architecture, message_log)` — contar mensagens reais trocadas (nº de chamadas `receive_from_peer`, nº de retornos de `query()`/`run()`) e, se viável, tamanho aproximado do payload (nº de registros em `despesas`/`indicadores`/resumos textuais da Etapa 5).
+
+*Fidelidade (substitui Q2):*
+- [ ] Reformular `compute_faithfulness` para usar `core/claim_verifier.py` (criado na Etapa 4): `score = claims_suportados / total_claims`, no estilo RAGAS, em vez do checklist por substring atual. Manter a assinatura de retorno compatível (`score`, `details`) para não quebrar o frontend, mas trocar o método de cálculo internamente.
+
+*Escalabilidade (eixo novo):*
+- [ ] Criar harness de teste dedicado (`backend/tests/test_scalability_benchmark.py` ou script separado) que roda a comparação estrela-vs-hierárquica variando artificialmente: (a) número de anos de dados (ex.: 3 vs. 10 anos sintéticos), (b) número de pares subfunção-indicador (simulando o crescimento da base gerido pelo outro dev, exercitando o caminho LLM da Etapa 2 com a flag ligada). Medir como E1 (overhead), E2 (breakdown) e o novo custo de tokens evoluem com o tamanho de N — isso é o que responde à restrição de que a base vai crescer.
+
+*Guardrail e cache (métricas complementares, decisão de engenharia):*
+- [ ] `compute_guardrail_rejection_rate()` — proporção de mensagens de chat rejeitadas por estarem fora de escopo (Etapa 1), útil para monitorar falsos positivos/negativos do guardrail ao longo do tempo.
+- [ ] `compute_query_planning_cache_hit_rate()` — proporção de planos de consulta (Etapa 2) resolvidos via cache/fast-path vs. via chamada LLM — evidencia diretamente o trade-off custo-atual/preparação-futura descrito na Etapa 2.
+
+*Outcome agregado (novo, opcional dentro da Etapa 6):*
+- [ ] `compute_analysis_success(result)` — métrica binária/composta de "a análise foi bem-sucedida": todos os componentes de R1 presentes **E** nenhuma claim não-suportada remanescente (via Etapa 4) **E** dentro de um orçamento de tempo definido. Inspirada conceitualmente em métricas de sucesso baseadas em marcos (ver D11), mas com fórmula própria — não é replicação de nenhum benchmark específico.
+
+*Opcional / decisão do usuário, não obrigatório para fechar o plano:*
+- [ ] Reestruturar `quality_metrics.py` inteiro nas 4 categorias do catálogo AGENT 2026 (Outcome/Process/Product/Framework) em vez de manter E/Q/R. **Recomendação: não fazer agora** — maior risco/esforço, quebra a API atual (`/api/analysis/{id}/quality`) sem ganho proporcional para o prazo do TCC. Registrado aqui só para não perder a referência.
+
+**Por que essa mudança está sendo feita (racional técnico):**
+Medir o sistema antes de ele estar refatorado produziria números que não descrevem a arquitetura final — e a pergunta mais importante em aberto (como as métricas evoluem quando a base cresce) só pode ser respondida depois que os agentes já refletem o uso de LLM pretendido, porque cada chamada de LLM nova (Etapas 1–5) muda o perfil de custo/tempo que essas métricas medem.
+
+**Dependências:** Etapas 1, 2, 3, 4 e 5 completas. Especificamente: a métrica de custo de tokens só é significativa depois que todos os novos pontos de chamada LLM (Etapas 1, 2, 3, 4, 5) existem; a métrica de comunicação só é significativa depois da Etapa 5; a métrica de fidelidade depende do módulo criado na Etapa 4; a taxa de acerto de cache depende da Etapa 2.
+
+**Critério de aceite:** rodar uma análise completa (estrela + hierárquica), a partir de uma mensagem de chat em linguagem natural, e obter no payload de `/api/analysis/{id}/quality` os novos campos de custo de tokens por topologia (incluindo o custo separado da interpretação de intenção), volume de comunicação por topologia, score de fidelidade recalculado via claims, taxa de rejeição do guardrail e taxa de acerto do cache de planejamento de consulta — com o harness de escalabilidade rodando separadamente e produzindo ao menos 2 pontos de comparação (N pequeno vs. N maior).
+
+---
+
+## 3. Justificativa Acadêmica por Decisão
+
+| ID | Decisão | Etapa | Fonte | Trecho/resumo do argumento |
+|---|---|---|---|---|
+| D1 | Substituir totalmente a extração de parâmetros por regex por um agente LLM | 1 | Li et al. (2024), *"A survey on LLM-based multi-agent systems: workflow, infrastructure, and challenges"*, Vicinagearth 1:9, Seções 2.2 e 3.2 | "agents leverage the powerful capabilities of LLMs for natural language understanding and generation, enabling more complex and flexible interactions" (2.2); o módulo de *perception* (3.2) é descrito como responsável por "capture essential information to understand the current interactive environment" a partir de linguagem livre — um mecanismo de vocabulário fechado (regex) não realiza esse papel, mesmo como fallback parcial. |
+| D2 | Loop `propose_actions`/`evaluate_and_select` real para priorização de achados | 3 | Sumers, Yao, Narasimhan & Griffiths (2023), *"Cognitive Architectures for Language Agents"* (CoALA), arXiv:2309.02427 | CoALA define a "decision procedure" do agente como um loop propose→evaluate→select em que *propose* gera candidatos de ação e *evaluate* atribui utilidade a cada um — tipicamente via LLM quando há ambiguidade entre múltiplos planos válidos. Priorizar quais achados destacar é exatamente esse tipo de decisão. Complementar: Li et al., Seção 3.3.3 (reasoning como "logical inference" sobre estado percebido). |
+| D3 | Passo de verificação pós-síntese (self-check / CoVe) | 4 | Li et al. (2024), Seção 5.1 ("Hallucination"), citando Dhuliawala et al. (CoVe) | "CoVe encourages models to generate initial responses, followed by verification queries to check the draft's factual accuracy before producing a refined response, thereby enhancing output accuracy." |
+| D4 | Conteúdo semântico na comunicação lateral hierárquica | 5 | Li et al. (2024), Seções 3.4 ("Mutual-interaction") e 3.4.3 ("Interaction scene") | "Mutual interaction encompasses the exchange of information and coordination of actions among agents, which is crucial for enhancing collective intelligence"; interação cooperativa envolve "information sharing, collaborative decision-making... to reach a consensus" — troca de dado bruto sem interpretação não realiza esse potencial. **Ressalva:** o formato específico escolhido (resumo de 1–2 frases) não é prescrito pela fonte — é decisão de engenharia informada pelo conceito, não uma citação direta de implementação. |
+| D5 | Manter Spearman/mediana/YoY determinísticos, sem LLM | 3 (não-objetivo) | — | **Decisão de engenharia, sem embasamento acadêmico direto.** A distinção conceitual do CoALA entre ações internas simbólicas bem definidas e ações que requerem reasoning aberto dá suporte indireto, mas nenhuma fonte prescreve especificamente "não use LLM para estatística". |
+| D6 | Métrica de custo de tokens/API por topologia | 6 | Achados de busca sobre frameworks de avaliação 2025 (REALM-Bench, CLEAR) e o catálogo AGENT 2026 | "New 2025 frameworks like REALM-Bench and CLEAR prioritize real-world complexity, adding cost, latency, efficiency, assurance, and reliability metrics to production evaluation"; o catálogo AGENT 2026 classifica custo dentro da categoria "Framework". **Ressalva:** acesso apenas a resumos de busca desses frameworks específicos, não ao texto completo — citar com essa limitação. |
+| D7 | Métrica de volume/custo de comunicação real | 6 | Li et al. (2024), Seção 3.4.1 ("Message delivery"); complementar: *"Beyond Self-Talk: A Communication-Centric Survey of LLM-Based Multi-Agent Systems"* (arXiv:2502.14321) | "message delivery must account for supplementary overhead, including transmission efficiency, bandwidth, and the timeliness of message delivery"; o survey complementar aponta que "current leaderboards remain agent-centric and rarely capture system-level properties, including coordination efficiency, communication bandwidth and latency". |
+| D8 | Faithfulness reformulada como claim-based (NLI) substituindo checklist por substring | 6 | Metodologia RAGAS (Es et al.) e TruLens "RAG Triad" | "faithfulness = number of claims supported by the retrieved context / total claims in the answer"; groundedness calculado como fração de sentenças com uma afirmação verificável contra a fonte, avaliado por um LLM-juiz, não por correspondência textual literal. |
+| D9 | Eixo de métricas de escalabilidade | 6 | Li et al. (2024), Seção 5.1 ("Scaling Up the Multi-Agent System") | "Scaling up multi-agent systems involves increasing the number of agents... introduces challenges related to computational resources, communication efficiency, and system coordination... static adjustment and dynamic scaling methods are widely applied." **Ressalva:** a fonte discute a necessidade de medir escalabilidade e estratégias gerais, mas não prescreve a métrica exata nem o desenho do benchmark sintético — isso é decisão de engenharia informada pela literatura, não extraída dela. |
+| D10 | Reestruturação opcional em categorias Outcome/Process/Product/Framework | 6 (opcional) | *"A Catalogue of Evaluation Metrics for LLM-Based Multi-Agent Frameworks in Software Engineering"*, AGENT 2026 workshop @ ICSE 2026 | Propõe 37 métricas nessas 4 categorias para resolver o problema de "frameworks often relying on self-defined or inconsistent metrics, hindering reproducibility". |
+| D11 | Métrica de "sucesso da análise" agregada | 6 | Zhu et al., *"MultiAgentBench: Evaluating the Collaboration and Competition of LLM agents"*, ACL 2025, arXiv:2503.01935 | "measures not only task completion but also the quality of collaboration and competition using novel, milestone-based key performance indicators" — inspiração conceitual (métricas de sucesso estruturadas em vez de binário simples). **Ressalva:** a fórmula proposta na Etapa 6 é decisão de engenharia própria, não uma replicação do benchmark original (que avalia agentes de pesquisa/coding, domínio diferente). |
+| D12 | Remoção dos limiares fixos arbitrários de E1/E2 (15%/30%, 20-40%, etc.) em favor de comparação relativa | 6 | — | **Decisão de engenharia, sem embasamento acadêmico direto.** Nenhuma das fontes consultadas define limiar absoluto universal para overhead de coordenação; os benchmarks citados (MultiAgentBench, catálogo AGENT 2026) comparam configurações entre si, não contra um corte fixo. A ausência de fonte é, em si, o argumento para não manter limiares "porque parecem razoáveis". |
+| D13 | Agentes de domínio passam a interpretar via LLM o que buscar e a construir queries, como preparação arquitetural (não necessidade atual) | 2 | Li et al. (2024), Seção 5.1, subseções "Scaling Up the Multi-Agent System" (já D9) e "Dynamics Environment Adaptation" | "Dynamic environment adaptation refers to the capability of AI agents to operate effectively in constantly changing environments. This capability requires agents to not only understand the state of the environment but also predict and adapt to changes to achieve continuous task execution and goal attainment. The dynamic nature of the environment arises partly from the heterogeneity of multi-modal data streams..." **Ressalva:** a fonte discute o princípio geral de adaptação a ambientes/fontes de dados heterogêneas e mutáveis; a aplicação específica ("LLM constrói filtros de query Cypher") é uma extrapolação razoável desse princípio para o domínio do projeto, não uma citação de implementação idêntica. |
+| D14 | Existência de um guardrail que rejeita prompts fora do domínio orçamentário/saúde pública | 1 | Li et al. (2024), Seção 5.1 ("Misuse"); Rebedea, Dinu, Sreedhar, Parisien & Cohen (2023), *"NeMo Guardrails: A Toolkit for Controllable and Safe LLM Applications with Programmable Rails"*, EMNLP 2023 (demo track) | Li et al.: "some studies employ methods such as instruction processing and malicious detection to eliminate potential adversarial contexts or malicious intents" (referenciando [349–351] no survey). NeMo Guardrails define "topical rails" como guardrails "designed to ensure that conversations focus on specific topics and prevent them from straying into undesirable areas" — é exatamente o mecanismo de restrição de escopo proposto aqui. |
+| D15 | Guardrail de escopo avaliado antes/gatekeeper da extração de parâmetros (e não misturado sem hierarquia) | 1 | Achados de busca sobre surveys de guardrails para agentic AI (ex.: *"The Attack and Defense Landscape of Agentic AI: A Comprehensive Survey"*) | "Input guardrails validate and sanitize possible input dimensions of agents... characterized along three design dimensions: detection mechanism, validation target, and mitigation strategy" — dá suporte a tratar a filtragem de escopo como uma camada de validação estruturalmente anterior ao uso dos dados extraídos, mesmo quando implementada como parte da mesma chamada por razão de custo (ver decisão de custo detalhada na Etapa 1). **Ressalva:** acesso apenas a resumo de busca, não ao texto completo do(s) paper(s) exato(s) por trás do trecho — citar com essa limitação. |
+
+---
+
+## 4. Riscos e Trade-offs por Etapa
+
+| Etapa | Risco | Mitigação / trade-off aceito |
+|---|---|---|
+| **1** | Toda mensagem de chat passa a exigir ao menos 1 chamada LLM (sem exceção, já que o regex foi totalmente removido) — latência/custo mínimo por mensagem sobe em relação a hoje (que tinha regex gratuito na maioria dos casos) | Aceito como custo do requisito explícito de remoção total do regex; mitigável parcialmente combinando classificação de escopo + extração num único prompt (ver decisão de custo na Etapa 1) |
+| **1** | Guardrail pode gerar falso positivo (rejeitar pergunta legítima sobre saúde/orçamento com frase incomum) ou falso negativo (deixar passar pergunta de fato fora de escopo) | Sem solução definitiva neste plano — recomenda-se registrar taxa de rejeição (`compute_guardrail_rejection_rate`, Etapa 6) para calibrar o prompt de classificação ao longo do tempo |
+| **1** | Contenção do lock global (`llm_client._lock`) entre classificação/extração de intenção e síntese textual — o próprio código já documentava esse risco como motivo original do design regex-first | Precisa decidir: aceitar fila FIFO (latência maior em picos) ou dar orçamento/prioridade separada para chamadas de intent parsing. Não resolvido neste plano — decisão de implementação a tomar na Etapa 1 |
+| **1** | Combinar classificação de escopo e extração num único prompt (decisão de custo) é uma proteção mais fraca contra prompt injection do que duas chamadas separadas (padrão "topical rail" da literatura) | Trade-off aceito explicitamente por custo — ver D15; se o guardrail se mostrar insuficiente em uso real, a mitigação é separar as duas chamadas |
+| **2** | Sem o fast-path, até 4 chamadas LLM extras por análise (uma por agente de domínio) para reproduzir uma decisão hoje trivial | Fast-path determinístico + flag desligada por padrão (`USE_LLM_QUERY_PLANNING=false`) mantêm custo igual ao atual enquanto a base não mudar — ver mitigação detalhada na Etapa 2 |
+| **2** | Risco de over-engineering explicitamente reconhecido pelo próprio requisito que originou esta etapa | Mitigado por manter o caminho determinístico como default ativo hoje; a arquitetura LLM fica pronta e testada, mas não paga custo até ser necessária |
+| **3** | Custo dobra: nova chamada LLM por topologia por análise (soma-se às Etapas 1 e 2, ampliando o total de chamadas por comparação completa) | Aceito como custo do ganho de qualidade de priorização; deve operar 1x por análise sobre o conjunto agregado (nunca por par subfunção-indicador), para não crescer linearmente com o nº de indicadores da base |
+| **3** | Mudança estrutural nos orquestradores (`run()` precisa invocar `run_coala_cycle()` de fato) — não é só aditiva | Testar que `correlacoes`/`anomalias` brutos (usados em Q1) permanecem inalterados por este agente — só a apresentação/ênfase muda |
+| **4** | Custo cumulativo: somado às Etapas 1–3, o total de chamadas LLM por comparação completa cresce de forma perceptível | Passo de verificação opcional (flag), mesmo padrão de `use_llm_judge` hoje |
+| **4** | Correção automática pode remover nuance ou "corrigir" incorretamente (LLM verificando LLM não é infalível) | Limitar a 1 única passada de correção, sem loop iterativo |
+| **4** | Não faz sentido rodar verificação sobre texto de fallback determinístico (`use_llm=False`) | Mesma regra já aplicada a Q2+ hoje: desabilitar automaticamente quando `use_llm=False` |
+| **5** | Aumenta a assimetria de custo entre topologias — hierárquica fica ainda mais cara que estrela | Tratar como resultado a discutir no TCC (é evidência empírica do trade-off custo-coordenação), não uma falha a esconder |
+| **5** | 2–3 chamadas LLM extras por análise, só na hierárquica | Fixo em nº de supervisores (3) — não cresce com volume de dados, seguro para escala |
+| **5** | Conflito de merge com Etapas 2/3 se ambas mexerem em `supervisors.py`/`SupervisorAnalitico`/`SupervisorDominio` ao mesmo tempo | Sequenciar ou coordenar as etapas explicitamente antes de abrir os PRs |
+| **6** | **Bloqueador técnico concreto**: contabilização de tokens hoje é um contador global (`_token_usage`) sob um único lock, mas estrela e hierárquica rodam em threads concorrentes — impossível hoje atribuir tokens a uma topologia específica | Pré-requisito: refatorar `core/llm_client.py` para contabilização por análise/por topologia antes de implementar `compute_token_cost` |
+| **6** | Harness de escalabilidade sintética é o item de maior esforço de todo o plano (geração de dados sintéticos, script de teste separado) | Escopo mínimo viável: 2 pontos de comparação (N pequeno vs. maior) já é suficiente para responder à pergunta de compatibilidade com crescimento da base |
+| **6** | Métricas de fidelidade/comunicação/cache ficam bloqueadas se as Etapas 2/4/5 não estiverem completas | Ordem de dependência já reflete isso — não iniciar Etapa 6 parcialmente |
+| **6** | Reescrever `quality_metrics.py` inteiro (D10) quebra a API atual do frontend | Tratado como opcional/futuro, não faz parte do escopo obrigatório deste plano |
+
+---
+
+## Resumo do checklist (visão rápida)
+
+- [ ] **Etapa 1** — `AgenteInterpretacaoIntencao` (novo agente CoALA, substitui `IntentInterpreter`): remoção total do regex, guardrail de escopo, `AnalysisRequest` compartilhado (com `intent_summary`) para estrela e hierárquica
+- [ ] **Etapa 2** — Agentes de domínio ganham ação `planejar_consulta` via LLM (com fast-path/cache/flag desligada por padrão) — preparação para crescimento da base
+- [ ] **Etapa 3** — `AgentePriorizacaoAnalitica` (novo agente CoALA) + integração nos orquestradores
+- [ ] **Etapa 4** — `core/claim_verifier.py` + passo de self-check opcional pós-síntese
+- [ ] **Etapa 5** — Resumos semânticos na comunicação lateral hierárquica
+- [ ] **Etapa 6** — Refatorar contabilização de tokens (pré-requisito) → `compute_token_cost`, `compute_communication_volume`, Q2 claim-based, harness de escalabilidade, taxa de rejeição do guardrail, taxa de acerto do cache, `compute_analysis_success`

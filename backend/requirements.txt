@@ -6,7 +6,7 @@ psutil
 pytest
 python-dotenv
 httpx
-groq
+openai
 openpyxl
 xlrd
 pandas

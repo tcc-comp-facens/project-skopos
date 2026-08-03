@@ -1,6 +1,6 @@
 # Project Skopos
 
-Sistema de comparação de duas arquiteturas multiagente BDI (Estrela e Hierárquica) aplicado à análise de eficiência dos gastos públicos em saúde de Sorocaba-SP.
+Sistema de comparação de duas arquiteturas multiagente CoALA (Cognitive Architectures for Language Agents — Estrela e Hierárquica) aplicado à análise de eficiência dos gastos públicos em saúde de Sorocaba-SP.
 
 **TCC** — Engenharia de Computação, FACENS.
 
@@ -11,7 +11,7 @@ Sistema de comparação de duas arquiteturas multiagente BDI (Estrela e Hierárq
 ```bash
 # 1. Configurar variáveis de ambiente
 cp backend/.env.example backend/.env
-# Edite backend/.env com suas credenciais Neo4j e (opcionalmente) Groq
+# Edite backend/.env com suas credenciais Neo4j e (opcionalmente) DeepSeek
 
 # 2. Subir todos os serviços
 docker compose up --build
@@ -30,22 +30,23 @@ docker compose up --build
 ```
 project-skopos/
 ├── backend/                  # Python 3.11 + FastAPI
-│   ├── api/                  # Camada de API (routes, WebSocket, models, state, runners)
-│   ├── agents/               # Sistema multiagente BDI (ativação condicional de domínio)
+│   ├── api/                  # Camada de API (routes, WebSocket, chat WS, models, state, runners)
+│   ├── agents/               # Sistema multiagente CoALA (ativação condicional de domínio)
+│   │   ├── intent/           # Agente de interpretação de intenção (chat, sem regex)
 │   │   ├── domain/           # 4 agentes de domínio
-│   │   ├── analytical/       # 2 agentes BDI + TextSynthesizer (serviço)
+│   │   ├── analytical/       # 2 agentes CoALA + TextSynthesizer (serviço)
 │   │   ├── context/          # 1 agente de contexto orçamentário
-│   │   ├── star/             # Topologia estrela (OrquestradorEstrela)
+│   │   ├── star/              # Topologia estrela (OrquestradorEstrela)
 │   │   └── hierarchical/     # Topologia hierárquica (CoordenadorGeral + 3 supervisores)
-│   ├── core/                 # Utilitários (métricas, LLM, qualidade, mensagens)
+│   ├── core/                 # Utilitários (métricas, LLM, qualidade, streaming)
 │   ├── db/                   # Cliente Neo4j
 │   ├── etl/                  # Pipeline ETL (FNS, DataSUS, seed)
-│   ├── tests/                # 55 testes (pytest)
+│   ├── tests/                # 102 testes (pytest)
 │   └── data/                 # Planilhas FNS + cache DataSUS
 ├── frontend/                 # React 18 + TypeScript + Vite
 │   └── src/
-│       ├── components/       # AnalysisControls, ArchitecturePanel
-│       ├── hooks/            # useWebSocket
+│       ├── components/       # ChatInterface, ArchitecturePanel, RoundSelector, etc.
+│       ├── hooks/            # useWebSocket, useChatWebSocket
 │       └── types/            # Interfaces TypeScript
 ├── docs/                     # Documentação modular
 └── docker-compose.yml        # Neo4j + Backend + Frontend
@@ -55,7 +56,7 @@ project-skopos/
 
 ## Backend
 
-**Python 3.11 + FastAPI** — agentes BDI, API REST, WebSocket, integração LLM.
+**Python 3.11 + FastAPI** — agentes CoALA, API REST, WebSocket (resultados + chat), integração LLM.
 
 ### Execução local
 
@@ -75,41 +76,48 @@ uvicorn main:app --reload --port 8000
 | `NEO4J_URI` | URI Bolt do Neo4j | `bolt://neo4j:7687` (Docker) / `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha Neo4j | `your_password_here` |
-| `GROQ_API_KEY` | Chave Groq | `gsk_...` |
+| `DEEPSEEK_API_KEY` | Chave DeepSeek (API compatível OpenAI) | `sk-...` |
 | `CORS_ORIGINS` | Origens CORS | `*` |
+| `LOG_LEVEL` | Nível de log (`INFO` mostra estágios/timing/preview de prompts; `DEBUG` mostra prompts completos enviados ao LLM) | `INFO` |
 
 ### Endpoints
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
-| `POST` | `/api/analysis` | Inicia análise comparativa |
+| `POST` | `/api/analysis` | Inicia análise comparativa (formulário estruturado) |
 | `GET` | `/api/analysis/{id}` | Resultado de uma análise |
 | `GET` | `/api/analysis/{id}/quality` | Métricas de qualidade (3 eixos) |
 | `GET` | `/api/analysis/{id}/report` | Relatório comparativo textual |
 | `GET` | `/api/benchmarks` | Métricas de todas as análises |
-| `WS` | `/ws/{analysisId}` | Streaming em tempo real |
+| `GET` | `/api/data-range` | Intervalo de anos com dados disponíveis no Neo4j |
+| `WS` | `/ws/{analysisId}` | Streaming em tempo real do resultado da análise |
+| `WS` | `/ws/chat/{sessionId}` | Chat em linguagem natural — interpreta a intenção e dispara a análise |
 
 ### Estrutura do backend
 
 ```
 backend/
-├── main.py                       # Entry point — cria app, CORS, registra routers
+├── main.py                       # Entry point — cria app, CORS, registra routers, logging
 ├── api/                          # Camada de API
-│   ├── routes.py                 # 5 endpoints REST
-│   ├── websocket.py              # WebSocket handler (streaming)
+│   ├── routes.py                 # Endpoints REST
+│   ├── websocket.py              # WebSocket handler (streaming de resultados)
+│   ├── chat_websocket.py         # WebSocket handler (turno de intenção do chat)
+│   ├── chat_runner.py            # Disparo de análise a partir do chat
+│   ├── dispatch.py               # Disparo de análise compartilhado (REST + chat)
 │   ├── models.py                 # Pydantic models + validação
 │   ├── runners.py                # Thread runners (star, hierarchical)
 │   └── state.py                  # Estado compartilhado
-├── agents/                       # Sistema multiagente BDI
-│   ├── base.py                   # AgenteBDI (classe base)
+├── agents/                       # Sistema multiagente CoALA
+│   ├── base.py                   # AgenteCoALA (classe base do framework CoALA)
 │   ├── data_crossing.py          # Cruzamento de dados + detecção de gaps
+│   ├── intent/                   # Agente de interpretação de intenção (LLM, sem regex)
 │   ├── domain/                   # 4 agentes de domínio
 │   ├── analytical/               # 3 agentes analíticos
 │   ├── context/                  # 1 agente de contexto
 │   ├── star/                     # Topologia estrela
 │   └── hierarchical/             # Topologia hierárquica
 ├── core/                         # Utilitários
-│   ├── llm_client.py             # Cliente LLM (Groq, cadeia de fallback entre modelos)
+│   ├── llm_client.py             # Cliente LLM (DeepSeek, retry, contagem de tokens, logs de chamada)
 │   ├── metrics.py                # MetricsCollector (psutil)
 │   ├── quality_metrics.py        # Métricas de qualidade + relatório
 │   └── streaming_adapter.py      # StreamingAdapter (chunking para ws_queue)
@@ -121,14 +129,14 @@ backend/
 │   ├── seed_data.py              # Seed COVID (fallback)
 │   └── detect_years.py           # Auto-detecção de anos
 ├── data/                         # Planilhas + cache
-└── tests/                        # 61 testes
+└── tests/                        # 13 arquivos de teste (102 testes)
 ```
 
 ---
 
 ## Frontend
 
-**React 18 + TypeScript + Vite** — interface com streaming em tempo real.
+**React 18 + TypeScript + Vite** — chat em linguagem natural com streaming em tempo real.
 
 ### Execução local
 
@@ -145,27 +153,31 @@ npm run dev                   # http://localhost:5173
 | `VITE_API_URL` | URL da API REST | `http://localhost:8000` |
 | `VITE_WS_URL` | URL do WebSocket | `ws://localhost:8000` |
 
-### Componentes
+### Componentes principais
 
 | Componente | Arquivo | Responsabilidade |
 |------------|---------|------------------|
-| `App` | `src/App.tsx` | Layout principal, integração API/WS |
-| `AnalysisControls` | `src/components/AnalysisControls.tsx` | Formulário (período + parâmetros) |
+| `App` | `src/App.tsx` | Layout principal, estado de rodadas de chat, integração API/WS |
+| `ChatInterface` | `src/components/ChatInterface.tsx` | Chat de texto livre (aba Usuário) — dispara análises |
+| `RoundSelector` | `src/components/RoundSelector.tsx` | Navegação entre rodadas de chat na aba técnica |
 | `ArchitecturePanel` | `src/components/ArchitecturePanel.tsx` | Painel de resultado por arquitetura |
-| `useWebSocket` | `src/hooks/useWebSocket.ts` | Hook WS com reconexão automática |
+| `useWebSocket` | `src/hooks/useWebSocket.ts` | Hook WS de resultados, com reconexão automática |
+| `useChatWebSocket` | `src/hooks/useChatWebSocket.ts` | Hook WS do turno de intenção do chat |
+
+Ver [docs/05-FRONTEND.md](docs/05-FRONTEND.md) para a lista completa de componentes.
 
 ---
 
 ## Testes
 
 ```bash
-# Backend — todos (61 testes)
+# Backend — todos (102 testes)
 cd backend && pytest
 
 # Backend — verbose
 cd backend && pytest -v
 
-# Frontend (36 testes)
+# Frontend (9 arquivos de teste)
 cd frontend && npm test
 ```
 
@@ -196,10 +208,12 @@ Documentação detalhada em [`docs/`](docs/):
 | Arquivo | Conteúdo |
 |---------|----------|
 | [01-VISAO-GERAL.md](docs/01-VISAO-GERAL.md) | Introdução, stack, arquitetura, como executar, testes, estrutura |
-| [02-AGENTES.md](docs/02-AGENTES.md) | Modelo BDI, agentes, topologias, regras de negócio |
+| [02-AGENTES.md](docs/02-AGENTES.md) | Modelo CoALA, agentes, topologias, regras de negócio |
 | [03-DADOS-ETL.md](docs/03-DADOS-ETL.md) | Fontes institucionais (FNS, DataSUS), ETL, Neo4j, limitações |
-| [04-BACKEND-API.md](docs/04-BACKEND-API.md) | API REST, WebSocket, LLM, métricas de qualidade, erros |
-| [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, hook WS, tipos, acessibilidade |
+| [04-BACKEND-API.md](docs/04-BACKEND-API.md) | API REST, WebSocket, chat, LLM, métricas de qualidade, erros |
+| [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, chat, hooks WS, tipos, acessibilidade |
+
+Também há o [PLANO_REFATORACAO.md](PLANO_REFATORACAO.md), com o plano (em andamento) de amadurecimento do uso de LLM nos agentes e de novas métricas de avaliação, fundamentado em literatura acadêmica.
 
 ---
 

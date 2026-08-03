@@ -6,9 +6,9 @@ em saúde (despesas por subfunção) e indicadores de saúde, classificando
 a força da correlação com base no coeficiente.
 
 Opera sobre dados em memória (CrossedDataPoint dicts) — sem dependência
-de Neo4j ou outros serviços externos.
-
-Requisitos: 5.1, 5.2, 5.4, 5.5, 5.6, 5.7
+de Neo4j ou outros serviços externos. O cálculo estatístico em si é
+raciocínio simbólico/determinístico (Spearman via scipy) — não depende de
+LLM, diferente da síntese textual final (Req 5.1, 5.2, 5.4, 5.5, 5.6, 5.7).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 from scipy import stats
 
-from agents.base import AgenteBDI, IntentionFailure
+from agents.base import ActionFailure, AgenteCoALA
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +41,25 @@ def _safe_correlation(func, xs: list[float], ys: list[float]) -> float:
         return 0.0
 
 
-def _classify(r: float) -> str:
+def _classify(r: float, limiar_alta: float = 0.7, limiar_media: float = 0.4) -> str:
     """Classify correlation strength as alta/média/baixa (Req 5.4).
 
-    Uses absolute value of Spearman coefficient:
-      |r| >= 0.7 → "alta"
-      |r| >= 0.4 → "média"
-      else       → "baixa"
+    Uses absolute value of Spearman coefficient against limiares
+    (por padrão os mesmos valores de `semantic_memory`, injetados pelo
+    caller — ver `AgenteCorrelacao._compute_correlations`):
+      |r| >= limiar_alta  → "alta"
+      |r| >= limiar_media → "média"
+      else                → "baixa"
     """
     abs_r = abs(r)
-    if abs_r >= 0.7:
+    if abs_r >= limiar_alta:
         return "alta"
-    if abs_r >= 0.4:
+    if abs_r >= limiar_media:
         return "média"
     return "baixa"
 
 
-class AgenteCorrelacao(AgenteBDI):
+class AgenteCorrelacao(AgenteCoALA):
     """Agente analítico que calcula correlação Spearman (Req 5).
 
     Recebe dados cruzados (despesas × indicadores por subfunção e ano)
@@ -67,44 +69,43 @@ class AgenteCorrelacao(AgenteBDI):
     monotônicas não-lineares. Ideal para dados de saúde pública com
     amostras pequenas e possíveis anos atípicos.
 
-    Classifica a força: alta (≥0.7), média (≥0.4), baixa (<0.4).
-    Retorna 0.0 para pares com menos de 2 pontos de dados (Req 5.7).
+    Classifica a força usando os limiares em `semantic_memory` (por
+    padrão alta ≥0.7, média ≥0.4). Retorna 0.0 para pares com menos de
+    2 pontos de dados (Req 5.7).
     """
 
     def __init__(self, agent_id: str) -> None:
         super().__init__(agent_id)
-
-    # -- BDI overrides --------------------------------------------------
-
-    def perceive(self) -> dict:
-        """Return current beliefs as perception (data set by caller)."""
-        return {
-            "dados_cruzados": self.beliefs.get("dados_cruzados", []),
+        self.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4}
+        self.procedural_memory = {
+            "calcular_correlacoes": [self._act_calcular_correlacoes],
         }
 
-    def deliberate(self) -> list[dict]:
-        """Determine desires based on available data."""
-        desires: list[dict] = []
-        if self.beliefs.get("dados_cruzados"):
-            desires.append({"goal": "calcular_correlacoes"})
-        self.desires = desires
-        return desires
+    # -- Ciclo CoALA ------------------------------------------------------
 
-    def plan(self, desires: list[dict]) -> list[dict]:
-        """Generate intentions from desires."""
-        return [{"desire": d, "status": "pending"} for d in desires]
+    def perceive(self) -> dict:
+        """Retorna a working memory atual como percepção (dado definido pelo caller)."""
+        return {
+            "dados_cruzados": self.working_memory.get("dados_cruzados", []),
+        }
 
-    def _execute_intention(self, intention: dict) -> None:
-        """Execute a single intention."""
-        goal = intention["desire"]["goal"]
+    def propose_actions(self) -> list[dict]:
+        """Propõe calcular correlações se há dados cruzados disponíveis."""
+        actions: list[dict] = []
+        if self.working_memory.get("dados_cruzados"):
+            actions.append({"goal": "calcular_correlacoes"})
+        return actions
+
+    def _act_calcular_correlacoes(self, action: dict) -> None:
+        """Ação interna de reasoning: calcula Spearman por par. Sem fallback
+        registrado — falha propaga (tratada no nível do orquestrador/supervisor).
+        """
         try:
-            if goal == "calcular_correlacoes":
-                self._compute_correlations()
-            intention["status"] = "completed"
+            self._compute_correlations()
         except Exception as e:
-            raise IntentionFailure(intention, str(e)) from e
+            raise ActionFailure(action, str(e)) from e
 
-    # -- Public API called by orchestrator/supervisor -------------------
+    # -- Interface pública chamada pelo orquestrador/supervisor -----------
 
     def compute(self, dados_cruzados: list[dict]) -> list[dict]:
         """Calcula correlação Spearman para cada par subfunção-indicador.
@@ -119,16 +120,22 @@ class AgenteCorrelacao(AgenteBDI):
             Retorna lista vazia se input for vazio.
             Retorna 0.0 se < 2 pontos (Req 5.7).
         """
-        self.update_beliefs({"dados_cruzados": dados_cruzados})
-        self.run_cycle()
-        return self.beliefs.get("correlacoes", [])
+        self.update_working_memory({"dados_cruzados": dados_cruzados})
+        self.run_coala_cycle()
+        return self.working_memory.get("correlacoes", [])
 
-    # -- Internal computation -------------------------------------------
+    # -- Reasoning interno -------------------------------------------------
 
     def _compute_correlations(self) -> None:
-        """Compute Spearman correlation per subfuncao-indicador pair."""
-        crossed = self.beliefs.get("dados_cruzados", [])
+        """Compute Spearman correlation per subfuncao-indicador pair.
+
+        Os limiares de classificação são obtidos via *retrieval* de
+        `semantic_memory` (não hardcoded direto do módulo).
+        """
+        crossed = self.working_memory.get("dados_cruzados", [])
         correlacoes: list[dict[str, Any]] = []
+        limiar_alta = self.semantic_memory["limiar_alta"]
+        limiar_media = self.semantic_memory["limiar_media"]
 
         # Group data points by (subfuncao, tipo_indicador)
         pairs: dict[tuple[int, str], list[dict]] = {}
@@ -157,11 +164,11 @@ class AgenteCorrelacao(AgenteBDI):
                     "subfuncao": subfuncao,
                     "tipo_indicador": tipo,
                     "spearman": r_rounded,
-                    "classificacao": _classify(r_rounded),
+                    "classificacao": _classify(r_rounded, limiar_alta, limiar_media),
                     "n_pontos": n,
                 })
 
-        self.beliefs["correlacoes"] = correlacoes
+        self.working_memory["correlacoes"] = correlacoes
         logger.info(
             "Agent %s: computed %d correlations", self.agent_id, len(correlacoes)
         )

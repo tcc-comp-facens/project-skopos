@@ -1,7 +1,7 @@
 """
 Orquestração fina do disparo de análise a partir do chat.
 
-Traduz um AnalysisParams já validado pelo IntentInterpreter em uma
+Traduz um AnalysisIntent já validado pelo AgenteInterpretacaoIntencao em uma
 análise disparada (mesma lógica do formulário REST, via dispatch.py) e
 produz o texto de confirmação mostrado ao usuário no chat.
 
@@ -10,31 +10,44 @@ Requisitos: 6.1, 6.5 (spec realtime-chat-interface)
 
 from __future__ import annotations
 
+import logging
+
+from agents.intent import AgenteInterpretacaoIntencao, AnalysisIntent
 from api.dispatch import dispatch_analysis
-from core.intent_interpreter import AnalysisParams, IntentInterpreter
+
+logger = logging.getLogger(__name__)
 
 
 def run_chat_analysis(
-    params: AnalysisParams,
+    params: AnalysisIntent,
     use_llm: bool,
     use_llm_judge: bool,
     source_question: str,
     interpreted_via: str,
-    interpreter: IntentInterpreter,
+    interpreter: AgenteInterpretacaoIntencao,
 ) -> tuple[str, str]:
     """Dispara a análise a partir de parâmetros extraídos do chat.
 
     Args:
-        params: Parâmetros já validados pelo IntentInterpreter.
+        params: Parâmetros já validados pelo AgenteInterpretacaoIntencao,
+            incluindo `intent_summary` — repassado a `dispatch_analysis`
+            para alimentar a camada de entrada compartilhada pelas duas
+            arquiteturas (Etapa 1 do plano de refatoração).
         use_llm: Se True, usa LLM para síntese textual das arquiteturas.
         use_llm_judge: Se True, habilita avaliação LLM-as-Judge.
         source_question: Texto original digitado pelo usuário (auditoria).
-        interpreted_via: "regex" ou "llm" — como os parâmetros foram extraídos.
+        interpreted_via: sempre "llm" — mantido para compatibilidade do
+            registro de auditoria em Neo4j (não há mais caminho "regex").
         interpreter: Instância usada para gerar o texto de confirmação.
 
     Returns:
         Tupla (analysis_id, texto_de_confirmacao).
     """
+    logger.info(
+        "ChatRunner: despachando análise a partir do chat (intent_summary=%r, "
+        "periodo=%s-%s, health_params=%s)",
+        params.intent_summary, params.date_from, params.date_to, params.health_params,
+    )
     analysis_id = dispatch_analysis(
         date_from=params.date_from,
         date_to=params.date_to,
@@ -43,6 +56,8 @@ def run_chat_analysis(
         use_llm_judge=use_llm_judge,
         source_question=source_question,
         interpreted_via=interpreted_via,
+        intent_summary=params.intent_summary,
     )
     confirmation = interpreter.pretty_print(params)
+    logger.info("ChatRunner: análise [%s] despachada a partir do chat", analysis_id[:8])
     return analysis_id, confirmation

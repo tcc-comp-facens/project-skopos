@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
-from agents.base import AgenteBDI, IntentionFailure
+from agents.base import ActionFailure, AgenteCoALA
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
@@ -29,7 +29,7 @@ SUBFUNCOES: list[int] = [301, 302, 303, 305]  # All subfunções (transversal)
 TIPOS_INDICADOR: list[str] = ["mortalidade"]
 
 
-class AgenteMortalidade(AgenteBDI):
+class AgenteMortalidade(AgenteCoALA):
     """Agente de domínio especializado em mortalidade (visão transversal).
 
     Consulta DespesaSIOPS de TODAS as subfunções (301, 302, 303, 305) e
@@ -40,8 +40,11 @@ class AgenteMortalidade(AgenteBDI):
     subfunção, este agente mantém despesas de todas as subfunções porque
     dados de mortalidade são transversais a todas as categorias de gasto.
 
-    Herda de AgenteBDI e implementa o ciclo BDI completo:
-    perceive → deliberate → plan → execute (Req 4.4).
+    Herda de AgenteCoALA e implementa o ciclo CoALA completo:
+    perceive → propose_actions → evaluate_and_select → execute (Req 4.4).
+    A lista de subfunções e os tipos de indicador são fatos de domínio
+    expostos via `semantic_memory` — lidos por *retrieval* dentro de
+    `_act_*`, não hardcoded direto do módulo no meio da execução.
 
     Attributes:
         neo4j_client: Cliente Neo4j para queries Cypher.
@@ -50,138 +53,139 @@ class AgenteMortalidade(AgenteBDI):
     def __init__(self, agent_id: str, neo4j_client: Neo4jClient) -> None:
         super().__init__(agent_id)
         self.neo4j_client = neo4j_client
+        self.semantic_memory = {
+            "subfuncoes": SUBFUNCOES,
+            "tipos_indicador": TIPOS_INDICADOR,
+        }
+        self.procedural_memory = {
+            "consultar_despesas": [
+                self._act_consultar_despesas,
+                self._act_fallback_despesas,
+            ],
+            "consultar_indicadores": [
+                self._act_consultar_indicadores,
+                self._act_fallback_indicadores,
+            ],
+        }
 
     # ------------------------------------------------------------------
-    # Ciclo BDI
+    # Ciclo CoALA
     # ------------------------------------------------------------------
 
     def perceive(self) -> dict:
-        """Percebe o ambiente a partir das crenças já definidas.
+        """Percebe o ambiente a partir da working memory já definida.
 
-        O orquestrador/supervisor chama update_beliefs com os parâmetros
-        da consulta antes de disparar o ciclo. A percepção retorna esses
-        parâmetros.
+        O orquestrador/supervisor chama update_working_memory com os
+        parâmetros da consulta antes de disparar o ciclo. A percepção
+        retorna esses parâmetros.
 
         Returns:
             Dicionário com analysis_id, date_from e date_to.
         """
         return {
-            "analysis_id": self.beliefs.get("analysis_id"),
-            "date_from": self.beliefs.get("date_from"),
-            "date_to": self.beliefs.get("date_to"),
+            "analysis_id": self.working_memory.get("analysis_id"),
+            "date_from": self.working_memory.get("date_from"),
+            "date_to": self.working_memory.get("date_to"),
         }
 
-    def deliberate(self) -> list[dict]:
-        """Seleciona desejos com base nas crenças atuais.
+    def propose_actions(self) -> list[dict]:
+        """Propõe ações com base na working memory atual.
 
-        Se os parâmetros de consulta estão presentes, deseja consultar
+        Se os parâmetros de consulta estão presentes, propõe consultar
         despesas (todas as subfunções) e indicadores (mortalidade).
 
         Returns:
-            Lista de desejos selecionados.
+            Lista de candidatos de ação.
         """
-        desires: list[dict] = []
+        actions: list[dict] = []
         if (
-            self.beliefs.get("analysis_id")
-            and self.beliefs.get("date_from") is not None
+            self.working_memory.get("analysis_id")
+            and self.working_memory.get("date_from") is not None
         ):
-            desires.append({"goal": "consultar_despesas"})
-            desires.append({"goal": "consultar_indicadores"})
-        self.desires = desires
-        return desires
+            actions.append({"goal": "consultar_despesas"})
+            actions.append({"goal": "consultar_indicadores"})
+        return actions
 
-    def plan(self, desires: list[dict]) -> list[dict]:
-        """Gera intenções (planos) para cada desejo.
+    def _act_consultar_despesas(self, action: dict) -> None:
+        """Ação externa (grounding): consulta DespesaSIOPS no Neo4j.
 
-        Args:
-            desires: Lista de desejos a serem planejados.
-
-        Returns:
-            Lista de intenções com status "pending".
-        """
-        return [{"desire": d, "status": "pending"} for d in desires]
-
-    def _execute_intention(self, intention: dict) -> None:
-        """Executa uma intenção de consulta ao Neo4j.
-
-        Para "consultar_despesas": busca DespesaSIOPS e mantém registros
-        de TODAS as subfunções (301, 302, 303, 305) — visão transversal (Req 4.2).
-
-        Para "consultar_indicadores": busca IndicadorDataSUS com
-        tipo="mortalidade" (Req 4.1).
-
-        Args:
-            intention: Intenção a ser executada.
+        Mantém despesas de TODAS as subfunções (transversal) (Req 4.2),
+        lida via retrieval de `semantic_memory["subfuncoes"]`.
 
         Raises:
-            IntentionFailure: Se a consulta ao Neo4j falhar.
+            ActionFailure: Se a consulta ao Neo4j falhar.
         """
-        goal = intention["desire"]["goal"]
-        analysis_id = self.beliefs["analysis_id"]
-        date_from = self.beliefs["date_from"]
-        date_to = self.beliefs["date_to"]
+        analysis_id = self.working_memory["analysis_id"]
+        date_from = self.working_memory["date_from"]
+        date_to = self.working_memory["date_to"]
+        subfuncoes = self.semantic_memory["subfuncoes"]
 
         try:
-            if goal == "consultar_despesas":
-                all_despesas = self.neo4j_client.get_despesas(
-                    analysis_id, date_from, date_to
-                )
-                # Mantém despesas de TODAS as subfunções (transversal) (Req 4.2)
-                despesas = [
-                    d for d in all_despesas if d.get("subfuncao") in SUBFUNCOES
-                ]
-                self.beliefs["despesas"] = despesas
-                logger.info(
-                    "Agent %s: retrieved %d despesas (subfuncoes=%s)",
-                    self.agent_id,
-                    len(despesas),
-                    SUBFUNCOES,
-                )
-
-            elif goal == "consultar_indicadores":
-                indicadores = self.neo4j_client.get_indicadores(
-                    analysis_id, date_from, date_to, TIPOS_INDICADOR
-                )
-                self.beliefs["indicadores"] = indicadores
-                logger.info(
-                    "Agent %s: retrieved %d indicadores (tipos=%s)",
-                    self.agent_id,
-                    len(indicadores),
-                    TIPOS_INDICADOR,
-                )
-
-            intention["status"] = "completed"
-        except Exception as e:
-            raise IntentionFailure(intention, str(e)) from e
-
-    def _recover_intention(self, failed_intention: dict) -> dict | None:
-        """Recuperação de falha: retorna listas vazias (Req 4.5).
-
-        Quando uma consulta ao Neo4j falha, o agente retorna listas
-        vazias em vez de propagar a exceção, permitindo que o
-        orquestrador/supervisor continue com dados parciais.
-
-        Args:
-            failed_intention: A intenção que falhou.
-
-        Returns:
-            Intenção alternativa que define listas vazias, ou None.
-        """
-        goal = failed_intention["desire"]["goal"]
-        if goal == "consultar_despesas":
-            self.beliefs["despesas"] = []
-            logger.warning(
-                "Agent %s: fallback — returning empty despesas", self.agent_id
+            logger.info(
+                "Agent %s: consultando despesas (subfuncoes=%s, periodo=%s-%s)",
+                self.agent_id, subfuncoes, date_from, date_to,
             )
-            return {"desire": {"goal": "noop"}, "status": "completed"}
-        elif goal == "consultar_indicadores":
-            self.beliefs["indicadores"] = []
-            logger.warning(
-                "Agent %s: fallback — returning empty indicadores",
+            all_despesas = self.neo4j_client.get_despesas(
+                analysis_id, date_from, date_to
+            )
+            despesas = [d for d in all_despesas if d.get("subfuncao") in subfuncoes]
+            self.working_memory["despesas"] = despesas
+            logger.info(
+                "Agent %s: retrieved %d despesas (subfuncoes=%s)",
                 self.agent_id,
+                len(despesas),
+                subfuncoes,
             )
-            return {"desire": {"goal": "noop"}, "status": "completed"}
-        return None
+        except Exception as e:
+            raise ActionFailure(action, str(e)) from e
+
+    def _act_consultar_indicadores(self, action: dict) -> None:
+        """Ação externa (grounding): consulta IndicadorDataSUS no Neo4j.
+
+        Busca tipos definidos em `semantic_memory["tipos_indicador"]`
+        (Req 4.1).
+
+        Raises:
+            ActionFailure: Se a consulta ao Neo4j falhar.
+        """
+        analysis_id = self.working_memory["analysis_id"]
+        date_from = self.working_memory["date_from"]
+        date_to = self.working_memory["date_to"]
+        tipos_indicador = self.semantic_memory["tipos_indicador"]
+
+        try:
+            logger.info(
+                "Agent %s: consultando indicadores (tipos=%s, periodo=%s-%s)",
+                self.agent_id, tipos_indicador, date_from, date_to,
+            )
+            indicadores = self.neo4j_client.get_indicadores(
+                analysis_id, date_from, date_to, tipos_indicador
+            )
+            self.working_memory["indicadores"] = indicadores
+            logger.info(
+                "Agent %s: retrieved %d indicadores (tipos=%s)",
+                self.agent_id,
+                len(indicadores),
+                tipos_indicador,
+            )
+        except Exception as e:
+            raise ActionFailure(action, str(e)) from e
+
+    def _act_fallback_despesas(self, action: dict) -> None:
+        """Estratégia de fallback (Req 4.5): grava lista vazia em working memory.
+
+        Permite que o orquestrador/supervisor continue com dados parciais
+        em vez de propagar a falha da consulta ao Neo4j.
+        """
+        self.working_memory["despesas"] = []
+        logger.warning("Agent %s: fallback — returning empty despesas", self.agent_id)
+
+    def _act_fallback_indicadores(self, action: dict) -> None:
+        """Estratégia de fallback (Req 4.5): grava lista vazia em working memory."""
+        self.working_memory["indicadores"] = []
+        logger.warning(
+            "Agent %s: fallback — returning empty indicadores", self.agent_id
+        )
 
     # ------------------------------------------------------------------
     # Interface pública
@@ -196,7 +200,7 @@ class AgenteMortalidade(AgenteBDI):
         """Consulta despesas (todas as subfunções) e indicadores (mortalidade).
 
         Método de conveniência chamado pelo orquestrador/supervisor.
-        Configura as crenças, executa o ciclo BDI e retorna os dados.
+        Configura a working memory, executa o ciclo CoALA e retorna os dados.
 
         Diferente dos demais agentes de domínio, este agente retorna
         despesas de TODAS as subfunções (301, 302, 303, 305) porque
@@ -212,15 +216,15 @@ class AgenteMortalidade(AgenteBDI):
             contendo lista de registros do Neo4j. Retorna listas vazias
             se não houver dados (Req 4.5).
         """
-        self.update_beliefs({
+        self.update_working_memory({
             "analysis_id": analysis_id,
             "date_from": date_from,
             "date_to": date_to,
         })
 
-        self.run_cycle()
+        self.run_coala_cycle()
 
         return {
-            "despesas": self.beliefs.get("despesas", []),
-            "indicadores": self.beliefs.get("indicadores", []),
+            "despesas": self.working_memory.get("despesas", []),
+            "indicadores": self.working_memory.get("indicadores", []),
         }

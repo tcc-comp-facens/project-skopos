@@ -41,6 +41,7 @@ def dispatch_analysis(
     use_llm_judge: bool,
     source_question: str | None = None,
     interpreted_via: str | None = None,
+    intent_summary: str | None = None,
 ) -> str:
     """Persiste a análise no Neo4j e dispara as threads star + hierarchical.
 
@@ -49,9 +50,20 @@ def dispatch_analysis(
     opcionais e só preenchidos quando a análise vem do chat — permitem
     auditar depois a qualidade da interpretação de intenção.
 
+    `intent_summary` (opcional, só vem do chat) é o resumo de intenção
+    produzido pelo AgenteInterpretacaoIntencao (Etapa 1 do plano de
+    refatoração) — repassado no dict `params` para as duas arquiteturas,
+    que é a camada de entrada estruturada compartilhada por ambas.
+
     Requisitos: 9.1, 10.4
     """
     analysis_id = str(uuid.uuid4())
+    logger.info(
+        "Analysis [%s]: disparando análise (periodo=%s-%s, health_params=%s, "
+        "use_llm=%s, use_llm_judge=%s, interpreted_via=%s, intent_summary=%r)",
+        analysis_id[:8], date_from, date_to, health_params,
+        use_llm, use_llm_judge, interpreted_via, intent_summary,
+    )
 
     neo4j_client = get_neo4j_client()
     try:
@@ -102,6 +114,7 @@ def dispatch_analysis(
         "health_params": health_params,
         "use_llm": use_llm,
         "use_llm_judge": use_llm_judge,
+        "intent_summary": intent_summary,
     }
 
     t_star = threading.Thread(
@@ -118,5 +131,8 @@ def dispatch_analysis(
     active_results[analysis_id] = {"use_llm_judge": use_llm_judge, "use_llm": use_llm}
     t_star.start()
     t_hier.start()
+    logger.info(
+        "Analysis [%s]: threads star e hierarchical iniciadas", analysis_id[:8]
+    )
 
     return analysis_id

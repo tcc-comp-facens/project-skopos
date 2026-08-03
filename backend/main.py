@@ -32,9 +32,13 @@ from api.state import get_neo4j_client as _get_neo4j_client  # noqa: F401
 
 load_dotenv()
 
+# LOG_LEVEL=DEBUG expõe o conteúdo completo dos prompts enviados ao LLM
+# (core/llm_client.py) — INFO (default) só mostra um preview truncado.
+# %(threadName)s permite distinguir execuções concorrentes de estrela e
+# hierárquica (cada análise dispara as duas em threads daemon separadas).
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s %(name)s: %(message)s",
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s",
 )
 
 app = FastAPI(title="Multiagent Architecture Comparison")

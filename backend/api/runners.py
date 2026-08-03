@@ -11,6 +11,7 @@ Requirements: 9.1, 10.4, 11.3, 11.4
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from queue import Queue
@@ -60,6 +61,8 @@ def _persist_topology_result(
 def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
     """Execute the star architecture pipeline in a dedicated thread."""
     neo4j_client: Neo4jClient | None = None
+    inicio = time.time()
+    logger.info("Analysis [%s] [star]: pipeline iniciado", analysis_id[:8])
     try:
         neo4j_client = get_neo4j_client()
         orchestrator = OrquestradorEstrela(
@@ -85,8 +88,12 @@ def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
             "type": "done",
             "payload": "",
         })
+        elapsed_ms = (time.time() - inicio) * 1000
+        logger.info(
+            "Analysis [%s] [star]: pipeline concluído em %.1fms", analysis_id[:8], elapsed_ms
+        )
     except Exception as exc:
-        logger.error("Star thread failed: %s", exc)
+        logger.error("Analysis [%s] [star]: pipeline falhou — %s", analysis_id[:8], exc)
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "star",
@@ -104,6 +111,8 @@ def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
 def run_hierarchical(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
     """Execute the hierarchical architecture pipeline in a dedicated thread."""
     neo4j_client: Neo4jClient | None = None
+    inicio = time.time()
+    logger.info("Analysis [%s] [hierarchical]: pipeline iniciado", analysis_id[:8])
     try:
         neo4j_client = get_neo4j_client()
         coordinator = CoordenadorGeral(
@@ -129,8 +138,13 @@ def run_hierarchical(analysis_id: str, params: dict[str, Any], ws_queue: Queue) 
             "type": "done",
             "payload": "",
         })
+        elapsed_ms = (time.time() - inicio) * 1000
+        logger.info(
+            "Analysis [%s] [hierarchical]: pipeline concluído em %.1fms",
+            analysis_id[:8], elapsed_ms,
+        )
     except Exception as exc:
-        logger.error("Hierarchical thread failed: %s", exc)
+        logger.error("Analysis [%s] [hierarchical]: pipeline falhou — %s", analysis_id[:8], exc)
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "hierarchical",

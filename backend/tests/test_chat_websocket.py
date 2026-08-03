@@ -32,8 +32,14 @@ def _drain_chunks(ws) -> list[str]:
 class TestChatWebsocketProtocol:
     def test_complete_message_dispatches_analysis(self):
         session_id = _session_id()
+        llm_response = (
+            '{"em_escopo": true, "date_from": 2019, "date_to": 2022, '
+            '"health_params": ["dengue"], "intent_summary": "comparar dengue"}'
+        )
         with patch(
             "api.chat_websocket.get_available_year_range", return_value=(2015, 2025)
+        ), patch(
+            "core.llm_client.generate", return_value=llm_response
         ), patch(
             "api.chat_websocket.run_chat_analysis",
             return_value=("analysis-123", "Analisar dengue de 2019 a 2022."),

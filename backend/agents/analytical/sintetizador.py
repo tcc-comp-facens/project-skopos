@@ -1,17 +1,23 @@
 """
 Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (Groq, cadeia de fallback entre modelos)
+Gera texto consolidado de análise via LLM (DeepSeek)
 a partir de correlações, anomalias e contexto orçamentário.
 
 Quando o LLM está indisponível, gera texto estruturado como fallback.
 
-Nota arquitetural: o sintetizador NÃO é um agente BDI. Ele não possui
-autonomia deliberativa — recebe dados prontos e produz texto. A decisão
-de modelá-lo como classe normal (não agente) reflete que ele não percebe
-ambiente mutável, não forma desejos concorrentes, e não escolhe entre
-planos alternativos. O streaming é responsabilidade do caller via
-StreamingAdapter.
+Nota arquitetural (CoALA): o sintetizador NÃO é um agente CoALA — não
+possui working/episodic/semantic/procedural memory própria nem participa
+do ciclo propose→evaluate→select→execute. Ele é, em si, a implementação
+de duas ações do espaço de ações de quem o chama (orquestrador/supervisor):
+`_build_prompt`/`_generate_structured_text` são uma ação de *reasoning*
+interna (transforma dados já resolvidos em texto, sem tocar o ambiente);
+a chamada a `core.llm_client.generate_stream` é uma ação de *grounding*
+externa (invocação de uma ferramenta fora do processo — a API do LLM). A
+decisão de modelá-lo como classe normal (não agente) reflete que ele não
+percebe ambiente mutável, não propõe ações concorrentes, e não escolhe
+entre estratégias alternativas — quem decide isso é o caller. O streaming
+é responsabilidade do caller via StreamingAdapter.
 
 Requisitos: 7.1, 7.2, 7.3, 7.4
 """
@@ -34,8 +40,10 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 class TextSynthesizer:
     """Serviço de geração de texto analítico via LLM com fallback estruturado.
 
-    Não é um agente BDI — é um serviço consumido pelos orquestradores
-    e supervisores. Responsabilidade: dado um conjunto de correlações,
+    Não é um agente CoALA — é um serviço consumido pelos orquestradores
+    e supervisores, que implementa as ações de reasoning (montagem de
+    prompt/texto estruturado) e grounding externo (chamada ao LLM) desses
+    chamadores. Responsabilidade: dado um conjunto de correlações,
     anomalias e contexto orçamentário, produzir texto analítico.
 
     Args:
@@ -75,8 +83,12 @@ class TextSynthesizer:
             import core.llm_client as llm_client
 
             prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+            logger.info(
+                "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
+                self.synthesizer_id, len(prompt),
+            )
             # Consume the stream fully for batch mode
-            text = "".join(llm_client.generate_stream(prompt))
+            text = "".join(llm_client.generate_stream(prompt, caller=self.synthesizer_id))
             if text:
                 logger.info("TextSynthesizer %s: LLM generation complete (%d chars)", self.synthesizer_id, len(text))
                 return text
@@ -86,6 +98,10 @@ class TextSynthesizer:
                 self.synthesizer_id,
             )
 
+        logger.info(
+            "TextSynthesizer %s: usando fallback estruturado (LLM indisponível ou vazio)",
+            self.synthesizer_id,
+        )
         return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
 
     def generate_stream(
@@ -116,7 +132,11 @@ class TextSynthesizer:
         import core.llm_client as llm_client
 
         prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
-        yield from llm_client.generate_stream(prompt)
+        logger.info(
+            "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
+            self.synthesizer_id, len(prompt),
+        )
+        yield from llm_client.generate_stream(prompt, caller=self.synthesizer_id)
 
     def generate_fallback(
         self,

@@ -34,10 +34,10 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from agents.intent import AgenteInterpretacaoIntencao
 from api.chat_runner import run_chat_analysis
 from api.dispatch import get_available_year_range
 from api.state import active_chat_sessions
-from core.intent_interpreter import IntentInterpreter
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,11 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
     year_range = get_available_year_range()
     min_year, max_year = year_range if year_range else (None, None)
-    interpreter = IntentInterpreter(min_year=min_year, max_year=max_year)
+    interpreter = AgenteInterpretacaoIntencao(
+        agent_id=f"intent-{uuid.uuid4().hex[:8]}",
+        min_year=min_year,
+        max_year=max_year,
+    )
 
     try:
         while True:
@@ -108,7 +112,15 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
             active_chat_sessions[session_id] = True
             try:
+                logger.info(
+                    "Chat WS %s: interpretando mensagem (%d chars): %r",
+                    session_id[:8], len(text), text[:120],
+                )
                 result = interpreter.parse(text)
+                logger.info(
+                    "Chat WS %s: interpretação -> success=%s missing=%s",
+                    session_id[:8], result.success, result.missing,
+                )
 
                 if not result.success:
                     await _send_chunks(websocket, result.clarification_message)

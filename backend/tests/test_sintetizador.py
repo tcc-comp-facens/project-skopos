@@ -1,7 +1,7 @@
 """Tests for TextSynthesizer."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from agents.analytical.sintetizador import TextSynthesizer
 
@@ -63,9 +63,11 @@ class TestGenerateWithoutLlm:
 
 class TestGenerateFallbackOnLlmFailure:
     def test_falls_back_when_llm_raises(self, synth, sample_correlacoes, sample_anomalias, sample_contexto):
-        mock_llm = MagicMock()
-        mock_llm.generate_stream.side_effect = RuntimeError("LLM unavailable")
-        with patch.dict("sys.modules", {"core.llm_client": mock_llm}):
+        # patch no atributo (não em sys.modules) — robusto à ordem de execução
+        # dos testes, diferente de patch.dict("sys.modules", ...), que só
+        # funciona se core.llm_client nunca tiver sido importado de verdade
+        # antes neste processo (ver import a.b as c vs sys.modules["a.b"]).
+        with patch("core.llm_client.generate_stream", side_effect=RuntimeError("LLM unavailable")):
             text = synth.generate(sample_correlacoes, sample_anomalias, sample_contexto, use_llm=True)
             assert "Resumo Executivo" in text
 
@@ -88,11 +90,7 @@ class TestGenerateFallback:
 
 
 class TestGenerateStream:
-    @patch.dict("sys.modules", {"core.llm_client": MagicMock()})
     def test_yields_tokens_from_llm(self, synth, sample_correlacoes, sample_anomalias, sample_contexto):
-        import sys
-        mock_llm = sys.modules["core.llm_client"]
-        mock_llm.generate_stream.return_value = iter(["Hello", " ", "world"])
-
-        tokens = list(synth.generate_stream(sample_correlacoes, sample_anomalias, sample_contexto))
+        with patch("core.llm_client.generate_stream", return_value=iter(["Hello", " ", "world"])):
+            tokens = list(synth.generate_stream(sample_correlacoes, sample_anomalias, sample_contexto))
         assert tokens == ["Hello", " ", "world"]

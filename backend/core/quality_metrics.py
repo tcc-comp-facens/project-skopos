@@ -311,6 +311,7 @@ def compute_faithfulness_llm(
     anomalias: list[dict],
     contexto_orcamentario: dict,
     texto: str,
+    caller: str = "llm_judge",
 ) -> dict[str, Any]:
     """Q2 (LLM-as-judge) — Avalia faithfulness via chamada ao LLM.
 
@@ -322,6 +323,9 @@ def compute_faithfulness_llm(
         anomalias: Lista de anomalias detectadas.
         contexto_orcamentario: Dict com tendências orçamentárias.
         texto: Texto gerado pelo sintetizador.
+        caller: Identificador para logging (ver core.llm_client) — por
+            padrão só "llm_judge"; `compute_all_quality_metrics` passa
+            algo como "llm_judge-star"/"llm_judge-hierarchical".
 
     Returns:
         Dict com score (1-5), justificativa e método usado.
@@ -384,7 +388,7 @@ def compute_faithfulness_llm(
     )
 
     try:
-        response = llm_client.generate(prompt)
+        response = llm_client.generate(prompt, caller=caller)
         if response:
             import json
             json_match = re.search(r'\{[^}]+\}', response)
@@ -641,6 +645,7 @@ def compute_all_quality_metrics(
                 star_result.get("anomalias", []),
                 star_result.get("contexto_orcamentario", {}),
                 star_result.get("texto_analise", ""),
+                caller="llm_judge-star",
             )
         )
         metrics["quality"]["hierarchical"]["faithfulness_llm"] = (
@@ -649,6 +654,7 @@ def compute_all_quality_metrics(
                 hier_result.get("anomalias", []),
                 hier_result.get("contexto_orcamentario", {}),
                 hier_result.get("texto_analise", ""),
+                caller="llm_judge-hierarchical",
             )
         )
 
