@@ -188,6 +188,8 @@ class OrquestradorEstrela(AgenteCoALA):
         analysis_id = self.working_memory["analysis_id"]
         date_from = self.working_memory["date_from"]
         date_to = self.working_memory["date_to"]
+        intent_summary = self.working_memory.get("intent_summary")
+        health_params = self.working_memory.get("health_params")
 
         logger.info(
             "[%s] OrquestradorEstrela: delegando a %s (agent_id=%s)",
@@ -196,7 +198,10 @@ class OrquestradorEstrela(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, agent_type)
         mc.start()
         try:
-            result = agent.query(analysis_id, date_from, date_to)
+            result = agent.query(
+                analysis_id, date_from, date_to,
+                intent_summary=intent_summary, health_params=health_params,
+            )
             mc.stop()
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))

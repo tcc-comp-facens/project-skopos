@@ -1,6 +1,21 @@
 # Plano de Refatoração — Agentes e Métricas de Avaliação
 
-> Documento de planejamento. **Nenhuma mudança de código foi feita ainda.** Este arquivo é o checklist de execução para as próximas sessões, derivado do diagnóstico repositório-vs-literatura (ver histórico da conversa) e da leitura do survey `s44336-024-00009-2.pdf` (Li et al., 2024) + pesquisa acadêmica complementar.
+> Documento de planejamento, derivado do diagnóstico repositório-vs-literatura (ver histórico da conversa) e da leitura do survey `s44336-024-00009-2.pdf` (Li et al., 2024) + pesquisa acadêmica complementar. Também serve como checklist de execução — atualizado conforme cada etapa é implementada.
+
+## Status atual (última atualização: sessão que implementou a Etapa 2)
+
+| Etapa | Status |
+|---|---|
+| 1 — Agente de Interpretação de Intenção | ✅ **Concluída** — código + testes commitados e pushados (`5a828ff`) |
+| 2 — Agentes de busca com LLM (query planning) | 🟡 **Implementada, não commitada** — código + 29 testes novos passam isolados (131 testes coletados no total); suíte completa ainda não re-executada nem commitada |
+| 3 — Priorização de achados via LLM | ⬜ Não iniciada |
+| 4 — Verificação pós-síntese (self-check) | ⬜ Não iniciada |
+| 5 — Comunicação lateral semântica (hierárquica) | ⬜ Não iniciada |
+| 6 — Novas métricas de avaliação | ⬜ Não iniciada |
+
+Desvios entre o planejado e o implementado, registrados para não gerar confusão em quem ler este arquivo depois:
+- **Etapa 1:** o campo estruturado ficou com o nome `AnalysisIntent` em vez de `AnalysisRequest` (citado abaixo) — `AnalysisRequest` já era o nome do modelo Pydantic do corpo do `POST /api/analysis` em `api/models.py`, então usar o mesmo nome para o objeto do agente de intenção colidiria conceitualmente. `IntentResult` manteve o nome original (não foi rebatizado). A decisão de custo (1 chamada LLM combinando classificação de escopo + extração) foi a escolha efetivamente implementada, não as duas chamadas separadas do padrão "topical rail" mais robusto.
+- **Etapa 2:** a lógica compartilhada (cache, flag, chamada LLM, parsing) ficou centralizada em um módulo novo, `backend/agents/domain/query_planning.py`, usado pelos 4 agentes de domínio — não estava explicitamente nomeado no plano original, mas segue exatamente o design descrito (fast-path, cache, flag `USE_LLM_QUERY_PLANNING`). A chave de cache é `(agent_type, intent_summary, tuple(health_params))` em vez de um hash — equivalente na prática.
 
 ---
 
@@ -28,33 +43,33 @@ Esta refatoração tem cinco objetivos concretos:
 
 Ordem de execução obrigatória: **1 → 2 → 3 → 4 → 5 → 6**, com a Etapa 6 (métricas) sempre por último, pois ela mede o comportamento do sistema já refatorado — medir antes seria comparar métricas novas contra uma arquitetura que ainda vai mudar.
 
-| Etapa | Nome | Depende de | Esforço estimado |
-|---|---|---|---|
-| 1 | Agente de Interpretação de Intenção (substitui totalmente o regex; guardrail de escopo) | — | Médio |
-| 2 | Agentes de busca com LLM (interpretação + construção de queries) | Etapa 1 | Médio |
-| 3 | Priorização de achados via LLM (loop CoALA real) | — (recomenda-se após 1–2) | Médio |
-| 4 | Verificação pós-síntese (self-check) | Etapa 3 | Médio |
-| 5 | Comunicação lateral semântica (hierárquica) | — (independente) | Médio |
-| 6 | Novas métricas de avaliação | Etapas 1, 2, 3, 4, 5 | Alto |
+| Etapa | Nome | Depende de | Esforço estimado | Status |
+|---|---|---|---|---|
+| 1 | Agente de Interpretação de Intenção (substitui totalmente o regex; guardrail de escopo) | — | Médio | ✅ Concluída |
+| 2 | Agentes de busca com LLM (interpretação + construção de queries) | Etapa 1 | Médio | 🟡 Implementada, não commitada |
+| 3 | Priorização de achados via LLM (loop CoALA real) | — (recomenda-se após 1–2) | Médio | ⬜ Não iniciada |
+| 4 | Verificação pós-síntese (self-check) | Etapa 3 | Médio | ⬜ Não iniciada |
+| 5 | Comunicação lateral semântica (hierárquica) | — (independente) | Médio | ⬜ Não iniciada |
+| 6 | Novas métricas de avaliação | Etapas 1, 2, 3, 4, 5 | Alto | ⬜ Não iniciada |
 
 ---
 
-### Etapa 1 — Agente de Interpretação de Intenção (substituição total do regex)
+### Etapa 1 — Agente de Interpretação de Intenção (substituição total do regex) ✅ Concluída
 
 **O que será feito:**
-- [ ] Remover completamente `backend/core/intent_interpreter.py` como está hoje — sem regex convivendo com LLM, nem como fallback, nem como fast-path. `DATE_RANGE_PATTERNS`, `LAST_N_YEARS_PATTERN`, `SINGLE_YEAR_PATTERN`, `HEALTH_ALIASES` e toda a lógica de casamento de padrão deixam de existir.
-- [ ] Criar um novo agente CoALA — `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_intencao.py`), seguindo o mesmo padrão arquitetural dos demais agentes (`working_memory`/`semantic_memory`/`procedural_memory`), no lugar da classe utilitária `IntentInterpreter`.
-- [ ] **Guardrail de escopo como primeira ação do ciclo.** `propose_actions` só propõe `extrair_parametros` depois que `working_memory["escopo"]` existir. O próprio ciclo é encadeado em duas passadas dentro do método público `parse(texto)`:
+- [x] Remover completamente `backend/core/intent_interpreter.py` como está hoje — sem regex convivendo com LLM, nem como fallback, nem como fast-path. `DATE_RANGE_PATTERNS`, `LAST_N_YEARS_PATTERN`, `SINGLE_YEAR_PATTERN`, `HEALTH_ALIASES` e toda a lógica de casamento de padrão deixam de existir.
+- [x] Criar um novo agente CoALA — `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_intencao.py`), seguindo o mesmo padrão arquitetural dos demais agentes (`working_memory`/`semantic_memory`/`procedural_memory`), no lugar da classe utilitária `IntentInterpreter`.
+- [x] **Guardrail de escopo como primeira ação do ciclo.** `propose_actions` só propõe `extrair_parametros` depois que `working_memory["escopo"]` existir. O próprio ciclo é encadeado em duas passadas dentro do método público `parse(texto)`:
   1. 1ª passada: `propose_actions` retorna só `[{"goal": "classificar_escopo"}]`; a ação correspondente (`_act_classificar_escopo`) chama o LLM com um prompt que classifica se o texto é sobre dados orçamentários/saúde pública de Sorocaba-SP, e grava `working_memory["escopo"] = "dentro" | "fora"`.
   2. 2ª passada (mesma chamada de `parse`, novo `propose_actions` interno): se `escopo == "fora"`, propõe `recusar` (gera a mensagem de rejeição, sem chamar LLM de novo); se `escopo == "dentro"`, propõe `extrair_parametros` (extrai `date_from`/`date_to`/`health_params` estruturados).
   - **Decisão de custo (registrar explicitamente como trade-off, não como prescrição da literatura):** para não dobrar o custo de toda mensagem, a classificação de escopo e a extração de parâmetros podem ser combinadas num único prompt/chamada LLM quando `escopo == "dentro"` (o modelo já devolve `{"em_escopo": true, "date_from":..., "date_to":..., "health_params":[...]}` na mesma resposta) — nesse caso as "duas passadas" acima são lógicas (a checagem de escopo é avaliada antes de qualquer parâmetro extraído ser usado), não necessariamente duas chamadas de rede. A alternativa mais alinhada ao padrão de "topical rail" da literatura (ver D14/D15 na Seção 3) seria manter as duas chamadas fisicamente separadas — mais robusta a prompt injection, mais cara. Registrar qual das duas foi escolhida na implementação real.
   - Quando `escopo == "fora"`: **nenhuma arquitetura é instanciada.** Nem `OrquestradorEstrela` nem `CoordenadorGeral` são chamados, nenhuma query Neo4j é disparada. O fluxo termina na camada de chat com a mensagem de recusa.
-- [ ] **Como a rejeição é comunicada ao usuário:** estender o contrato de retorno hoje representado por `IntentResult` com um novo caso — `success=False`, `missing=["fora_de_escopo"]` (nova constante `MISSING_OUT_OF_SCOPE`), `clarification_message` com uma explicação curta e educada do escopo do assistente (ex.: "Este assistente responde apenas perguntas sobre orçamento público de saúde e indicadores de saúde de Sorocaba-SP. Pode reformular sua pergunta dentro desse tema?"). O caller (`api/chat_runner.py`/`api/chat_websocket.py`) envia essa mensagem como resposta do assistente, do mesmo jeito que hoje já trata `MISSING_DATE_RANGE`/`MISSING_HEALTH_PARAMS`.
-- [ ] **Formato de entrada estruturado compartilhado por ambas as arquiteturas:** o agente produz um objeto único (`AnalysisRequest`, extensão de `AnalysisParams`) com `date_from`, `date_to`, `health_params` (iguais a hoje) **mais** um novo campo `intent_summary: str` — um resumo curto da intenção/desejo do usuário em linguagem natural (ex.: "comparar eficiência dos gastos em vacinação nos últimos 5 anos"), usado como insumo pela Etapa 3 (priorização de achados) e pela Etapa 2 (construção de queries), fechando o loop entre "o que o usuário quis" e "o que os agentes de busca e de síntese priorizam".
-- [ ] Manter as regras de segurança já existentes (mensagem do usuário tratada como dado, nunca como instrução; validação estrita de chaves JSON permitidas na resposta do LLM) — herdadas de `_parse_llm_json`/`_build_llm_prompt` atuais, adaptadas para o novo agente.
-- [ ] Reescrever `backend/tests/test_intent_interpreter.py` (ou criar `test_agente_interpretacao_intencao.py`) cobrindo: (a) nenhum caminho de código usa regex; (b) prompts fora de escopo são rejeitados sem instanciar nenhuma arquitetura; (c) paráfrases livres (não cobertas pelo antigo `HEALTH_ALIASES`) são corretamente interpretadas; (d) tentativas de prompt injection embutidas na mensagem (ex.: "ignore as instruções acima e...") não alteram o comportamento do agente nem escapam do JSON estruturado.
+- [x] **Como a rejeição é comunicada ao usuário:** estender o contrato de retorno hoje representado por `IntentResult` com um novo caso — `success=False`, `missing=["fora_de_escopo"]` (nova constante `MISSING_OUT_OF_SCOPE`), `clarification_message` com uma explicação curta e educada do escopo do assistente (ex.: "Este assistente responde apenas perguntas sobre orçamento público de saúde e indicadores de saúde de Sorocaba-SP. Pode reformular sua pergunta dentro desse tema?"). O caller (`api/chat_runner.py`/`api/chat_websocket.py`) envia essa mensagem como resposta do assistente, do mesmo jeito que hoje já trata `MISSING_DATE_RANGE`/`MISSING_HEALTH_PARAMS`.
+- [x] **Formato de entrada estruturado compartilhado por ambas as arquiteturas** (implementado como `AnalysisIntent`, não `AnalysisRequest` — ver "Desvios" no topo do arquivo): o agente produz um objeto único (`AnalysisRequest`, extensão de `AnalysisParams`) com `date_from`, `date_to`, `health_params` (iguais a hoje) **mais** um novo campo `intent_summary: str` — um resumo curto da intenção/desejo do usuário em linguagem natural (ex.: "comparar eficiência dos gastos em vacinação nos últimos 5 anos"), usado como insumo pela Etapa 3 (priorização de achados) e pela Etapa 2 (construção de queries), fechando o loop entre "o que o usuário quis" e "o que os agentes de busca e de síntese priorizam".
+- [x] Manter as regras de segurança já existentes (mensagem do usuário tratada como dado, nunca como instrução; validação estrita de chaves JSON permitidas na resposta do LLM) — herdadas de `_parse_llm_json`/`_build_llm_prompt` atuais, adaptadas para o novo agente.
+- [x] Reescrever `backend/tests/test_intent_interpreter.py` (ou criar `test_agente_interpretacao_intencao.py`) cobrindo: (a) nenhum caminho de código usa regex; (b) prompts fora de escopo são rejeitados sem instanciar nenhuma arquitetura; (c) paráfrases livres (não cobertas pelo antigo `HEALTH_ALIASES`) são corretamente interpretadas; (d) tentativas de prompt injection embutidas na mensagem (ex.: "ignore as instruções acima e...") não alteram o comportamento do agente nem escapam do JSON estruturado.
 
-**Adaptações necessárias em cada arquitetura para consumir o novo formato de entrada:**
+**Adaptações necessárias em cada arquitetura para consumir o novo formato de entrada** (implementadas):
 
 - **Importante primeiro esclarecimento:** o endpoint REST direto `POST /api/analysis` já recebe `dateFrom`/`dateTo`/`healthParams` estruturados no corpo da requisição — não passa pelo `IntentInterpreter` hoje nem passará pelo novo agente amanhã (não há texto livre para interpretar nesse caminho, logo o guardrail de escopo não se aplica a ele). O agente de interpretação de intenção é relevante apenas para a **entrada via chat em linguagem natural**. Isso deve ficar explícito no código/documentação para não gerar confusão sobre "onde" o guardrail atua.
 - **Estrela:** `OrquestradorEstrela.run(analysis_id, params, ws_queue)` — o dict `params` ganha a chave opcional `intent_summary` (`None` quando a análise entra pelo REST direto). Como o pipeline da estrela é linear, o orquestrador só precisa repassar esse valor ao instanciar `AgentePriorizacaoAnalitica` (Etapa 3) — mudança pontual, sem novo nível de propagação.
@@ -66,19 +81,19 @@ Regex cobre um vocabulário fechado (a lista `HEALTH_ALIASES` precisava ser mant
 
 **Dependências:** Nenhuma. É a etapa fundacional — Etapa 2 depende dela.
 
-**Critério de aceite:** (1) nenhuma ocorrência de `re.compile`/regex de extração de parâmetros permanece no código; (2) uma mensagem fora de escopo (ex.: "qual é a previsão do tempo em Sorocaba amanhã?") é rejeitada com a mensagem de recusa, sem nenhuma thread de `OrquestradorEstrela`/`CoordenadorGeral` sendo lançada; (3) uma mensagem dentro de escopo com paráfrase livre é corretamente traduzida em `AnalysisRequest`, incluindo `intent_summary` não-vazio.
+**Critério de aceite:** (1) nenhuma ocorrência de `re.compile`/regex de extração de parâmetros permanece no código; (2) uma mensagem fora de escopo (ex.: "qual é a previsão do tempo em Sorocaba amanhã?") é rejeitada com a mensagem de recusa, sem nenhuma thread de `OrquestradorEstrela`/`CoordenadorGeral` sendo lançada; (3) uma mensagem dentro de escopo com paráfrase livre é corretamente traduzida em `AnalysisIntent`, incluindo `intent_summary` não-vazio. **Verificado** — 20 testes dedicados em `test_agente_interpretacao_intencao.py`, todos passando.
 
 ---
 
-### Etapa 2 — Agentes de busca com LLM (interpretação + construção de queries)
+### Etapa 2 — Agentes de busca com LLM (interpretação + construção de queries) 🟡 Implementada, não commitada
 
 **O que será feito:**
-- [ ] Adicionar uma nova ação (`goal: "planejar_consulta"`) à `procedural_memory` de cada um dos 4 agentes de domínio (`AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade`), executada **antes** de `consultar_despesas`/`consultar_indicadores`.
-- [ ] Essa ação recebe o `AnalysisRequest` estruturado (produzido na Etapa 1, incluindo `intent_summary`) e o `semantic_memory` do próprio agente (hoje `subfuncao`/`tipos_indicador` fixos) e usa uma chamada LLM para produzir um plano de consulta explícito — uma lista de filtros (códigos de subfunção, aliases de tipo de indicador) a aplicar nas chamadas subsequentes a `neo4j_client.get_despesas`/`get_indicadores`. Isso substitui a leitura direta e hardcoded de `self.semantic_memory["subfuncao"]` como único filtro.
-- [ ] **Fast-path determinístico como otimização de custo, não como substituto da arquitetura:** quando o `AnalysisRequest` mapeia 1:1 e sem ambiguidade para o `semantic_memory` estático já conhecido pelo agente (exatamente o caso de hoje — 1 subfunção, indicadores fixos, sem sinônimos novos), pular a chamada LLM e usar a leitura estática atual diretamente. A chamada LLM só é de fato disparada quando: (a) o `intent_summary`/`health_params` não mapeia claramente para os filtros estáticos conhecidos, ou (b) o `semantic_memory` for estendido no futuro com múltiplos indicadores/subfunções por agente (o cenário de crescimento da base). Este fast-path é estritamente uma otimização de custo — a decisão "o que buscar" continua sendo, arquiteturalmente, responsabilidade do passo LLM; o fast-path só evita pagar por uma resposta previsível.
-- [ ] Implementar **cache** do plano de consulta, chaveado por `(tipo_de_agente, hash(AnalysisRequest relevante))` — evita reprocessar o mesmo plano de busca em análises repetidas com os mesmos parâmetros, tanto para o caminho LLM quanto para eventuais chamadas repetidas.
-- [ ] Expor essa etapa **desligada por padrão** via uma flag de configuração (ex.: `USE_LLM_QUERY_PLANNING`, mesmo padrão de `use_llm`/`use_llm_judge` já existentes) — enquanto a base tiver o mapeamento simples de hoje, o sistema roda com o fast-path sempre ativo (comportamento idêntico ao atual, custo zero); a flag existe para ser ligada quando novas fontes de dados tornarem o mapeamento não-trivial.
-- [ ] Atualizar `backend/tests/test_domain_agents.py` para cobrir: (a) fast-path sendo usado no cenário atual (nenhuma chamada LLM disparada); (b) chamada LLM sendo disparada quando o `semantic_memory` é artificialmente estendido em teste para simular um cenário de mapeamento ambíguo; (c) cache evitando chamada duplicada para o mesmo plano.
+- [x] Adicionar uma nova ação (`goal: "planejar_consulta"`) à `procedural_memory` de cada um dos 4 agentes de domínio (`AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade`), executada **antes** de `consultar_despesas`/`consultar_indicadores`.
+- [x] Essa ação recebe o `AnalysisIntent` estruturado (produzido na Etapa 1, incluindo `intent_summary`) e o `semantic_memory` do próprio agente (hoje `subfuncao`/`tipos_indicador` fixos) e usa uma chamada LLM para produzir um plano de consulta explícito — uma lista de filtros (códigos de subfunção, aliases de tipo de indicador) a aplicar nas chamadas subsequentes a `neo4j_client.get_despesas`/`get_indicadores`. Isso substitui a leitura direta e hardcoded de `self.semantic_memory["subfuncao"]` como único filtro.
+- [x] **Fast-path determinístico como otimização de custo, não como substituto da arquitetura:** quando o mapeamento é trivial (implementado como: `semantic_memory` do agente ainda é idêntico às constantes estáticas do módulo — `SUBFUNCAO`/`TIPOS_INDICADOR`), pular a chamada LLM e usar a leitura estática atual diretamente. A chamada LLM só é de fato disparada quando `semantic_memory` for estendido (deixar de bater com as constantes) **e** a flag estiver ligada. Este fast-path é estritamente uma otimização de custo.
+- [x] Implementar **cache** do plano de consulta, chaveado por `(tipo_de_agente, intent_summary, tuple(health_params))` — evita reprocessar o mesmo plano de busca em análises repetidas com os mesmos parâmetros, tanto para o caminho LLM quanto para eventuais chamadas repetidas. Cache compartilhado entre instâncias de agente (módulo `agents/domain/query_planning.py`), verificado por teste.
+- [x] Expor essa etapa **desligada por padrão** via a flag `USE_LLM_QUERY_PLANNING` (lida via `os.environ`, documentada em `.env.example`) — enquanto a base tiver o mapeamento simples de hoje, o sistema roda com o fast-path sempre ativo (comportamento idêntico ao atual, custo zero); a flag existe para ser ligada quando novas fontes de dados tornarem o mapeamento não-trivial.
+- [x] Atualizar `backend/tests/test_domain_agents.py` (+ novo `backend/tests/test_query_planning.py`, unit tests do módulo compartilhado) para cobrir: (a) fast-path sendo usado no cenário atual (nenhuma chamada LLM disparada) — inclusive com a flag ligada mas mapeamento ainda trivial; (b) chamada LLM sendo disparada quando o `semantic_memory` é artificialmente estendido em teste; (c) cache evitando chamada duplicada para o mesmo plano, inclusive entre instâncias diferentes do agente; (d) falha do LLM cai no plano estático sem quebrar o pipeline.
 
 **Por que essa mudança está sendo feita (racional técnico — importante: preparação arquitetural, não necessidade atual):**
 A base de dados de hoje tem mapeamento 1:1 fixo (subfunção → tipo de indicador) e **não exige LLM para isso agora** — implementar isso hoje sem o fast-path seria over-engineering puro. A justificativa é explicitamente preparatória: a base está sendo expandida por outro desenvolvedor, e cada nova fonte de dados tende a trazer nomenclatura própria e sobreposições (o próprio projeto já enfrenta esse problema hoje no ETL — `siops_loader.py` já precisa de "busca exata e parcial para acomodar variações de nomenclatura entre anos e versões da planilha" no mapeamento grupo-FNS→subfunção, conforme `docs/03-DADOS-ETL.md`). Um agente de busca capaz de interpretar via LLM o que precisa ser buscado é o mecanismo que absorve esse tipo de heterogeneidade sem exigir que alguém edite código de mapeamento fixo a cada nova fonte. Ver justificativa D13 na Seção 3.
@@ -90,9 +105,9 @@ A base de dados de hoje tem mapeamento 1:1 fixo (subfunção → tipo de indicad
 - Mitigação terciária: cache evita reprocessamento mesmo quando o caminho LLM estiver ativo.
 - **Explicitamente não é uma opção**: usar o fallback determinístico como o mecanismo permanente e nunca de fato exercitar o caminho LLM — o objetivo desta etapa é ter a arquitetura pronta, testada e auditável antes de precisar dela, não adiar a decisão indefinidamente escondida atrás do fast-path.
 
-**Dependências:** Etapa 1 completa — os agentes de domínio precisam do `AnalysisRequest` estruturado (incluindo `intent_summary`) como entrada do plano de consulta; sem ele não há o que interpretar além do que o regex antigo já entregava.
+**Dependências:** Etapa 1 completa — os agentes de domínio precisam do `AnalysisIntent` estruturado (incluindo `intent_summary`) como entrada do plano de consulta; sem ele não há o que interpretar além do que o regex antigo já entregava. `OrquestradorEstrela._act_consultar_dominio` e `SupervisorDominio._act_consultar_dominio` foram atualizados para repassar `intent_summary`/`health_params` (lidos da própria working memory) para `agent.query(...)`.
 
-**Critério de aceite:** com a flag desligada (padrão), o comportamento e o custo de LLM são idênticos ao sistema pré-Etapa-2; com a flag ligada e um cenário de teste simulando um novo indicador com nome ambíguo, o agente decide corretamente o filtro via LLM e o registra em `episodic_memory`.
+**Critério de aceite:** com a flag desligada (padrão), o comportamento e o custo de LLM são idênticos ao sistema pré-Etapa-2; com a flag ligada e um cenário de teste simulando um novo indicador com nome ambíguo, o agente decide corretamente o filtro via LLM e o registra em `episodic_memory`. **Verificado** — 29 testes novos (`test_query_planning.py` + extensão de `test_domain_agents.py`) passam isolados, incluindo demonstração ao vivo via log (`--log-cli-level=INFO`) de fast-path, chamada LLM real (mockada), cache entre instâncias, e fallback em falha do LLM. **Pendente:** rodar a suíte completa (131 testes) antes de considerar a etapa fechada — as mudanças em `orchestrator.py`/`supervisors.py` (repasse de `intent_summary`/`health_params`) não têm teste dedicado à Etapa 2 e só são exercitadas indiretamente por `test_orchestrator_star.py`.
 
 ---
 
@@ -235,9 +250,15 @@ Medir o sistema antes de ele estar refatorado produziria números que não descr
 
 ## Resumo do checklist (visão rápida)
 
-- [ ] **Etapa 1** — `AgenteInterpretacaoIntencao` (novo agente CoALA, substitui `IntentInterpreter`): remoção total do regex, guardrail de escopo, `AnalysisRequest` compartilhado (com `intent_summary`) para estrela e hierárquica
-- [ ] **Etapa 2** — Agentes de domínio ganham ação `planejar_consulta` via LLM (com fast-path/cache/flag desligada por padrão) — preparação para crescimento da base
+- [x] **Etapa 1** — `AgenteInterpretacaoIntencao` (novo agente CoALA, substitui `IntentInterpreter`): remoção total do regex, guardrail de escopo, `AnalysisIntent` compartilhado (com `intent_summary`) para estrela e hierárquica. **Commitada e pushada** (`5a828ff`).
+- [x] **Etapa 2** — Agentes de domínio ganham ação `planejar_consulta` via LLM (com fast-path/cache/flag desligada por padrão) — preparação para crescimento da base. **Código e testes prontos (131 testes coletados), suíte completa ainda não re-executada, nada commitado ainda.**
 - [ ] **Etapa 3** — `AgentePriorizacaoAnalitica` (novo agente CoALA) + integração nos orquestradores
 - [ ] **Etapa 4** — `core/claim_verifier.py` + passo de self-check opcional pós-síntese
 - [ ] **Etapa 5** — Resumos semânticos na comunicação lateral hierárquica
 - [ ] **Etapa 6** — Refatorar contabilização de tokens (pré-requisito) → `compute_token_cost`, `compute_communication_volume`, Q2 claim-based, harness de escalabilidade, taxa de rejeição do guardrail, taxa de acerto do cache, `compute_analysis_success`
+
+### Próximos passos imediatos (nesta ordem)
+
+1. Rodar a suíte completa (`cd backend && pytest`) para confirmar que a Etapa 2 não quebrou nada no resto do sistema.
+2. Commitar e dar push na Etapa 2 (hoje só está no working tree local).
+3. Seguir para a Etapa 3 (priorização de achados via LLM).

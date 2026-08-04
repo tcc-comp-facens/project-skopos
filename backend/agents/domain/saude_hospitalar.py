@@ -14,6 +14,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from agents.base import ActionFailure, AgenteCoALA
+from agents.domain.query_planning import plan_query
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
@@ -39,6 +40,14 @@ class AgenteSaudeHospitalar(AgenteCoALA):
     `semantic_memory` — lidos por *retrieval* dentro de `_act_*`, não
     hardcoded direto do módulo no meio da execução.
 
+    Planejamento de consulta (Etapa 2 do PLANO_REFATORACAO.md): antes de
+    consultar o Neo4j, o agente propõe `planejar_consulta` — resolve, via
+    `agents.domain.query_planning`, quais subfunções/tipos de indicador
+    usar como filtro. Por padrão (mapeamento trivial, flag desligada) é
+    um fast-path determinístico idêntico ao comportamento anterior; só
+    aciona LLM quando `semantic_memory` for estendido no futuro e a flag
+    `USE_LLM_QUERY_PLANNING` estiver ligada.
+
     Attributes:
         neo4j_client: Cliente Neo4j para queries Cypher.
     """
@@ -51,6 +60,7 @@ class AgenteSaudeHospitalar(AgenteCoALA):
             "tipos_indicador": TIPOS_INDICADOR,
         }
         self.procedural_memory = {
+            "planejar_consulta": [self._act_planejar_consulta],
             "consultar_despesas": [
                 self._act_consultar_despesas,
                 self._act_fallback_despesas,
@@ -84,8 +94,9 @@ class AgenteSaudeHospitalar(AgenteCoALA):
     def propose_actions(self) -> list[dict]:
         """Propõe ações com base na working memory atual.
 
-        Se os parâmetros de consulta estão presentes, propõe consultar
-        despesas (subfunção 302) e indicadores (internacoes).
+        Se os parâmetros de consulta estão presentes, propõe planejar a
+        consulta e então consultar despesas (subfunção 302) e
+        indicadores (internacoes).
 
         Returns:
             Lista de candidatos de ação.
@@ -95,15 +106,47 @@ class AgenteSaudeHospitalar(AgenteCoALA):
             self.working_memory.get("analysis_id")
             and self.working_memory.get("date_from") is not None
         ):
+            actions.append({"goal": "planejar_consulta"})
             actions.append({"goal": "consultar_despesas"})
             actions.append({"goal": "consultar_indicadores"})
         return actions
 
+    def _act_planejar_consulta(self, action: dict) -> None:
+        """Ação interna (reasoning): resolve o plano de consulta (Etapa 2).
+
+        Fast-path determinístico no cenário atual — só toca o LLM se
+        `semantic_memory` deixar de ser o mapeamento estático padrão E a
+        flag `USE_LLM_QUERY_PLANNING` estiver ligada. Nunca falha: erro no
+        LLM cai no plano estático (ver `query_planning.plan_query`).
+        """
+        static_plan = {
+            "subfuncoes": [self.semantic_memory["subfuncao"]],
+            "tipos_indicador": list(self.semantic_memory["tipos_indicador"]),
+        }
+        is_trivial = (
+            self.semantic_memory.get("subfuncao") == SUBFUNCAO
+            and self.semantic_memory.get("tipos_indicador") == TIPOS_INDICADOR
+        )
+        plan, origem = plan_query(
+            agent_id=self.agent_id,
+            agent_type="saude_hospitalar",
+            static_plan=static_plan,
+            is_trivial=is_trivial,
+            intent_summary=self.working_memory.get("intent_summary"),
+            health_params=self.working_memory.get("health_params"),
+        )
+        self.working_memory["query_plan"] = plan
+        logger.info(
+            "Agent %s: plano de consulta definido via %s: %s",
+            self.agent_id, origem, plan,
+        )
+
     def _act_consultar_despesas(self, action: dict) -> None:
         """Ação externa (grounding): consulta DespesaSIOPS no Neo4j.
 
-        Filtra apenas os registros da subfunção 302 (Req 2.2), lida via
-        retrieval de `semantic_memory["subfuncao"]`.
+        Filtra pelas subfunções do plano de consulta (Req 2.2), resolvido
+        por `_act_planejar_consulta` — no caso trivial, é exatamente
+        `semantic_memory["subfuncao"]`.
 
         Raises:
             ActionFailure: Se a consulta ao Neo4j falhar.
@@ -111,23 +154,26 @@ class AgenteSaudeHospitalar(AgenteCoALA):
         analysis_id = self.working_memory["analysis_id"]
         date_from = self.working_memory["date_from"]
         date_to = self.working_memory["date_to"]
-        subfuncao = self.semantic_memory["subfuncao"]
+        query_plan = self.working_memory.get("query_plan") or {
+            "subfuncoes": [self.semantic_memory["subfuncao"]]
+        }
+        subfuncoes = query_plan["subfuncoes"]
 
         try:
             logger.info(
-                "Agent %s: consultando despesas (subfuncao=%d, periodo=%s-%s)",
-                self.agent_id, subfuncao, date_from, date_to,
+                "Agent %s: consultando despesas (subfuncoes=%s, periodo=%s-%s)",
+                self.agent_id, subfuncoes, date_from, date_to,
             )
             all_despesas = self.neo4j_client.get_despesas(
                 analysis_id, date_from, date_to
             )
-            despesas = [d for d in all_despesas if d.get("subfuncao") == subfuncao]
+            despesas = [d for d in all_despesas if d.get("subfuncao") in subfuncoes]
             self.working_memory["despesas"] = despesas
             logger.info(
-                "Agent %s: retrieved %d despesas (subfuncao=%d)",
+                "Agent %s: retrieved %d despesas (subfuncoes=%s)",
                 self.agent_id,
                 len(despesas),
-                subfuncao,
+                subfuncoes,
             )
         except Exception as e:
             raise ActionFailure(action, str(e)) from e
@@ -135,8 +181,8 @@ class AgenteSaudeHospitalar(AgenteCoALA):
     def _act_consultar_indicadores(self, action: dict) -> None:
         """Ação externa (grounding): consulta IndicadorDataSUS no Neo4j.
 
-        Busca tipos definidos em `semantic_memory["tipos_indicador"]`
-        (Req 2.1).
+        Busca os tipos definidos no plano de consulta (Req 2.1),
+        resolvido por `_act_planejar_consulta`.
 
         Raises:
             ActionFailure: Se a consulta ao Neo4j falhar.
@@ -144,7 +190,10 @@ class AgenteSaudeHospitalar(AgenteCoALA):
         analysis_id = self.working_memory["analysis_id"]
         date_from = self.working_memory["date_from"]
         date_to = self.working_memory["date_to"]
-        tipos_indicador = self.semantic_memory["tipos_indicador"]
+        query_plan = self.working_memory.get("query_plan") or {
+            "tipos_indicador": list(self.semantic_memory["tipos_indicador"])
+        }
+        tipos_indicador = query_plan["tipos_indicador"]
 
         try:
             logger.info(
@@ -189,6 +238,8 @@ class AgenteSaudeHospitalar(AgenteCoALA):
         analysis_id: str,
         date_from: int,
         date_to: int,
+        intent_summary: str | None = None,
+        health_params: list[str] | None = None,
     ) -> dict[str, Any]:
         """Consulta despesas (subfunção 302) e indicadores (internacoes).
 
@@ -199,6 +250,11 @@ class AgenteSaudeHospitalar(AgenteCoALA):
             analysis_id: ID da análise em andamento.
             date_from: Ano de início do período.
             date_to: Ano de fim do período.
+            intent_summary: Resumo da intenção do usuário (opcional, vem
+                do AgenteInterpretacaoIntencao — Etapa 1), usado pelo
+                planejamento de consulta (Etapa 2).
+            health_params: Indicadores solicitados na análise (opcional),
+                idem.
 
         Returns:
             Dicionário com chaves "despesas" e "indicadores", cada uma
@@ -209,6 +265,8 @@ class AgenteSaudeHospitalar(AgenteCoALA):
             "analysis_id": analysis_id,
             "date_from": date_from,
             "date_to": date_to,
+            "intent_summary": intent_summary,
+            "health_params": health_params,
         })
 
         self.run_coala_cycle()
