@@ -25,8 +25,11 @@ services:
         condition: service_healthy
     env_file:
       - backend/.env
+    environment:
+      - DADOS_DIR=/Dados
     volumes:
       - ./backend/data:/app/data
+      - ./Dados:/Dados:ro
 
   frontend:
     build:
