@@ -39,6 +39,7 @@ from agents.domain.atencao_primaria import AgenteAtencaoPrimaria
 from agents.domain.mortalidade import AgenteMortalidade
 from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
+from agents.analytical.priorizacao import AgentePriorizacaoAnalitica
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
 from core.metrics import MetricsCollector
@@ -296,6 +297,7 @@ class SupervisorAnalitico(AgenteCoALA):
             "calcular_correlacoes": [self._act_calcular_correlacoes],
             "detectar_anomalias": [self._act_detectar_anomalias],
             "capturar_wallclock": [self._act_capturar_wallclock],
+            "priorizar_achados": [self._act_priorizar_achados],
             "sintetizar_texto": [self._act_sintetizar_texto],
         }
         self._collectors: list[MetricsCollector] = []
@@ -327,6 +329,7 @@ class SupervisorAnalitico(AgenteCoALA):
             {"goal": "calcular_correlacoes"},
             {"goal": "detectar_anomalias"},
             {"goal": "capturar_wallclock"},
+            {"goal": "priorizar_achados"},
             {"goal": "sintetizar_texto"},
         ]
 
@@ -439,6 +442,43 @@ class SupervisorAnalitico(AgenteCoALA):
         """Ação interna (bookkeeping): marca o fim da parte determinística (antes do LLM)."""
         self._coala_leaf_end_time = time.time()
 
+    def _act_priorizar_achados(self, action: dict) -> None:
+        """Ação externa (reasoning + grounding): delega a AgentePriorizacaoAnalitica (Etapa 3).
+
+        Roda depois de `capturar_wallclock` — mesma lógica do sintetizador:
+        seu tempo (inclui 1 chamada LLM) fica fora da métrica de tempo
+        "determinística" do supervisor. Falha aqui nunca propaga.
+        """
+        prior_id = f"hier-priorizacao-{uuid.uuid4().hex[:8]}"
+        agente_priorizacao = AgentePriorizacaoAnalitica(prior_id)
+        mc = MetricsCollector(prior_id, "priorizacao")
+        mc.start()
+        try:
+            correlacoes = self.working_memory.get("correlacoes", [])
+            anomalias = self.working_memory.get("anomalias", [])
+            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
+            intent_summary = self.peer_data.get("intent_summary")
+            use_llm = self.working_memory.get("use_llm", True)
+
+            achados_priorizados = agente_priorizacao.prioritize(
+                correlacoes, anomalias, contexto_orcamentario, intent_summary, use_llm=use_llm
+            )
+            mc.stop()
+            self.working_memory["achados_priorizados"] = achados_priorizados
+            logger.info(
+                "SupervisorAnalitico %s: achados priorizados via ângulo '%s'",
+                self.agent_id, achados_priorizados.get("angulo"),
+            )
+            self._collectors.append(mc)
+        except Exception as exc:
+            mc.stop()
+            logger.warning(
+                "SupervisorAnalitico %s: priorização de achados falhou (%s) — "
+                "sintetizador seguirá sem ênfase/reordenação",
+                self.agent_id, exc,
+            )
+            self._collectors.append(mc)
+
     def _act_sintetizar_texto(self, action: dict) -> None:
         """Ação externa (reasoning + grounding): gera o texto via TextSynthesizer."""
         sint_id = f"hier-sintetizador-{uuid.uuid4().hex[:8]}"
@@ -449,11 +489,21 @@ class SupervisorAnalitico(AgenteCoALA):
         try:
             ws_queue = self.working_memory["_ws_queue"]
             analysis_id = self.working_memory["analysis_id"]
-            correlacoes = self.working_memory.get("correlacoes", [])
-            anomalias = self.working_memory.get("anomalias", [])
-            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
             data_coverage = self.working_memory.get("data_coverage")
             use_llm = self.working_memory.get("use_llm", True)
+
+            # Correlações/anomalias/ênfase priorizadas (Etapa 3), se
+            # disponíveis — nunca substitui os dados brutos usados em Q1.
+            achados = self.working_memory.get("achados_priorizados")
+            if achados:
+                correlacoes = achados.get("correlacoes", self.working_memory.get("correlacoes", []))
+                anomalias = achados.get("anomalias", self.working_memory.get("anomalias", []))
+                enfase = achados.get("descricao_angulo")
+            else:
+                correlacoes = self.working_memory.get("correlacoes", [])
+                anomalias = self.working_memory.get("anomalias", [])
+                enfase = None
+            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
 
             adapter = StreamingAdapter(ws_queue, analysis_id, "hierarchical")
 
@@ -464,6 +514,7 @@ class SupervisorAnalitico(AgenteCoALA):
                         anomalias=anomalias,
                         contexto_orcamentario=contexto_orcamentario,
                         data_coverage=data_coverage,
+                        enfase=enfase,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:

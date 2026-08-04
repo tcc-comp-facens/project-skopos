@@ -318,8 +318,10 @@ class CoordenadorGeral(AgenteCoALA):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     m = agent_mc.collect()
-                    # Exclui sintetizador — é um serviço LLM, não agente CoALA
-                    if m.get("agentType") == "sintetizador":
+                    # Exclui sintetizador (serviço LLM, não agente CoALA) e
+                    # priorizacao (Etapa 3 — roda depois de capturar_wallclock,
+                    # inclui 1 chamada LLM, mesma lógica de exclusão)
+                    if m.get("agentType") in ("sintetizador", "priorizacao"):
                         continue
                     agent_metrics.append({
                         "agentName": m["agentType"],
@@ -336,17 +338,22 @@ class CoordenadorGeral(AgenteCoALA):
         coord_end = time.time()
         wall_clock_ms_raw = round((coord_end - coord_start) * 1000, 2)
 
-        # Subtrair tempo do sintetizador (último collector do SupervisorAnalitico)
+        # Subtrair tempo do sintetizador e da priorização (Etapa 3) —
+        # ambos os collectors do SupervisorAnalitico, ambos incluem
+        # chamada LLM e rodam depois de capturar_wallclock.
         sint_time_ms = 0.0
+        prior_time_ms = 0.0
         for agent_mc in getattr(sup_analitico, "_collectors", []):
             try:
                 m = agent_mc.collect()
                 if m.get("agentType") == "sintetizador":
                     sint_time_ms = m.get("executionTimeMs", 0)
+                elif m.get("agentType") == "priorizacao":
+                    prior_time_ms = m.get("executionTimeMs", 0)
             except Exception:
                 pass
 
-        wall_clock_ms = round(max(0, wall_clock_ms_raw - sint_time_ms), 2)
+        wall_clock_ms = round(max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms), 2)
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({

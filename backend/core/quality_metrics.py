@@ -43,7 +43,7 @@ FASE_DOMINIO = {
     "atencao_primaria",
     "mortalidade",
 }
-FASE_ANALITICO = {"correlacao", "anomalias", "sintetizador"}
+FASE_ANALITICO = {"correlacao", "anomalias", "priorizacao", "sintetizador"}
 FASE_CONTEXTO = {"contexto_orcamentario"}
 FASE_SUPERVISORES = {
     "supervisor_dominio",

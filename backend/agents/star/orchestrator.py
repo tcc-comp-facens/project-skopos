@@ -48,6 +48,7 @@ from agents.domain.atencao_primaria import AgenteAtencaoPrimaria
 from agents.domain.mortalidade import AgenteMortalidade
 from agents.analytical.correlacao import AgenteCorrelacao
 from agents.analytical.anomalias import AgenteAnomalias
+from agents.analytical.priorizacao import AgentePriorizacaoAnalitica
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
 from core.metrics import MetricsCollector
@@ -112,6 +113,7 @@ class OrquestradorEstrela(AgenteCoALA):
             "calcular_correlacoes": [self._act_calcular_correlacoes],
             "detectar_anomalias": [self._act_detectar_anomalias],
             "capturar_wallclock": [self._act_capturar_wallclock],
+            "priorizar_achados": [self._act_priorizar_achados],
             "sintetizar_texto": [self._act_sintetizar_texto],
             "persistir_metricas": [self._act_persistir_metricas],
         }
@@ -162,6 +164,7 @@ class OrquestradorEstrela(AgenteCoALA):
         actions.append({"goal": "calcular_correlacoes"})
         actions.append({"goal": "detectar_anomalias"})
         actions.append({"goal": "capturar_wallclock"})
+        actions.append({"goal": "priorizar_achados"})
         actions.append({"goal": "sintetizar_texto"})
         actions.append({"goal": "persistir_metricas"})
         return actions
@@ -352,6 +355,49 @@ class OrquestradorEstrela(AgenteCoALA):
         """
         self.working_memory["_orch_end"] = time.time()
 
+    def _act_priorizar_achados(self, action: dict) -> None:
+        """Ação externa (reasoning + grounding): delega a AgentePriorizacaoAnalitica (Etapa 3).
+
+        Roda depois de `capturar_wallclock` — assim como o sintetizador,
+        seu tempo (inclui 1 chamada LLM) fica fora do wall-clock "oficial"
+        usado para comparar as arquiteturas. Falha aqui nunca propaga: se a
+        priorização não rodar, o sintetizador simplesmente usa os dados
+        brutos sem reordenação/ênfase (comportamento pré-Etapa-3).
+        """
+        prior_id = f"star-priorizacao-{uuid.uuid4().hex[:8]}"
+        agente_priorizacao = AgentePriorizacaoAnalitica(prior_id)
+        logger.info(
+            "[%s] OrquestradorEstrela: delegando priorização de achados (agent_id=%s)",
+            self.agent_id, prior_id,
+        )
+        mc = MetricsCollector(prior_id, "priorizacao")
+        mc.start()
+        try:
+            correlacoes = self.working_memory.get("correlacoes", [])
+            anomalias = self.working_memory.get("anomalias", [])
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
+            intent_summary = self.working_memory.get("intent_summary")
+            use_llm = self.working_memory.get("use_llm", True)
+
+            achados_priorizados = agente_priorizacao.prioritize(
+                correlacoes, anomalias, contexto_orcamentario, intent_summary, use_llm=use_llm
+            )
+            mc.stop()
+            self.working_memory["achados_priorizados"] = achados_priorizados
+            logger.info(
+                "[%s] OrquestradorEstrela: achados priorizados via ângulo '%s'",
+                self.agent_id, achados_priorizados.get("angulo"),
+            )
+            self.working_memory.setdefault("_collectors", []).append((prior_id, "priorizacao", mc))
+        except Exception as exc:
+            mc.stop()
+            logger.warning(
+                "[%s] OrquestradorEstrela: priorização de achados falhou (%s) — "
+                "sintetizador seguirá sem ênfase/reordenação",
+                self.agent_id, exc,
+            )
+            self.working_memory.setdefault("_collectors", []).append((prior_id, "priorizacao", mc))
+
     def _act_sintetizar_texto(self, action: dict) -> None:
         """Ação externa (reasoning + grounding): gera o texto via TextSynthesizer (Req 9.6)."""
         sint_id = f"star-sintetizador-{uuid.uuid4().hex[:8]}"
@@ -366,11 +412,22 @@ class OrquestradorEstrela(AgenteCoALA):
         try:
             ws_queue = self.working_memory["_ws_queue"]
             analysis_id = self.working_memory["analysis_id"]
-            correlacoes = self.working_memory.get("correlacoes", [])
-            anomalias = self.working_memory.get("anomalias", [])
-            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
             data_coverage = self.working_memory.get("data_coverage")
             use_llm = self.working_memory.get("use_llm", True)
+
+            # Correlações/anomalias/ênfase priorizadas (Etapa 3), se disponíveis
+            # — nunca substitui os dados brutos usados em Q1, só a ordem/ênfase
+            # do que é passado ao prompt.
+            achados = self.working_memory.get("achados_priorizados")
+            if achados:
+                correlacoes = achados.get("correlacoes", self.working_memory.get("correlacoes", []))
+                anomalias = achados.get("anomalias", self.working_memory.get("anomalias", []))
+                enfase = achados.get("descricao_angulo")
+            else:
+                correlacoes = self.working_memory.get("correlacoes", [])
+                anomalias = self.working_memory.get("anomalias", [])
+                enfase = None
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
 
             adapter = StreamingAdapter(ws_queue, analysis_id, "star")
 
@@ -381,6 +438,7 @@ class OrquestradorEstrela(AgenteCoALA):
                         anomalias=anomalias,
                         contexto_orcamentario=contexto_orcamentario,
                         data_coverage=data_coverage,
+                        enfase=enfase,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
@@ -440,8 +498,10 @@ class OrquestradorEstrela(AgenteCoALA):
             agent_metrics = []
             workers_time_ms = 0.0
             for _, agent_type, mc in collectors:
-                # Exclui sintetizador — é um serviço LLM, não agente CoALA
-                if agent_type == "sintetizador":
+                # Exclui sintetizador (serviço LLM, não agente CoALA) e
+                # priorizacao (Etapa 3 — roda depois de capturar_wallclock,
+                # inclui 1 chamada LLM, mesma lógica de exclusão)
+                if agent_type in ("sintetizador", "priorizacao"):
                     continue
                 try:
                     m = mc.collect()

@@ -60,17 +60,22 @@ class TextSynthesizer:
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
         use_llm: bool = True,
+        enfase: str | None = None,
     ) -> str:
         """Gera texto completo de análise (batch, sem streaming).
 
         Tenta LLM primeiro; se indisponível, retorna fallback estruturado.
 
         Args:
-            correlacoes: Lista de dicts com correlações calculadas.
-            anomalias: Lista de dicts com anomalias detectadas.
+            correlacoes: Lista de dicts com correlações calculadas — se vier
+                da Etapa 3 (`AgentePriorizacaoAnalitica`), já reordenada por
+                relevância; os valores em si nunca são alterados.
+            anomalias: Lista de dicts com anomalias detectadas, idem.
             contexto_orcamentario: Dict com tendências orçamentárias por subfunção.
             data_coverage: Dict com cobertura de dados e gaps detectados.
             use_llm: Se True, tenta usar LLM; se False, usa fallback direto.
+            enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
+                (opcional) — vira uma instrução explícita no prompt.
 
         Returns:
             Texto completo da análise gerada.
@@ -82,7 +87,7 @@ class TextSynthesizer:
         try:
             import core.llm_client as llm_client
 
-            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
             logger.info(
                 "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
                 self.synthesizer_id, len(prompt),
@@ -110,6 +115,7 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        enfase: str | None = None,
     ) -> Generator[str, None, None]:
         """Retorna generator de tokens para streaming via LLM.
 
@@ -118,10 +124,13 @@ class TextSynthesizer:
         para que o caller use o fallback.
 
         Args:
-            correlacoes: Lista de dicts com correlações calculadas.
+            correlacoes: Lista de dicts com correlações calculadas (ver
+                nota sobre `enfase`/Etapa 3 em `generate`).
             anomalias: Lista de dicts com anomalias detectadas.
             contexto_orcamentario: Dict com tendências orçamentárias.
             data_coverage: Dict com cobertura de dados e gaps detectados.
+            enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
+                (opcional).
 
         Yields:
             Tokens individuais do LLM.
@@ -131,7 +140,7 @@ class TextSynthesizer:
         """
         import core.llm_client as llm_client
 
-        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
         logger.info(
             "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
             self.synthesizer_id, len(prompt),
@@ -166,11 +175,25 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        enfase: str | None = None,
     ) -> str:
-        """Build the LLM prompt from analysis data (Req 7.4)."""
+        """Build the LLM prompt from analysis data (Req 7.4).
+
+        `enfase` (Etapa 3 — AgentePriorizacaoAnalitica) vira uma instrução
+        explícita de destaque, além da própria ordem de `correlacoes`/
+        `anomalias` (já reordenadas por relevância quando vêm da Etapa 3).
+        """
         coverage = data_coverage or {}
         gaps = coverage.get("gaps", [])
         summary = coverage.get("summary", {})
+
+        enfase_section = ""
+        if enfase:
+            enfase_section = (
+                f"\nÊNFASE DESTA ANÁLISE: {enfase}\n"
+                "Dê destaque especial a esse aspecto no texto (ex.: mencione-o "
+                "primeiro), sem deixar de cobrir os demais achados relevantes.\n"
+            )
 
         coverage_section = ""
         if gaps:
@@ -208,7 +231,8 @@ class TextSynthesizer:
             "  302 = investimento em hospitais e atendimentos especializados\n"
             "  303 = investimento em medicamentos e insumos\n"
             "  305 = investimento em prevenção de epidemias e vigilância sanitária\n"
-            "- Diga o que os números significam para a vida das pessoas\n\n"
+            "- Diga o que os números significam para a vida das pessoas\n"
+            f"{enfase_section}\n"
             "DADOS ANALISADOS:\n\n"
             "Relações encontradas entre gastos e resultados de saúde:\n"
             f"{correlacoes}\n\n"
