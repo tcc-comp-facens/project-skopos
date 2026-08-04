@@ -2,7 +2,7 @@
 
 Sistema de comparação de duas arquiteturas multiagente BDI (Estrela e Hierárquica) aplicado à análise de eficiência dos gastos públicos em saúde de Sorocaba-SP.
 
-**TCC** — Engenharia de Computação, FACENS.
+**TCC1** — Engenharia de Computação, FACENS.
 
 ---
 
