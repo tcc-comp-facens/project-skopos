@@ -17,9 +17,8 @@ Anomalias detectadas:
   → Indicador positivo: gastou pouco E cobertura está alta (acima da mediana)
 
 Opera sobre dados em memória (CrossedDataPoint dicts) — sem dependência
-de Neo4j ou outros serviços externos.
-
-Requisitos: 6.1, 6.2, 6.3, 6.4, 6.5
+de Neo4j ou outros serviços externos. A detecção via mediana é raciocínio
+simbólico/determinístico — não depende de LLM (Req 6.1, 6.2, 6.3, 6.4, 6.5).
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agents.base import AgenteBDI, IntentionFailure
+from agents.base import ActionFailure, AgenteCoALA
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +57,15 @@ def _median(values: list[float]) -> float:
     return sorted_vals[mid]
 
 
-class AgenteAnomalias(AgenteBDI):
+class AgenteAnomalias(AgenteCoALA):
     """Agente analítico que detecta ineficiências via mediana (Req 6).
 
     Recebe dados cruzados (despesas × indicadores por subfunção e ano)
     e identifica anomalias onde o gasto e o resultado divergem da mediana
     do par subfunção-indicador.
 
-    A polaridade do indicador é considerada:
+    A polaridade do indicador (`semantic_memory["indicadores_negativos"]`/
+    `["indicadores_positivos"]`) é considerada:
     - Indicadores negativos (dengue, covid, internacoes, mortalidade):
       valor alto = resultado RUIM (muitos casos)
     - Indicadores positivos (vacinacao):
@@ -84,38 +84,41 @@ class AgenteAnomalias(AgenteBDI):
 
     def __init__(self, agent_id: str) -> None:
         super().__init__(agent_id)
-
-    # -- BDI overrides --------------------------------------------------
-
-    def perceive(self) -> dict:
-        """Return current beliefs as perception (data set by caller)."""
-        return {
-            "dados_cruzados": self.beliefs.get("dados_cruzados", []),
+        self.semantic_memory = {
+            "indicadores_negativos": INDICADORES_NEGATIVOS,
+            "indicadores_positivos": INDICADORES_POSITIVOS,
+            "subfuncao_nomes": SUBFUNCAO_NOMES,
+        }
+        self.procedural_memory = {
+            "detectar_anomalias": [self._act_detectar_anomalias],
         }
 
-    def deliberate(self) -> list[dict]:
-        """Determine desires based on available data."""
-        desires: list[dict] = []
-        if self.beliefs.get("dados_cruzados"):
-            desires.append({"goal": "detectar_anomalias"})
-        self.desires = desires
-        return desires
+    # -- Ciclo CoALA ------------------------------------------------------
 
-    def plan(self, desires: list[dict]) -> list[dict]:
-        """Generate intentions from desires."""
-        return [{"desire": d, "status": "pending"} for d in desires]
+    def perceive(self) -> dict:
+        """Retorna a working memory atual como percepção (dado definido pelo caller)."""
+        return {
+            "dados_cruzados": self.working_memory.get("dados_cruzados", []),
+        }
 
-    def _execute_intention(self, intention: dict) -> None:
-        """Execute a single intention."""
-        goal = intention["desire"]["goal"]
+    def propose_actions(self) -> list[dict]:
+        """Propõe detectar anomalias se há dados cruzados disponíveis."""
+        actions: list[dict] = []
+        if self.working_memory.get("dados_cruzados"):
+            actions.append({"goal": "detectar_anomalias"})
+        return actions
+
+    def _act_detectar_anomalias(self, action: dict) -> None:
+        """Ação interna de reasoning: detecta anomalias via mediana. Sem
+        fallback registrado — falha propaga (tratada no nível do
+        orquestrador/supervisor).
+        """
         try:
-            if goal == "detectar_anomalias":
-                self._detect_anomalies()
-            intention["status"] = "completed"
+            self._detect_anomalies()
         except Exception as e:
-            raise IntentionFailure(intention, str(e)) from e
+            raise ActionFailure(action, str(e)) from e
 
-    # -- Public API called by orchestrator/supervisor -------------------
+    # -- Interface pública chamada pelo orquestrador/supervisor -----------
 
     def detect(self, dados_cruzados: list[dict]) -> list[dict]:
         """Detecta anomalias para cada par subfunção-indicador.
@@ -133,23 +136,24 @@ class AgenteAnomalias(AgenteBDI):
             Retorna lista vazia se input for vazio.
             Ignora pares com < 2 pontos de dados (Req 6.5).
         """
-        self.update_beliefs({"dados_cruzados": dados_cruzados})
-        self.run_cycle()
-        return self.beliefs.get("anomalias", [])
+        self.update_working_memory({"dados_cruzados": dados_cruzados})
+        self.run_coala_cycle()
+        return self.working_memory.get("anomalias", [])
 
-    # -- Internal computation -------------------------------------------
+    # -- Reasoning interno -------------------------------------------------
 
     def _detect_anomalies(self) -> None:
         """Detect anomalies per subfuncao-indicador pair (Reqs 6.1-6.5).
 
-        A polaridade do indicador determina a interpretação:
-        - Indicadores negativos (dengue, covid, internacoes, mortalidade):
-          indicador ALTO = resultado RUIM
-        - Indicadores positivos (vacinacao):
-          indicador ALTO = resultado BOM
+        A polaridade do indicador é obtida via *retrieval* de
+        `semantic_memory` (não hardcoded direto do módulo):
+        - Indicadores negativos: indicador ALTO = resultado RUIM
+        - Indicadores positivos: indicador ALTO = resultado BOM
         """
-        crossed = self.beliefs.get("dados_cruzados", [])
+        crossed = self.working_memory.get("dados_cruzados", [])
         anomalias: list[dict[str, Any]] = []
+        indicadores_negativos = self.semantic_memory["indicadores_negativos"]
+        subfuncao_nomes = self.semantic_memory["subfuncao_nomes"]
 
         # Group data points by (subfuncao, tipo_indicador)
         pairs: dict[tuple[int, str], list[dict]] = {}
@@ -170,11 +174,11 @@ class AgenteAnomalias(AgenteBDI):
 
             subfuncao_nome = items[0].get(
                 "subfuncao_nome",
-                SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao)),
+                subfuncao_nomes.get(subfuncao, str(subfuncao)),
             )
 
             # Determinar polaridade do indicador
-            is_negative = tipo in INDICADORES_NEGATIVOS
+            is_negative = tipo in indicadores_negativos
 
             for it in items:
                 high_spend = it["valor_despesa"] > med_desp
@@ -241,7 +245,7 @@ class AgenteAnomalias(AgenteBDI):
                         ),
                     })
 
-        self.beliefs["anomalias"] = anomalias
+        self.working_memory["anomalias"] = anomalias
         logger.info(
             "Agent %s: detected %d anomalies", self.agent_id, len(anomalias)
         )

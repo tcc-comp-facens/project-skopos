@@ -34,10 +34,17 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from agents.intent import AgenteInterpretacaoIntencao
+from agents.intent.agente_interpretacao_intencao import (
+    MISSING_LLM_UNAVAILABLE,
+    MISSING_OUT_OF_SCOPE,
+    MISSING_TEXT,
+)
 from api.chat_runner import run_chat_analysis
 from api.dispatch import get_available_year_range
 from api.state import active_chat_sessions
-from core.intent_interpreter import IntentInterpreter
+from core import guardrail_stats
+from core.llm_client import TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +80,11 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
     year_range = get_available_year_range()
     min_year, max_year = year_range if year_range else (None, None)
-    interpreter = IntentInterpreter(min_year=min_year, max_year=max_year)
+    interpreter = AgenteInterpretacaoIntencao(
+        agent_id=f"intent-{uuid.uuid4().hex[:8]}",
+        min_year=min_year,
+        max_year=max_year,
+    )
 
     try:
         while True:
@@ -86,6 +97,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
             text = str(payload.get("text", ""))
             use_llm = bool(payload.get("useLlm", True))
             use_llm_judge = bool(payload.get("useLlmJudge", False))
+            use_self_check = bool(payload.get("useSelfCheck", False))
 
             await websocket.send_json({"type": "user_ack", "payload": ""})
 
@@ -108,7 +120,24 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
             active_chat_sessions[session_id] = True
             try:
-                result = interpreter.parse(text)
+                logger.info(
+                    "Chat WS %s: interpretando mensagem (%d chars): %r",
+                    session_id[:8], len(text), text[:120],
+                )
+                with TokenBucket() as intent_bucket:
+                    result = interpreter.parse(text)
+                logger.info(
+                    "Chat WS %s: interpretação -> success=%s missing=%s",
+                    session_id[:8], result.success, result.missing,
+                )
+
+                # Etapa 6 — registra a decisão do guardrail (dentro/fora de
+                # escopo), exceto quando não houve decisão real: mensagem
+                # vazia (nem chega ao LLM) ou falha técnica do LLM.
+                if MISSING_TEXT not in result.missing and MISSING_LLM_UNAVAILABLE not in result.missing:
+                    guardrail_stats.record_guardrail_decision(
+                        out_of_scope=MISSING_OUT_OF_SCOPE in result.missing
+                    )
 
                 if not result.success:
                     await _send_chunks(websocket, result.clarification_message)
@@ -122,6 +151,8 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                     source_question=text,
                     interpreted_via=result.interpreted_via,
                     interpreter=interpreter,
+                    use_self_check=use_self_check,
+                    intent_token_usage=intent_bucket.snapshot(),
                 )
 
                 await websocket.send_json({

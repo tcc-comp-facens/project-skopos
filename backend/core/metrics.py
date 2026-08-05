@@ -10,6 +10,7 @@ Requisitos: 11.1, 11.2, 11.3, 11.4
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ import psutil
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsCollector:
@@ -114,4 +117,12 @@ class MetricsCollector:
         metrics["recordedAt"] = datetime.now(timezone.utc).isoformat()
 
         neo4j_client.save_metrica(metrics, analysis_id)
+        logger.info(
+            "MetricsCollector [%s]: métrica persistida (%s, architecture=%s, %dms, cpu=%.1f%%)",
+            self.agent_id,
+            self.agent_type,
+            architecture,
+            metrics["executionTimeMs"],
+            metrics["cpuPercent"],
+        )
         return metrics

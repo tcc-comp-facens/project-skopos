@@ -10,17 +10,28 @@ Implementa comunicação lateral entre supervisores (Reqs 10.5, 10.6),
 degradação graciosa em falha de supervisor (Req 10.9), e contagem
 de mensagens para comparação quantitativa (Reqs 11.1, 11.2).
 
+Nota arquitetural (CoALA): assim como o OrquestradorEstrela, o
+CoordenadorGeral executa de fato pelo ciclo CoALA — cada etapa de
+delegação e cada comunicação lateral entre supervisores é uma ação
+nomeada em `procedural_memory`, proposta em ordem fixa por
+`propose_actions()` (a ordem reflete as dependências de dados entre
+supervisores: domínio → comunicação lateral → contexto → comunicação
+lateral → analítico). `evaluate_and_select` colapsa num passthrough
+pelo mesmo motivo que no orquestrador estrela — não há candidatos
+concorrentes a arbitrar neste nível.
+
 Requisitos: 10.1, 10.5, 10.6, 10.8, 10.9, 11.1, 11.2
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from queue import Queue
 from typing import Any, TYPE_CHECKING
 
-from agents.base import AgenteBDI
+from agents.base import ActionFailure, AgenteCoALA
 from agents.hierarchical.supervisors import (
     SupervisorDominio,
     SupervisorAnalitico,
@@ -34,7 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class CoordenadorGeral(AgenteBDI):
+class CoordenadorGeral(AgenteCoALA):
     """Nível 0 da topologia hierárquica com 3 supervisores (Req 10).
 
     Delega para SupervisorDominio, SupervisorAnalitico e
@@ -43,6 +54,10 @@ class CoordenadorGeral(AgenteBDI):
     registra métricas por agente e supervisor (Req 10.8), e trata
     falhas com degradação graciosa (Req 10.9).
 
+    Herda de AgenteCoALA e executa de fato pelo ciclo CoALA — cada etapa
+    de delegação/comunicação lateral é uma ação registrada em
+    `procedural_memory`, proposta em ordem fixa por `propose_actions()`.
+
     Attributes:
         neo4j_client: Cliente Neo4j para queries e persistência.
     """
@@ -50,105 +65,70 @@ class CoordenadorGeral(AgenteBDI):
     def __init__(self, agent_id: str, neo4j_client: "Neo4jClient") -> None:
         super().__init__(agent_id)
         self.neo4j_client = neo4j_client
-
-    # -- BDI overrides --------------------------------------------------
-
-    def perceive(self) -> dict:
-        """Percebe parâmetros da análise a partir das crenças."""
-        return {
-            "analysis_id": self.beliefs.get("analysis_id"),
-            "date_from": self.beliefs.get("date_from"),
-            "date_to": self.beliefs.get("date_to"),
-            "health_params": self.beliefs.get("health_params", []),
+        self.procedural_memory = {
+            "delegar_dominio": [self._act_delegar_dominio],
+            "comunicar_dominio_analitico": [self._act_comunicar_dominio_analitico],
+            "comunicar_dominio_contexto": [self._act_comunicar_dominio_contexto],
+            "delegar_contexto": [self._act_delegar_contexto],
+            "comunicar_contexto_analitico": [self._act_comunicar_contexto_analitico],
+            "delegar_analitico": [self._act_delegar_analitico],
+            "persistir_metricas": [self._act_persistir_metricas],
         }
 
-    def deliberate(self) -> list[dict]:
-        """Define desejos: delegar para supervisores e persistir métricas."""
-        desires: list[dict] = []
-        if self.beliefs.get("analysis_id"):
-            desires.append({"goal": "delegar_dominio"})
-            desires.append({"goal": "delegar_contexto"})
-            desires.append({"goal": "delegar_analitico"})
-            desires.append({"goal": "persistir_metricas"})
-        self.desires = desires
-        return desires
+    # -- Ciclo CoALA ------------------------------------------------------
 
-    def plan(self, desires: list[dict]) -> list[dict]:
-        return [{"desire": d, "status": "pending"} for d in desires]
+    def perceive(self) -> dict:
+        """Percebe parâmetros da análise a partir da working memory."""
+        return {
+            "analysis_id": self.working_memory.get("analysis_id"),
+            "date_from": self.working_memory.get("date_from"),
+            "date_to": self.working_memory.get("date_to"),
+            "health_params": self.working_memory.get("health_params", []),
+        }
 
-    # -- Public API -----------------------------------------------------
+    def propose_actions(self) -> list[dict]:
+        """Propõe as macro-ações do pipeline hierárquico, em ordem de dependência.
 
-    def run(
-        self,
-        analysis_id: str,
-        params: dict[str, Any],
-        ws_queue: Queue,
-    ) -> dict[str, Any]:
-        """Executa o pipeline completo da arquitetura hierárquica.
-
-        Pipeline:
-        1. Instancia 3 supervisores com IDs únicos (Req 10.1).
-        2. Delega para SupervisorDominio.run() (Req 10.1).
-        4. Comunicação lateral: SupervisorDominio → SupervisorAnalitico
-           via receive_from_peer (despesas + indicadores) (Req 10.5).
-        5. Comunicação lateral: SupervisorDominio → SupervisorContexto
-           via receive_from_peer (despesas) (Req 10.5).
-        6. Delega para SupervisorContexto.run() (Req 10.4).
-        7. Comunicação lateral: SupervisorContexto → SupervisorAnalitico
-           via receive_from_peer (contexto_orcamentario) (Req 10.6).
-        8. Delega para SupervisorAnalitico.run() (Req 10.3).
-        9. Persiste métricas para 8 agentes + 3 supervisores (Req 10.8).
-        10. Trata falhas de supervisor com degradação graciosa (Req 10.9).
-        11. Envia contagem de mensagens como evento metric (Req 11.2).
-
-        Args:
-            analysis_id: UUID da análise.
-            params: Dicionário com date_from, date_to, health_params.
-            ws_queue: Fila para streaming de eventos WebSocket.
-
-        Returns:
-            Dicionário com resultado completo da análise (possivelmente parcial).
+        A ordem reflete as dependências de dados entre supervisores
+        (domínio → comunicação lateral → contexto → comunicação lateral →
+        analítico → persistência), não uma arbitragem entre candidatos
+        concorrentes.
         """
-        self.update_beliefs({
-            "analysis_id": analysis_id,
-            "date_from": params.get("date_from"),
-            "date_to": params.get("date_to"),
-            "health_params": params.get("health_params", []),
-            "ws_queue": ws_queue,
-        })
+        if not self.working_memory.get("analysis_id"):
+            return []
+        return [
+            {"goal": "delegar_dominio"},
+            {"goal": "comunicar_dominio_analitico"},
+            {"goal": "comunicar_dominio_contexto"},
+            {"goal": "delegar_contexto"},
+            {"goal": "comunicar_contexto_analitico"},
+            {"goal": "delegar_analitico"},
+            {"goal": "persistir_metricas"},
+        ]
 
-        date_from = params.get("date_from")
-        date_to = params.get("date_to")
+    # -- Ações --------------------------------------------------------------
 
-        # Wall-clock timing for fair comparison
-        import time as _time
-        _coord_start = _time.time()
-
-        result: dict[str, Any] = {}
-        dominio_data: dict[str, Any] = {}
-        contexto_data: dict[str, Any] = {}
-        metrics_collectors: list[MetricsCollector] = []
-
-        # -- 2. Instanciar 3 supervisores com IDs únicos (Req 10.1) --
-        sup_dominio_id = f"hier-sup-dominio-{uuid.uuid4().hex[:8]}"
-        sup_analitico_id = f"hier-sup-analitico-{uuid.uuid4().hex[:8]}"
-        sup_contexto_id = f"hier-sup-contexto-{uuid.uuid4().hex[:8]}"
-
-        sup_dominio = SupervisorDominio(sup_dominio_id, self.neo4j_client)
-        sup_analitico = SupervisorAnalitico(sup_analitico_id)
-        sup_contexto = SupervisorContexto(sup_contexto_id)
-
-        # -- 3. Delegar para SupervisorDominio (Req 10.1) --
-        mc_dominio = MetricsCollector(sup_dominio_id, "supervisor_dominio")
-        mc_dominio.start()
+    def _act_delegar_dominio(self, action: dict) -> None:
+        """Ação externa: delega para SupervisorDominio.run() (Req 10.1)."""
+        sup_dominio = self.working_memory["_sup_dominio"]
+        mc = MetricsCollector(sup_dominio.agent_id, "supervisor_dominio")
+        mc.start()
+        analysis_id = self.working_memory["analysis_id"]
+        date_from = self.working_memory["date_from"]
+        date_to = self.working_memory["date_to"]
+        health_params = self.working_memory.get("health_params", [])
+        intent_summary = self.working_memory.get("intent_summary")
+        use_llm = self.working_memory.get("use_llm", True)
         try:
             dominio_data = sup_dominio.run(
                 analysis_id=analysis_id,
                 date_from=date_from,
                 date_to=date_to,
-                health_params=params.get("health_params", []),
+                health_params=health_params,
+                intent_summary=intent_summary,
+                use_llm=use_llm,
             )
-            mc_dominio.stop()
+            mc.stop()
             logger.info(
                 "CoordenadorGeral %s: SupervisorDominio completed — %d despesas, %d indicadores",
                 self.agent_id,
@@ -156,114 +136,162 @@ class CoordenadorGeral(AgenteBDI):
                 len(dominio_data.get("indicadores", [])),
             )
         except Exception as exc:
-            mc_dominio.stop()
+            mc.stop()
             # Req 10.9: degradação graciosa — enviar erro e continuar
             logger.error(
-                "CoordenadorGeral %s: SupervisorDominio failed — %s",
-                self.agent_id,
-                exc,
+                "CoordenadorGeral %s: SupervisorDominio failed — %s", self.agent_id, exc
             )
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": "hierarchical",
-                "type": "error",
-                "payload": f"SupervisorDominio falhou: {exc}",
-            })
+            self._send_error(f"SupervisorDominio falhou: {exc}")
             dominio_data = {"despesas": [], "indicadores": []}
-        metrics_collectors.append(mc_dominio)
 
-        # -- 4. Comunicação lateral: SupervisorDominio → SupervisorAnalitico (Req 10.5) --
-        #    Repassa despesas e indicadores para o pipeline analítico.
+        self.working_memory["_dominio_data"] = dominio_data
+        self.working_memory["_metrics_collectors"].append(mc)
+
+    def _act_comunicar_dominio_analitico(self, action: dict) -> None:
+        """Comunicação lateral: SupervisorDominio → SupervisorAnalitico (Req 10.5).
+
+        Repassa despesas e indicadores para o pipeline analítico, acompanhados
+        do resumo textual gerado por SupervisorDominio (Etapa 5) — dá
+        conteúdo semântico à comunicação lateral, não só transporte de dados
+        brutos (D4 do PLANO_REFATORACAO.md).
+        """
+        sup_analitico = self.working_memory["_sup_analitico"]
+        dominio_data = self.working_memory.get("_dominio_data", {})
+        resumo_dominio = dominio_data.get("resumo", "")
+        logger.info(
+            "[%s] CoordenadorGeral: comunicação lateral Dominio -> Analitico "
+            "(%d despesas, %d indicadores, resumo=%r)",
+            self.agent_id,
+            len(dominio_data.get("despesas", [])),
+            len(dominio_data.get("indicadores", [])),
+            resumo_dominio,
+        )
         sup_analitico.receive_from_peer({
             "despesas": dominio_data.get("despesas", []),
             "indicadores": dominio_data.get("indicadores", []),
-            "date_from": date_from,
-            "date_to": date_to,
-            "health_params": params.get("health_params", []),
+            "date_from": self.working_memory["date_from"],
+            "date_to": self.working_memory["date_to"],
+            "health_params": self.working_memory.get("health_params", []),
+            "intent_summary": self.working_memory.get("intent_summary"),
+            "resumo_dominio": resumo_dominio,
         })
 
-        # -- 5. Comunicação lateral: SupervisorDominio → SupervisorContexto (Req 10.5) --
-        #    Repassa despesas para análise de tendências orçamentárias.
-        sup_contexto.receive_from_peer({
-            "despesas": dominio_data.get("despesas", []),
-        })
+    def _act_comunicar_dominio_contexto(self, action: dict) -> None:
+        """Comunicação lateral: SupervisorDominio → SupervisorContexto (Req 10.5).
 
-        # -- 6. Delegar para SupervisorContexto (Req 10.4) --
-        mc_contexto = MetricsCollector(sup_contexto_id, "supervisor_contexto")
-        mc_contexto.start()
+        Repassa despesas para análise de tendências orçamentárias.
+        """
+        sup_contexto = self.working_memory["_sup_contexto"]
+        dominio_data = self.working_memory.get("_dominio_data", {})
+        logger.info(
+            "[%s] CoordenadorGeral: comunicação lateral Dominio -> Contexto (%d despesas)",
+            self.agent_id, len(dominio_data.get("despesas", [])),
+        )
+        sup_contexto.receive_from_peer({"despesas": dominio_data.get("despesas", [])})
+
+    def _act_delegar_contexto(self, action: dict) -> None:
+        """Ação externa: delega para SupervisorContexto.run() (Req 10.4)."""
+        sup_contexto = self.working_memory["_sup_contexto"]
+        mc = MetricsCollector(sup_contexto.agent_id, "supervisor_contexto")
+        mc.start()
+        use_llm = self.working_memory.get("use_llm", True)
         try:
-            contexto_data = sup_contexto.run()
-            mc_contexto.stop()
-            logger.info(
-                "CoordenadorGeral %s: SupervisorContexto completed",
-                self.agent_id,
-            )
+            contexto_data = sup_contexto.run(use_llm=use_llm)
+            mc.stop()
+            logger.info("CoordenadorGeral %s: SupervisorContexto completed", self.agent_id)
         except Exception as exc:
-            mc_contexto.stop()
+            mc.stop()
             # Req 10.9: degradação graciosa — enviar erro e continuar
             logger.error(
-                "CoordenadorGeral %s: SupervisorContexto failed — %s",
-                self.agent_id,
-                exc,
+                "CoordenadorGeral %s: SupervisorContexto failed — %s", self.agent_id, exc
             )
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": "hierarchical",
-                "type": "error",
-                "payload": f"SupervisorContexto falhou: {exc}",
-            })
+            self._send_error(f"SupervisorContexto falhou: {exc}")
             contexto_data = {"contexto_orcamentario": {}}
-        metrics_collectors.append(mc_contexto)
 
-        # -- 7. Comunicação lateral: SupervisorContexto → SupervisorAnalitico (Req 10.6) --
-        #    Repassa contexto orçamentário para enriquecer a síntese textual.
+        self.working_memory["_contexto_data"] = contexto_data
+        self.working_memory["_metrics_collectors"].append(mc)
+
+    def _act_comunicar_contexto_analitico(self, action: dict) -> None:
+        """Comunicação lateral: SupervisorContexto → SupervisorAnalitico (Req 10.6).
+
+        Repassa contexto orçamentário para enriquecer a síntese textual,
+        acompanhado do resumo textual gerado por SupervisorContexto
+        (Etapa 5) — ver docstring de `_act_comunicar_dominio_analitico`.
+        """
+        sup_analitico = self.working_memory["_sup_analitico"]
+        contexto_data = self.working_memory.get("_contexto_data", {})
+        resumo_contexto = contexto_data.get("resumo", "")
+        logger.info(
+            "[%s] CoordenadorGeral: comunicação lateral Contexto -> Analitico "
+            "(%d subfunções, resumo=%r)",
+            self.agent_id, len(contexto_data.get("contexto_orcamentario", {})), resumo_contexto,
+        )
         sup_analitico.receive_from_peer({
             "contexto_orcamentario": contexto_data.get("contexto_orcamentario", {}),
+            "resumo_contexto": resumo_contexto,
         })
 
-        # -- 8. Delegar para SupervisorAnalitico (Req 10.3) --
-        mc_analitico = MetricsCollector(sup_analitico_id, "supervisor_analitico")
-        mc_analitico.start()
+    def _act_delegar_analitico(self, action: dict) -> None:
+        """Ação externa: delega para SupervisorAnalitico.run() (Req 10.3)."""
+        sup_analitico = self.working_memory["_sup_analitico"]
+        mc = MetricsCollector(sup_analitico.agent_id, "supervisor_analitico")
+        mc.start()
+        analysis_id = self.working_memory["analysis_id"]
+        ws_queue = self.working_memory["_ws_queue"]
+        use_llm = self.working_memory.get("use_llm", True)
+        use_self_check = self.working_memory.get("use_self_check", False)
         try:
             analitico_data = sup_analitico.run(
-                analysis_id=analysis_id,
-                ws_queue=ws_queue,
-                use_llm=params.get("use_llm", True),
+                analysis_id=analysis_id, ws_queue=ws_queue, use_llm=use_llm,
+                use_self_check=use_self_check,
             )
-            # Stop usando o timestamp BDI (exclui tempo do sintetizador/LLM)
-            bdi_end = getattr(sup_analitico, "_bdi_end_time", None)
-            if bdi_end and mc_analitico._start_time:
-                mc_analitico._end_time = bdi_end
+            # Usa o timestamp de fim da parte determinística (exclui tempo
+            # do sintetizador/LLM) — mais preciso que mc.stop() aqui.
+            leaf_end = getattr(sup_analitico, "_coala_leaf_end_time", None)
+            if leaf_end and mc._start_time:
+                mc._end_time = leaf_end
             else:
-                mc_analitico.stop()
-            result.update(analitico_data)
+                mc.stop()
             logger.info(
                 "CoordenadorGeral %s: SupervisorAnalitico completed — %d correlacoes, %d anomalias",
                 self.agent_id,
                 len(analitico_data.get("correlacoes", [])),
                 len(analitico_data.get("anomalias", [])),
             )
+            self.working_memory["_analitico_data"] = analitico_data
         except Exception as exc:
-            mc_analitico.stop()
+            mc.stop()
             # Req 10.9: degradação graciosa — enviar erro
             logger.error(
-                "CoordenadorGeral %s: SupervisorAnalitico failed — %s",
-                self.agent_id,
-                exc,
+                "CoordenadorGeral %s: SupervisorAnalitico failed — %s", self.agent_id, exc
             )
-            ws_queue.put({
-                "analysisId": analysis_id,
-                "architecture": "hierarchical",
-                "type": "error",
-                "payload": f"SupervisorAnalitico falhou: {exc}",
-            })
-            result.setdefault("correlacoes", [])
-            result.setdefault("anomalias", [])
-            result.setdefault("texto_analise", "")
-        metrics_collectors.append(mc_analitico)
+            self._send_error(f"SupervisorAnalitico falhou: {exc}")
+            self.working_memory["_analitico_data"] = {
+                "correlacoes": [],
+                "anomalias": [],
+                "texto_analise": "",
+            }
 
-        # -- 9. Persistir métricas para 8 agentes + 3 supervisores (Req 10.8) --
-        # First persist supervisor metrics
+        self.working_memory["_metrics_collectors"].append(mc)
+
+    def _act_persistir_metricas(self, action: dict) -> None:
+        """Persiste métricas de 8 agentes + 3 supervisores e emite evento `metric` (Req 10.8, 11.2).
+
+        Overhead = wall_clock - soma dos agentes FOLHA (nível 2).
+        Supervisores NÃO entram em workers_time porque seu tempo já
+        engloba o dos subordinados — somar ambos causaria dupla contagem.
+        O overhead captura: tempo dos supervisores fora dos subordinados
+        + comunicação lateral (receive_from_peer) + instanciação.
+        """
+        analysis_id = self.working_memory["analysis_id"]
+        metrics_collectors: list[MetricsCollector] = self.working_memory.get(
+            "_metrics_collectors", []
+        )
+        sup_dominio = self.working_memory["_sup_dominio"]
+        sup_analitico = self.working_memory["_sup_analitico"]
+        sup_contexto = self.working_memory["_sup_contexto"]
+
+        # Persiste métricas dos supervisores
         for mc in metrics_collectors:
             try:
                 mc.persist(self.neo4j_client, analysis_id, "hierarchical")
@@ -274,7 +302,7 @@ class CoordenadorGeral(AgenteBDI):
                     exc,
                 )
 
-        # Then persist subordinate agent metrics from each supervisor
+        # Persiste métricas dos agentes subordinados de cada supervisor
         for supervisor in (sup_dominio, sup_analitico, sup_contexto):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
@@ -286,17 +314,6 @@ class CoordenadorGeral(AgenteBDI):
                         exc,
                     )
 
-        # -- 10. Merge domain and context data into result --
-        result["despesas"] = dominio_data.get("despesas", [])
-        result["indicadores"] = dominio_data.get("indicadores", [])
-        result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
-
-        # -- 11. Send benchmark metrics event (Req 11.2) --
-        # Overhead = wall_clock - soma dos agentes FOLHA (nível 2).
-        # Supervisores NÃO entram em workers_time porque seu tempo já
-        # engloba o dos subordinados — somar ambos causaria dupla contagem.
-        # O overhead captura: tempo dos supervisores fora dos subordinados
-        # + comunicação lateral (receive_from_peer) + instanciação.
         agent_metrics = []
         workers_time_ms = 0.0
 
@@ -317,8 +334,11 @@ class CoordenadorGeral(AgenteBDI):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     m = agent_mc.collect()
-                    # Exclui sintetizador — é um serviço LLM, não agente BDI
-                    if m.get("agentType") == "sintetizador":
+                    # Exclui sintetizador (serviço LLM, não agente CoALA),
+                    # priorizacao (Etapa 3) e verificacao (Etapa 4) — todos
+                    # rodam depois de capturar_wallclock e incluem chamada
+                    # LLM, mesma lógica de exclusão.
+                    if m.get("agentType") in ("sintetizador", "priorizacao", "verificacao"):
                         continue
                     agent_metrics.append({
                         "agentName": m["agentType"],
@@ -330,21 +350,33 @@ class CoordenadorGeral(AgenteBDI):
                     pass
 
         # Wall-clock total time — exclui tempo do sintetizador (LLM)
-        # porque depende da disponibilidade da API Groq, não da arquitetura.
-        _coord_end = _time.time()
-        wall_clock_ms_raw = round((_coord_end - _coord_start) * 1000, 2)
+        # porque depende da disponibilidade da API do LLM, não da arquitetura.
+        coord_start = self.working_memory.get("_coord_start", time.time())
+        coord_end = time.time()
+        wall_clock_ms_raw = round((coord_end - coord_start) * 1000, 2)
 
-        # Subtrair tempo do sintetizador (último collector do SupervisorAnalitico)
+        # Subtrair tempo do sintetizador, da priorização (Etapa 3) e da
+        # verificação pós-síntese (Etapa 4) — todos os collectors do
+        # SupervisorAnalitico, todos incluem chamada LLM e rodam depois de
+        # capturar_wallclock.
         sint_time_ms = 0.0
+        prior_time_ms = 0.0
+        verif_time_ms = 0.0
         for agent_mc in getattr(sup_analitico, "_collectors", []):
             try:
                 m = agent_mc.collect()
                 if m.get("agentType") == "sintetizador":
                     sint_time_ms = m.get("executionTimeMs", 0)
+                elif m.get("agentType") == "priorizacao":
+                    prior_time_ms = m.get("executionTimeMs", 0)
+                elif m.get("agentType") == "verificacao":
+                    verif_time_ms = m.get("executionTimeMs", 0)
             except Exception:
                 pass
 
-        wall_clock_ms = round(max(0, wall_clock_ms_raw - sint_time_ms), 2)
+        wall_clock_ms = round(
+            max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms - verif_time_ms), 2
+        )
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({
@@ -353,6 +385,7 @@ class CoordenadorGeral(AgenteBDI):
             "cpuPercent": 0.0,
         })
 
+        ws_queue = self.working_memory["_ws_queue"]
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "hierarchical",
@@ -366,10 +399,78 @@ class CoordenadorGeral(AgenteBDI):
             },
         })
 
-        self.beliefs["result"] = result
-        logger.info(
-            "CoordenadorGeral %s: pipeline complete",
-            self.agent_id,
-        )
+    # -- Helpers --------------------------------------------------------
+
+    def _send_error(self, message: str) -> None:
+        """Envia evento de erro via ws_queue (Req 10.9), se disponível."""
+        ws_queue = self.working_memory.get("_ws_queue")
+        if ws_queue is None:
+            return
+        ws_queue.put({
+            "analysisId": self.working_memory.get("analysis_id"),
+            "architecture": "hierarchical",
+            "type": "error",
+            "payload": message,
+        })
+
+    # -- Interface pública ------------------------------------------------
+
+    def run(
+        self,
+        analysis_id: str,
+        params: dict[str, Any],
+        ws_queue: Queue,
+    ) -> dict[str, Any]:
+        """Executa o pipeline completo da arquitetura hierárquica.
+
+        Instancia os 3 supervisores com IDs únicos (Req 10.1), configura
+        a working memory e delega ao ciclo CoALA (`run_coala_cycle`), que
+        percorre as macro-ações registradas em `procedural_memory` na
+        ordem proposta por `propose_actions`.
+
+        Args:
+            analysis_id: UUID da análise.
+            params: Dicionário com date_from, date_to, health_params.
+            ws_queue: Fila para streaming de eventos WebSocket.
+
+        Returns:
+            Dicionário com resultado completo da análise (possivelmente parcial).
+        """
+        sup_dominio_id = f"hier-sup-dominio-{uuid.uuid4().hex[:8]}"
+        sup_analitico_id = f"hier-sup-analitico-{uuid.uuid4().hex[:8]}"
+        sup_contexto_id = f"hier-sup-contexto-{uuid.uuid4().hex[:8]}"
+
+        self.update_working_memory({
+            "analysis_id": analysis_id,
+            "date_from": params.get("date_from"),
+            "date_to": params.get("date_to"),
+            "health_params": params.get("health_params", []),
+            "use_llm": params.get("use_llm", True),
+            "use_self_check": params.get("use_self_check", False),
+            "intent_summary": params.get("intent_summary"),
+            "_ws_queue": ws_queue,
+            "_sup_dominio": SupervisorDominio(sup_dominio_id, self.neo4j_client),
+            "_sup_analitico": SupervisorAnalitico(sup_analitico_id),
+            "_sup_contexto": SupervisorContexto(sup_contexto_id),
+            "_metrics_collectors": [],
+            "_coord_start": time.time(),
+        })
+
+        self.run_coala_cycle()
+
+        dominio_data = self.working_memory.get("_dominio_data", {})
+        contexto_data = self.working_memory.get("_contexto_data", {})
+        analitico_data = self.working_memory.get("_analitico_data", {})
+
+        result: dict[str, Any] = dict(analitico_data)
+        result.setdefault("correlacoes", [])
+        result.setdefault("anomalias", [])
+        result.setdefault("texto_analise", "")
+        result["despesas"] = dominio_data.get("despesas", [])
+        result["indicadores"] = dominio_data.get("indicadores", [])
+        result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
+
+        self.working_memory["result"] = result
+        logger.info("CoordenadorGeral %s: pipeline complete", self.agent_id)
 
         return result

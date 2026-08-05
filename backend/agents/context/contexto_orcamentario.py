@@ -6,9 +6,8 @@ calculando variação percentual ano a ano e classificando tendências
 como crescimento, corte, estagnação ou dados insuficientes.
 
 Opera sobre dados em memória (DespesaRecord dicts) — sem dependência
-de Neo4j ou outros serviços externos.
-
-Requisitos: 8.1, 8.2, 8.3, 8.4, 8.5
+de Neo4j ou outros serviços externos. A classificação de tendência é
+raciocínio simbólico/determinístico — não depende de LLM (Req 8.1-8.5).
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import logging
 import math
 from typing import Any
 
-from agents.base import AgenteBDI, IntentionFailure
+from agents.base import ActionFailure, AgenteCoALA
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +47,17 @@ def _compute_yoy_variation(valor_current: float, valor_previous: float) -> float
     return ((valor_current - valor_previous) / valor_previous) * 100.0
 
 
-def _classify_trend(variations: list[float]) -> str:
+def _classify_trend(
+    variations: list[float],
+    stagnation_threshold: float = STAGNATION_THRESHOLD,
+    min_consecutive_years: int = MIN_CONSECUTIVE_YEARS,
+) -> str:
     """Classify trend based on consecutive variations (Req 8.2).
 
     Rules:
-    - "crescimento": consecutive positive variations for 2+ years
-    - "corte": consecutive negative variations for 2+ years
-    - "estagnacao": all |variation| < 5% in absolute value
+    - "crescimento": consecutive positive variations for `min_consecutive_years`+
+    - "corte": consecutive negative variations for `min_consecutive_years`+
+    - "estagnacao": all |variation| < `stagnation_threshold`
 
     When none of the above apply cleanly, use the dominant pattern:
     - Check for longest consecutive positive/negative streak
@@ -66,7 +69,7 @@ def _classify_trend(variations: list[float]) -> str:
 
     # Check if all variations are within stagnation threshold
     all_stagnant = all(
-        abs(v) < STAGNATION_THRESHOLD for v in variations if math.isfinite(v)
+        abs(v) < stagnation_threshold for v in variations if math.isfinite(v)
     )
     if all_stagnant and all(math.isfinite(v) for v in variations):
         return "estagnacao"
@@ -91,16 +94,16 @@ def _classify_trend(variations: list[float]) -> str:
         else:
             current_negative = 0
 
-    if max_positive_streak >= MIN_CONSECUTIVE_YEARS:
+    if max_positive_streak >= min_consecutive_years:
         return "crescimento"
-    if max_negative_streak >= MIN_CONSECUTIVE_YEARS:
+    if max_negative_streak >= min_consecutive_years:
         return "corte"
 
     # Default: check average direction
     finite_vars = [v for v in variations if math.isfinite(v)]
     if finite_vars:
         avg = sum(finite_vars) / len(finite_vars)
-        if abs(avg) < STAGNATION_THRESHOLD:
+        if abs(avg) < stagnation_threshold:
             return "estagnacao"
         return "crescimento" if avg > 0 else "corte"
 
@@ -112,12 +115,16 @@ def _classify_trend(variations: list[float]) -> str:
     return "estagnacao"
 
 
-class AgenteContextoOrcamentario(AgenteBDI):
+class AgenteContextoOrcamentario(AgenteCoALA):
     """Agente de contexto que analisa tendências temporais de gasto (Req 8).
 
     Recebe dados de despesas agregados dos agentes de domínio e calcula
     variação percentual ano a ano por subfunção, classificando tendências
     como crescimento, corte, estagnação ou dados insuficientes.
+
+    Os limiares de classificação (`stagnation_threshold`,
+    `min_consecutive_years`) são fatos de domínio expostos via
+    `semantic_memory` — lidos por *retrieval* dentro de `_analyze_trends`.
 
     Classificação de tendências (Req 8.2):
     - "crescimento": variação positiva consecutiva por 2+ anos
@@ -128,38 +135,40 @@ class AgenteContextoOrcamentario(AgenteBDI):
 
     def __init__(self, agent_id: str) -> None:
         super().__init__(agent_id)
-
-    # -- BDI overrides --------------------------------------------------
-
-    def perceive(self) -> dict:
-        """Return current beliefs as perception (data set by caller)."""
-        return {
-            "despesas": self.beliefs.get("despesas", []),
+        self.semantic_memory = {
+            "stagnation_threshold": STAGNATION_THRESHOLD,
+            "min_consecutive_years": MIN_CONSECUTIVE_YEARS,
+        }
+        self.procedural_memory = {
+            "analisar_tendencias": [self._act_analisar_tendencias],
         }
 
-    def deliberate(self) -> list[dict]:
-        """Determine desires based on available data."""
-        desires: list[dict] = []
-        if self.beliefs.get("despesas"):
-            desires.append({"goal": "analisar_tendencias"})
-        self.desires = desires
-        return desires
+    # -- Ciclo CoALA ------------------------------------------------------
 
-    def plan(self, desires: list[dict]) -> list[dict]:
-        """Generate intentions from desires."""
-        return [{"desire": d, "status": "pending"} for d in desires]
+    def perceive(self) -> dict:
+        """Retorna a working memory atual como percepção (dado definido pelo caller)."""
+        return {
+            "despesas": self.working_memory.get("despesas", []),
+        }
 
-    def _execute_intention(self, intention: dict) -> None:
-        """Execute a single intention."""
-        goal = intention["desire"]["goal"]
+    def propose_actions(self) -> list[dict]:
+        """Propõe analisar tendências se há despesas disponíveis."""
+        actions: list[dict] = []
+        if self.working_memory.get("despesas"):
+            actions.append({"goal": "analisar_tendencias"})
+        return actions
+
+    def _act_analisar_tendencias(self, action: dict) -> None:
+        """Ação interna de reasoning: calcula variação YoY e classifica
+        tendência. Sem fallback registrado — falha propaga (tratada no
+        nível do orquestrador/supervisor).
+        """
         try:
-            if goal == "analisar_tendencias":
-                self._analyze_trends()
-            intention["status"] = "completed"
+            self._analyze_trends()
         except Exception as e:
-            raise IntentionFailure(intention, str(e)) from e
+            raise ActionFailure(action, str(e)) from e
 
-    # -- Public API called by orchestrator/supervisor -------------------
+    # -- Interface pública chamada pelo orquestrador/supervisor -----------
 
     def analyze_trends(self, despesas: list[dict]) -> dict[int, dict]:
         """Analisa tendências temporais de gasto por subfunção.
@@ -177,16 +186,18 @@ class AgenteContextoOrcamentario(AgenteBDI):
             Retorna dict vazio se input for vazio.
             Retorna "insuficiente" para subfunções com < 2 anos (Req 8.5).
         """
-        self.update_beliefs({"despesas": despesas})
-        self.run_cycle()
-        return self.beliefs.get("tendencias", {})
+        self.update_working_memory({"despesas": despesas})
+        self.run_coala_cycle()
+        return self.working_memory.get("tendencias", {})
 
-    # -- Internal computation -------------------------------------------
+    # -- Reasoning interno -------------------------------------------------
 
     def _analyze_trends(self) -> None:
         """Compute trends per subfunção (Reqs 8.1-8.5)."""
-        despesas = self.beliefs.get("despesas", [])
+        despesas = self.working_memory.get("despesas", [])
         tendencias: dict[int, dict[str, Any]] = {}
+        stagnation_threshold = self.semantic_memory["stagnation_threshold"]
+        min_consecutive_years = self.semantic_memory["min_consecutive_years"]
 
         # Group despesas by subfunção
         by_subfuncao: dict[int, list[dict]] = {}
@@ -226,7 +237,9 @@ class AgenteContextoOrcamentario(AgenteBDI):
                 variations.append(variation)
 
             # Req 8.2: Classify trend
-            tendencia = _classify_trend(variations)
+            tendencia = _classify_trend(
+                variations, stagnation_threshold, min_consecutive_years
+            )
 
             # Compute average variation (use only finite values)
             finite_vars = [v for v in variations if math.isfinite(v)]
@@ -250,7 +263,7 @@ class AgenteContextoOrcamentario(AgenteBDI):
                 "anos_analisados": anos_analisados,
             }
 
-        self.beliefs["tendencias"] = tendencias
+        self.working_memory["tendencias"] = tendencias
         logger.info(
             "Agent %s: analyzed trends for %d subfunções",
             self.agent_id,

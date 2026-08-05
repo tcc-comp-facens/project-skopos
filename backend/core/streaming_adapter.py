@@ -11,6 +11,7 @@ Requisitos: 7.2, 7.6
 from __future__ import annotations
 
 import logging
+import time
 from queue import Queue
 from typing import Generator
 
@@ -51,6 +52,11 @@ class StreamingAdapter:
         Args:
             text: Texto completo a ser enviado em chunks.
         """
+        n_chunks = -(-len(text) // self.chunk_size) if text else 0
+        logger.info(
+            "StreamingAdapter [%s/%s]: streaming de texto pré-gerado (%d chars, %d chunks)",
+            str(self.analysis_id)[:8], self.architecture, len(text), n_chunks,
+        )
         for i in range(0, len(text), self.chunk_size):
             chunk = text[i: i + self.chunk_size]
             self.ws_queue.put({
@@ -72,8 +78,14 @@ class StreamingAdapter:
         Returns:
             Texto completo concatenado de todos os tokens.
         """
+        logger.info(
+            "StreamingAdapter [%s/%s]: streaming de tokens do LLM iniciado",
+            str(self.analysis_id)[:8], self.architecture,
+        )
+        inicio = time.time()
         full_text = ""
         buffer = ""
+        n_chunks = 0
 
         for token in token_generator:
             full_text += token
@@ -86,6 +98,7 @@ class StreamingAdapter:
                     "type": "chunk",
                     "payload": buffer,
                 })
+                n_chunks += 1
                 buffer = ""
 
         # Enviar resto do buffer
@@ -96,5 +109,12 @@ class StreamingAdapter:
                 "type": "chunk",
                 "payload": buffer,
             })
+            n_chunks += 1
+
+        elapsed_ms = (time.time() - inicio) * 1000
+        logger.info(
+            "StreamingAdapter [%s/%s]: streaming de tokens concluído (%d chars, %d chunks, %.1fms)",
+            str(self.analysis_id)[:8], self.architecture, len(full_text), n_chunks, elapsed_ms,
+        )
 
         return full_text

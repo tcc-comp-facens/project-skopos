@@ -4,34 +4,37 @@
 
 1. [API REST](#api-rest)
 2. [WebSocket](#websocket)
-3. [Integração com LLM](#integração-com-llm)
-4. [Métricas de Execução](#métricas-de-execução)
-5. [Métricas de Qualidade e Eficiência — Detalhamento Completo](#métricas-de-qualidade-e-eficiência--detalhamento-completo)
+3. [Chat e Interpretação de Intenção](#chat-e-interpretação-de-intenção)
+4. [Integração com LLM](#integração-com-llm)
+5. [Métricas de Execução](#métricas-de-execução)
+6. [Métricas de Qualidade e Eficiência — Detalhamento Completo](#métricas-de-qualidade-e-eficiência--detalhamento-completo)
    - [E. Eficiência dos Agentes](#e-eficiência-dos-agentes) (E1, E2)
    - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q2, Q2+, Q3)
    - [R. Resiliência](#r-resiliência) (R1)
    - [Métricas Complementares dos Agentes Analíticos](#métricas-complementares-agentes-analíticos)
    - [Resumo de Valores-Alvo](#resumo-de-valores-alvo)
-6. [Relatório Comparativo](#relatório-comparativo)
-7. [Tratamento de Erros](#tratamento-de-erros)
+7. [Relatório Comparativo](#relatório-comparativo)
+8. [Tratamento de Erros](#tratamento-de-erros)
 
 ---
 
 ## API REST
 
-**Arquivo:** `backend/api/routes.py`, `backend/api/websocket.py`
+**Arquivo:** `backend/api/routes.py`, `backend/api/websocket.py`, `backend/api/chat_websocket.py`
 
-O `main.py` é o entry point que cria o app FastAPI, configura CORS e registra os routers de `api/routes.py` (REST) e `api/websocket.py` (WebSocket). A lógica de endpoints, modelos, estado compartilhado e thread runners está organizada em `backend/api/`.
+O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (nível via `LOG_LEVEL`) e registra os routers de `api/routes.py` (REST), `api/websocket.py` (WebSocket de resultados) e `api/chat_websocket.py` (WebSocket de chat). A lógica de endpoints, modelos, estado compartilhado e thread runners está organizada em `backend/api/`. `api/dispatch.py` concentra o disparo de análise (persistência + threads) compartilhado entre o formulário REST (`routes.py`) e o chat (`chat_runner.py`).
 
 ### Endpoints
 
 | Método | Rota | Descrição | Retorno |
 |--------|------|-----------|---------|
-| `POST` | `/api/analysis` | Inicia análise comparativa | `{ "analysisId": "uuid" }` |
+| `POST` | `/api/analysis` | Inicia análise comparativa (parâmetros já estruturados) | `{ "analysisId": "uuid" }` |
 | `GET` | `/api/analysis/{id}` | Recupera resultado da análise do Neo4j | Nó Analise completo |
 | `GET` | `/api/analysis/{id}/quality` | Métricas de qualidade (3 eixos) | Dict com efficiency, quality, resilience |
 | `GET` | `/api/analysis/{id}/report` | Relatório comparativo textual | `{ "report": "texto..." }` |
 | `GET` | `/api/benchmarks` | Métricas de todas as análises | Lista de MetricaExecucao |
+| `GET` | `/api/data-range` | Intervalo de anos com dados carregados no Neo4j | `{ "minYear": int\|null, "maxYear": int\|null }` |
+| `WS` | `/ws/chat/{sessionId}` | Turno de intenção do chat — ver [Chat e Interpretação de Intenção](#chat-e-interpretação-de-intenção) | eventos JSON |
 
 ### POST /api/analysis
 
@@ -160,19 +163,59 @@ Streaming de eventos em tempo real das duas arquiteturas.
 
 ---
 
+## Chat e Interpretação de Intenção
+
+**Arquivos:** `backend/api/chat_websocket.py`, `backend/api/chat_runner.py`, `backend/agents/intent/agente_interpretacao_intencao.py`
+
+### Endpoint: `WS /ws/chat/{sessionId}`
+
+Cuida apenas do turno de intenção: interpreta a mensagem do usuário, dispara a análise (reaproveitando `dispatch_analysis`, o mesmo usado pelo `POST /api/analysis`) e confirma em texto. O streaming dos resultados da análise em si continua exclusivamente pelo `/ws/{analysisId}` já existente — o WebSocket de chat não lê a mesma `ws_queue` (é um consumidor de fila único, removida ao terminar), então não pode competir por ela.
+
+### Protocolo
+
+```
+cliente → servidor:
+  {"type": "user_message", "payload": {"text": str, "useLlm": bool, "useLlmJudge": bool}}
+
+servidor → cliente:
+  {"type": "user_ack", "payload": ""}
+  {"type": "system_chunk", "payload": str}      # texto em ~80 chars
+  {"type": "system_done", "payload": ""}
+  {"type": "analysis_started", "payload": analysisId}
+  {"type": "error", "payload": str}
+```
+
+### Validações no servidor
+
+- `session_id` deve ser um UUID válido (senão a conexão é fechada com código 4001)
+- Mensagens acima de `MAX_MESSAGE_LENGTH` (1000 chars) são rejeitadas
+- Apenas uma rodada por vez por sessão é aceita (`active_chat_sessions`) — não confia só no frontend desabilitar o input
+
+### Fluxo por mensagem
+
+1. Servidor responde `user_ack` imediatamente
+2. `AgenteInterpretacaoIntencao.parse(text)` roda o ciclo CoALA (1 chamada LLM que classifica escopo e extrai parâmetros na mesma resposta — ver `docs/02-AGENTES.md`)
+3. **Fora de escopo, incompleto ou LLM indisponível** → `system_chunk`/`system_done` com a mensagem de esclarecimento/recusa; nenhuma análise é criada
+4. **Sucesso** → `run_chat_analysis()` chama `dispatch_analysis()` (persiste `Analise`, dispara as duas threads star/hierarchical); servidor envia `analysis_started` com o `analysisId` e o texto de confirmação (`pretty_print` da intenção interpretada)
+5. Cliente troca de socket para `/ws/{analysisId}` para acompanhar o processamento da análise
+
+### Sem regex
+
+Diferente de um design anterior (regex-primário, LLM como fallback), hoje **toda** mensagem passa pelo LLM — não há atalho determinístico. Isso inclui o guardrail de escopo: mensagens fora do domínio orçamentário/saúde pública de Sorocaba são recusadas sem instanciar `OrquestradorEstrela` nem `CoordenadorGeral`. Ver `PLANO_REFATORACAO.md` (Etapa 1) para a justificativa acadêmica dessa decisão.
+
+---
+
 ## Integração com LLM
 
 **Arquivo:** `backend/core/llm_client.py`
 
-### Providers
+### Provider
 
-| Provider | Modelo | Prioridade | Variável de ambiente |
-|----------|--------|------------|---------------------|
-| **Groq** | `llama-3.3-70b-versatile` | Primário | `GROQ_API_KEY` |
-| **Groq** | `qwen/qwen3-32b` | Fallback 1 | `GROQ_API_KEY` |
-| **Groq** | `llama-4-scout-17b-16e` | Fallback 2 | `GROQ_API_KEY` |
+| Provider | Modelo | Variável de ambiente |
+|----------|--------|---------------------|
+| **DeepSeek** (API compatível OpenAI) | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
 
-Todos os modelos usam a API Groq. A cadeia de fallback é percorrida automaticamente quando um modelo atinge rate limit (429) ou retorna resposta vazia.
+Um único modelo — sem cadeia de fallback entre modelos (diferente de um design anterior com múltiplos modelos Groq em cascata). `thinking` é desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) para resposta direta, sem chain-of-thought.
 
 ### Rate Limiting
 
@@ -180,18 +223,16 @@ Todos os modelos usam a API Groq. A cadeia de fallback é percorrida automaticam
 |-----------|-------|
 | Lock global | `threading.Lock()` — serializa todas as chamadas |
 | Intervalo mínimo | 2.0 segundos entre chamadas |
-| Groq free tier | 30 RPM, **1.000 RPD**, 12K TPM, **100K TPD** |
-| Gargalo real | Limites diários (RPD/TPD), não os por minuto |
 
 ### Retry
 
 | Parâmetro | Valor |
 |-----------|-------|
-| Max retries | 2 (por modelo, antes de avançar para o próximo da cadeia) |
+| Max retries | 2 (no mesmo modelo) |
 | Base delay | 10 segundos |
 | Backoff | `delay × (attempt + 1)` (linear) |
 | Erros retryable | 429, `RESOURCE_EXHAUSTED`, `rate_limit` |
-| Erros fatais | Qualquer outro erro → avança para o próximo modelo da cadeia |
+| Erros fatais | Qualquer outro erro → `generate`/`generate_stream` retornam `None`/param imediatamente |
 
 ### Modos de geração
 
@@ -199,29 +240,41 @@ O cliente LLM oferece dois modos de geração:
 
 | Modo | Função | Descrição |
 |------|--------|-----------|
-| **Batch** | `generate(prompt, model?)` | Retorna o texto completo de uma vez. Usado pelo `TextSynthesizer` (fallback) e pela avaliação Q2+ (LLM-as-Judge). |
-| **Streaming** | `generate_stream(prompt, model?)` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
+| **Batch** | `generate(prompt, model=None, *, caller="desconhecido")` | Retorna o texto completo de uma vez. Usado pelo `AgenteInterpretacaoIntencao`, pelo `TextSynthesizer` (fallback) e pela avaliação Q2+ (LLM-as-Judge). |
+| **Streaming** | `generate_stream(prompt, model=None, *, caller="desconhecido")` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
 
-Ambos os modos compartilham o mesmo lock global, rate limiting, cadeia de fallback entre modelos e retry em caso de 429.
+Ambos os modos compartilham o mesmo lock global, rate limiting e retry em caso de 429.
+
+### Observabilidade das chamadas
+
+`caller` identifica quem disparou a chamada (tipicamente `agent_id`/`synthesizer_id`, às vezes com um sufixo de propósito, ex.: `"test-intent:classificar_e_extrair"`) — usado só para logging, não afeta o comportamento. Antes de cada chamada real à API:
+- **INFO**: preview de uma linha do prompt (truncado a ~300 chars) e tamanho total
+- **DEBUG** (`LOG_LEVEL=DEBUG`): prompt completo
+
+Depois da resposta: tamanho da resposta recebida (não o conteúdo — ver observação abaixo). Todos os logs (tokens consumidos, retry por rate limit, erro, resposta vazia) incluem a tag `caller`.
+
+> A resposta da API em si (o texto gerado) não é logada, só seu tamanho — assimétrico com o prompt, que tem preview + versão completa em DEBUG. É uma escolha deliberada (menos verboso); pode ser adicionado de forma simétrica se necessário.
 
 ### Pós-processamento de respostas
 
-Modelos de raciocínio (ex: Qwen3) incluem tags `<think>...</think>` com o processo de pensamento na resposta. O cliente LLM remove automaticamente essas tags em ambos os modos:
+Modelos de raciocínio incluem tags `<think>...</think>` com o processo de pensamento na resposta. O cliente LLM remove automaticamente essas tags em ambos os modos, mesmo com `thinking` desabilitado (defensivamente):
 - **Batch** (`generate`): via `re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)` após receber a resposta completa
 - **Streaming** (`generate_stream`): via buffer incremental que detecta `<think>` e suprime tokens até encontrar `</think>`, garantindo que apenas o conteúdo final seja enviado ao consumidor em tempo real
 
 ### Fallback
 
-Se o LLM retorna `None` (indisponível após 3 tentativas), o `TextSynthesizer` gera texto estruturado com:
+Se o LLM retorna `None` (indisponível após as tentativas de retry, ou erro fatal), o `TextSynthesizer` gera texto estruturado com:
 - Resumo Executivo
 - Cobertura de Dados (gaps detectados)
 - Análise das Correlações (Spearman por par, com estratégia e confiança)
 - Discussão das Anomalias (com descrições em português)
 - Contexto Orçamentário (tendências por subfunção)
 
+O `AgenteInterpretacaoIntencao`, quando o LLM falha, cai na estratégia de fallback registrada (`escopo = "indisponivel"`) e pede ao usuário para tentar novamente — não há fallback determinístico para interpretação de linguagem natural (ver `docs/02-AGENTES.md`).
+
 ### Consumo por análise
 
-Cada análise consome **2 chamadas LLM** (1 sintetizador estrela + 1 sintetizador hierárquica).
+Cada comparação estrela vs. hierárquica consome **2 chamadas LLM** de síntese (1 sintetizador estrela + 1 sintetizador hierárquica) — mais **1 chamada adicional** de interpretação de intenção quando a análise se origina do chat (não conta quando vem do formulário REST direto). Com `useLlmJudge=true`, mais 2 chamadas (Q2+ por topologia).
 
 ---
 
@@ -249,18 +302,18 @@ Também suporta context manager: `with MetricsCollector(...) as mc:`
 
 ### Wall-clock e exclusão do sintetizador
 
-Ambas as topologias excluem o tempo do `TextSynthesizer` (chamada LLM) do `totalExecutionTimeMs` reportado no evento `metric`, pois esse tempo depende da disponibilidade e latência da API Groq — não reflete a eficiência da arquitetura multiagente em si.
+Ambas as topologias excluem o tempo do `TextSynthesizer` (chamada LLM) do `totalExecutionTimeMs` reportado no evento `metric`, pois esse tempo depende da disponibilidade e latência da API DeepSeek — não reflete a eficiência da arquitetura multiagente em si.
 
 | Topologia | Estratégia |
 |-----------|-----------|
-| **Estrela** | Captura `_orch_end` *antes* de iniciar o sintetizador. O wall-clock mede apenas o pipeline BDI (domínio → cruzamento → contexto → correlação → anomalias). |
+| **Estrela** | Captura `_orch_end` *antes* de iniciar o sintetizador. O wall-clock mede apenas o pipeline CoALA (domínio → cruzamento → contexto → correlação → anomalias). |
 | **Hierárquica** | Captura `_coord_end` após todo o pipeline (incluindo sintetizador), e subtrai `sint_time_ms` extraído dos collectors do `SupervisorAnalitico` (busca `agentType == "sintetizador"`). |
 
 Isso garante que a comparação de eficiência entre topologias reflita apenas a orquestração e processamento de dados, não a variabilidade da API LLM.
 
 ### StreamingAdapter (`backend/core/streaming_adapter.py`)
 
-Adaptador de streaming para WebSocket. Encapsula a lógica de chunking (~80 chars) e envio de eventos para a fila compartilhada. Não é um agente BDI — é infraestrutura de transporte reutilizável pelo orquestrador estrela, coordenador hierárquico e relatório comparativo.
+Adaptador de streaming para WebSocket. Encapsula a lógica de chunking (~80 chars) e envio de eventos para a fila compartilhada. Não é um agente CoALA — é infraestrutura de transporte reutilizável pelo orquestrador estrela, coordenador hierárquico e relatório comparativo. Loga início/fim de cada streaming (chars, nº de chunks, duração), sem logar por chunk individual.
 
 **Construtor:**
 ```python
@@ -477,7 +530,7 @@ Se não há checkpoints (nenhuma correlação alta e nenhuma anomalia), o score 
 
 **Pré-condição:** Requer `use_llm=True` (análise com texto gerado por LLM). Quando `use_llm=False`, a avaliação Q2+ é desabilitada automaticamente, independente do valor de `use_llm_judge`, pois não faz sentido avaliar fidelidade semântica de texto gerado pelo fallback estruturado.
 
-**Significado para o TCC:** Oferece uma avaliação mais nuançada que o checklist automático. O checklist verifica presença textual (mencionou ou não), enquanto o LLM-as-judge avalia se o texto é semanticamente correto e coerente. Desabilitado por padrão para economizar chamadas LLM (rate limits do Groq free tier).
+**Significado para o TCC:** Oferece uma avaliação mais nuançada que o checklist automático. O checklist verifica presença textual (mencionou ou não), enquanto o LLM-as-judge avalia se o texto é semanticamente correto e coerente. Desabilitado por padrão para economizar chamadas LLM.
 
 ---
 
@@ -713,7 +766,9 @@ O relatório é transmitido via WebSocket em chunks de 80 chars com `architectur
 
 | Camada | Tipo de erro | Estratégia |
 |--------|-------------|-----------|
-| Agente de domínio | Falha Neo4j | `_recover_intention()` retorna listas vazias |
+| Agente de domínio | Falha Neo4j | Estratégia de fallback registrada em `procedural_memory` retorna listas vazias |
+| `AgenteInterpretacaoIntencao` | LLM indisponível/resposta inválida | Fallback registrado grava `escopo = "indisponivel"`; usuário é convidado a tentar de novo (sem fallback determinístico de interpretação) |
+| `AgenteInterpretacaoIntencao` | Mensagem fora de escopo | Recusa educada; nenhuma arquitetura é instanciada |
 | Agente sintetizador | LLM indisponível | Fallback para texto estruturado |
 | OrquestradorEstrela | Falha de agente | Envia evento `error` via ws_queue, continua com resultados parciais |
 | CoordenadorGeral | Falha de supervisor | Degradação graciosa, continua com dados vazios para aquele supervisor |
@@ -721,7 +776,8 @@ O relatório é transmitido via WebSocket em chunks de 80 chars com `architectur
 | Backend (análise não encontrada) | ID inexistente | HTTP 404 |
 | Backend (quality) | Topologias não completaram | HTTP 404 com mensagem explicativa |
 | WebSocket | Cliente desconectou | Limpa queues e threads, mantém results |
-| Frontend | WebSocket perdido | Reconexão automática (até 3 tentativas, delay incremental) |
+| Chat WebSocket | Mensagem muito longa / rodada em andamento | Evento `error`, mensagem não é processada |
+| Frontend | WebSocket perdido (resultados ou chat) | Reconexão automática (até 3 tentativas, backoff — linear no WS de resultados, exponencial 1s/2s/4s no WS de chat) |
 
 ### Persistência de resultado em falha
 

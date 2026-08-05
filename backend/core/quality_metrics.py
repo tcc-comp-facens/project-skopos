@@ -43,7 +43,7 @@ FASE_DOMINIO = {
     "atencao_primaria",
     "mortalidade",
 }
-FASE_ANALITICO = {"correlacao", "anomalias", "sintetizador"}
+FASE_ANALITICO = {"correlacao", "anomalias", "priorizacao", "sintetizador", "verificacao"}
 FASE_CONTEXTO = {"contexto_orcamentario"}
 FASE_SUPERVISORES = {
     "supervisor_dominio",
@@ -215,20 +215,45 @@ def compute_faithfulness(
     correlacoes: list[dict],
     anomalias: list[dict],
     texto: str,
+    contexto_orcamentario: dict | None = None,
+    use_llm: bool = False,
+    caller: str = "faithfulness_claims",
 ) -> dict[str, Any]:
     """Q2 — Verifica se o texto do sintetizador reflete os dados numéricos.
 
-    Checklist automático: para cada correlação forte e cada anomalia,
-    verifica se o texto menciona a subfunção e/ou indicador correspondente.
+    Etapa 6 do PLANO_REFATORACAO.md (D8): reformulado para suportar dois
+    métodos de cálculo, escolhidos por `use_llm`, mantendo sempre a mesma
+    assinatura de retorno (`score`, `details`, entre outras chaves) para
+    não quebrar o frontend:
+
+    - `use_llm=False` (padrão — **comportamento inalterado**): checklist
+      determinístico por substring, gratuito e síncrono, chamado sempre
+      no caminho rápido de `/ws/{analysisId}` (antes do relatório).
+    - `use_llm=True`: claim-based, estilo RAGAS — usa
+      `core.claim_verifier.extract_claims`/`verify_claims` para extrair
+      afirmações do texto e verificar cada uma contra os dados brutos,
+      `score = claims_suportados / total_claims`. Envolve 2 chamadas LLM;
+      só deve ser acionado no caminho opcional (mesmo gate de
+      `use_llm_judge`), nunca no cálculo padrão — ver `compute_all_quality_metrics`.
 
     Args:
         correlacoes: Lista de correlações calculadas.
         anomalias: Lista de anomalias detectadas.
         texto: Texto gerado pelo sintetizador.
+        contexto_orcamentario: Usado apenas no modo claim-based (dado
+            adicional para `verify_claims`); ignorado no modo substring.
+        use_llm: Se True, usa o método claim-based via `claim_verifier`.
+        caller: Identificador para logging (ver core.llm_client),
+            repassado ao `claim_verifier` no modo claim-based.
 
     Returns:
         Dict com score (0.0 a 1.0), detalhes de hits/misses.
     """
+    if use_llm:
+        return _compute_faithfulness_claims(
+            correlacoes, anomalias, contexto_orcamentario or {}, texto, caller
+        )
+
     if not texto:
         return {
             "score": 0.0,
@@ -306,11 +331,80 @@ def compute_faithfulness(
     }
 
 
+def _compute_faithfulness_claims(
+    correlacoes: list[dict],
+    anomalias: list[dict],
+    contexto_orcamentario: dict,
+    texto: str,
+    caller: str,
+) -> dict[str, Any]:
+    """Q2 (claim-based, estilo RAGAS) — Etapa 6, D8.
+
+    Reaproveita `core.claim_verifier` (Etapa 4) sem a passada de revisão
+    (essa métrica só mede, não corrige o texto). Nunca lança exceção —
+    falha do LLM em qualquer passo resulta em `total_checkpoints=0`,
+    `score=1.0` (mesma convenção de "nada a penalizar" já usada no modo
+    substring quando não há correlações/anomalias fortes).
+    """
+    from core.claim_verifier import extract_claims, verify_claims
+
+    if not texto:
+        return {
+            "score": 0.0,
+            "method": "claim_based",
+            "total_checkpoints": 0,
+            "hits": 0,
+            "misses": 0,
+            "details": [],
+        }
+
+    try:
+        claims = extract_claims(texto, caller=caller)
+    except Exception as exc:
+        logger.warning("Faithfulness claim-based: extração de claims falhou — %s", exc)
+        claims = []
+
+    if not claims:
+        return {
+            "score": 1.0,
+            "method": "claim_based",
+            "total_checkpoints": 0,
+            "hits": 0,
+            "misses": 0,
+            "details": [],
+        }
+
+    dados = {
+        "correlacoes": correlacoes,
+        "anomalias": anomalias,
+        "contexto_orcamentario": contexto_orcamentario,
+    }
+    try:
+        verificacoes = verify_claims(claims, dados, caller=caller)
+    except Exception as exc:
+        logger.warning("Faithfulness claim-based: verificação de claims falhou — %s", exc)
+        verificacoes = []
+
+    total = len(verificacoes)
+    hits = sum(1 for v in verificacoes if v.get("suportado"))
+    score = hits / total if total > 0 else 1.0
+
+    return {
+        "score": round(score, 4),
+        "method": "claim_based",
+        "total_checkpoints": total,
+        "hits": hits,
+        "misses": total - hits,
+        "details": verificacoes,
+    }
+
+
 def compute_faithfulness_llm(
     correlacoes: list[dict],
     anomalias: list[dict],
     contexto_orcamentario: dict,
     texto: str,
+    caller: str = "llm_judge",
 ) -> dict[str, Any]:
     """Q2 (LLM-as-judge) — Avalia faithfulness via chamada ao LLM.
 
@@ -322,6 +416,9 @@ def compute_faithfulness_llm(
         anomalias: Lista de anomalias detectadas.
         contexto_orcamentario: Dict com tendências orçamentárias.
         texto: Texto gerado pelo sintetizador.
+        caller: Identificador para logging (ver core.llm_client) — por
+            padrão só "llm_judge"; `compute_all_quality_metrics` passa
+            algo como "llm_judge-star"/"llm_judge-hierarchical".
 
     Returns:
         Dict com score (1-5), justificativa e método usado.
@@ -384,7 +481,7 @@ def compute_faithfulness_llm(
     )
 
     try:
-        response = llm_client.generate(prompt)
+        response = llm_client.generate(prompt, caller=caller)
         if response:
             import json
             json_match = re.search(r'\{[^}]+\}', response)
@@ -541,6 +638,155 @@ def compute_partial_result_coverage(result: dict[str, Any]) -> dict[str, Any]:
 
 
 # =========================================================================
+# D. Custo e Comunicação (Etapa 6 do PLANO_REFATORACAO.md)
+# =========================================================================
+
+
+def compute_token_cost(token_usage: dict[str, int] | None) -> dict[str, Any]:
+    """Custo de tokens de um segmento (uma topologia, a interpretação de
+    intenção, ou o LLM Judge), a partir de um snapshot já capturado por
+    `core.llm_client.TokenBucket`.
+
+    Não lê `core.llm_client.get_token_usage()` (contador global cumulativo
+    do processo inteiro) como o plano original sugeria — ver "Desvios" no
+    topo do PLANO_REFATORACAO.md: o pré-requisito de contabilização
+    por-análise/por-topologia foi resolvido com `TokenBucket`
+    (ContextVar), e o snapshot já vem pronto e corretamente escopado de
+    quem chamou `with TokenBucket(): ...` (ver `api/runners.py`,
+    `api/chat_websocket.py`, `api/websocket.py`). Esta função só
+    normaliza o formato — um `None`/dict vazio produz zeros, nunca lança
+    exceção.
+
+    Args:
+        token_usage: Snapshot de `TokenBucket.snapshot()`, ou None se o
+            segmento não rodou (ex.: LLM Judge quando `use_llm_judge=False`).
+
+    Returns:
+        Dict com prompt_tokens, completion_tokens, total_tokens, call_count.
+    """
+    usage = token_usage or {}
+    return {
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "call_count": usage.get("call_count", 0),
+    }
+
+
+def compute_communication_volume(
+    architecture: str,
+    agent_metrics: list[dict],
+    despesas_count: int = 0,
+    indicadores_count: int = 0,
+) -> dict[str, Any]:
+    """Volume de comunicação de uma topologia nesta análise.
+
+    **Decisão de engenharia** (desvio do nome de parâmetro sugerido no
+    plano original, `message_log`): o sistema não mantém um log de
+    mensagens brutas (sockets/filas) — o proxy usado aqui é determinístico
+    e real, nunca estimado: cada entrada em `agent_metrics` corresponde a
+    exatamente 1 agente efetivamente invocado pelo hub/coordenador nesta
+    análise (contabilizado como 1 chamada + 1 retorno = 2 mensagens). Na
+    hierárquica, soma-se os 3 hops de comunicação lateral fixos entre
+    supervisores (Etapa 5: Dominio→Analitico, Dominio→Contexto,
+    Contexto→Analitico — sempre propostos pelo `CoordenadorGeral`,
+    independente de falha upstream) e os 2 resumos textuais semânticos
+    que os acompanham (resumo_dominio, resumo_contexto). A estrela nunca
+    tem comunicação lateral (hub-and-spoke), então ambos ficam em 0.
+
+    Args:
+        architecture: "star" ou "hierarchical".
+        agent_metrics: Métricas por agente desta topologia (usado só para
+            contar quantos agentes foram de fato invocados).
+        despesas_count: Nº de registros de despesa no resultado (proxy de
+            tamanho do payload transportado).
+        indicadores_count: Nº de registros de indicador, idem.
+
+    Returns:
+        Dict com contagem de invocações, hops laterais, resumos
+        semânticos, total de mensagens e tamanho aproximado do payload.
+    """
+    n_agents = len(agent_metrics)
+    is_hierarchical = architecture == "hierarchical"
+    lateral_hops = 3 if is_hierarchical else 0
+    lateral_summaries = 2 if is_hierarchical else 0
+    message_count = n_agents * 2 + lateral_hops
+
+    return {
+        "agent_invocations": n_agents,
+        "lateral_hops": lateral_hops,
+        "lateral_summaries": lateral_summaries,
+        "message_count": message_count,
+        "payload_records": despesas_count + indicadores_count,
+    }
+
+
+# =========================================================================
+# E. Outcome agregado (Etapa 6 do PLANO_REFATORACAO.md)
+# =========================================================================
+
+DEFAULT_TIME_BUDGET_MS = 60_000.0
+
+
+def compute_analysis_success(
+    result: dict[str, Any],
+    wall_clock_ms: float = 0,
+    time_budget_ms: float = DEFAULT_TIME_BUDGET_MS,
+) -> dict[str, Any]:
+    """Métrica composta (opcional) de "a análise foi bem-sucedida".
+
+    Sucesso = R1 completo (todos os componentes de `compute_partial_result_coverage`
+    presentes) **E** nenhuma afirmação não-suportada remanescente no
+    self-check (Etapa 4, quando ele rodou) **E** dentro do orçamento de
+    tempo. Inspirada conceitualmente em métricas de sucesso baseadas em
+    marcos (ver D11) — fórmula própria, não replicação de benchmark.
+
+    **Decisão de engenharia**: o orçamento de tempo default (60s) não é
+    prescrito por nenhuma fonte consultada — mesma lógica de "sem
+    limiares mágicos escondidos" já aplicada a E1/E2 (D12): em vez de uma
+    constante interna, é um parâmetro explícito que o caller pode
+    sobrescrever.
+
+    Args:
+        result: Resultado completo de uma topologia (star_result ou
+            hier_result), incluindo `self_check` quando disponível.
+        wall_clock_ms: Tempo real de execução; 0 desativa a checagem de
+            orçamento (sempre `within_time_budget=True`).
+        time_budget_ms: Orçamento de tempo de referência.
+
+    Returns:
+        Dict com o veredito composto e cada critério isolado.
+    """
+    r1 = compute_partial_result_coverage(result)
+    r1_complete = r1["completed"] == r1["total"]
+
+    self_check = result.get("self_check")
+    if self_check and self_check.get("verificado"):
+        claims_nao_suportadas = sum(
+            1 for c in self_check.get("claims", []) if not c.get("suportado", True)
+        )
+        # Etapa 4 corrige em no máximo 1 passada (sem reverificação) —
+        # "revisado" já significa que a correção rodou sobre as claims
+        # remanescentes; sem correção, exige 0 claims não suportadas.
+        self_check_ok = self_check.get("revisado", False) or claims_nao_suportadas == 0
+    else:
+        self_check_ok = True  # self-check não rodou (opcional) — não penaliza
+
+    within_budget = wall_clock_ms <= time_budget_ms if wall_clock_ms > 0 else True
+
+    success = r1_complete and self_check_ok and within_budget
+
+    return {
+        "success": success,
+        "r1_complete": r1_complete,
+        "self_check_ok": self_check_ok,
+        "within_time_budget": within_budget,
+        "wall_clock_ms": round(wall_clock_ms, 2),
+        "time_budget_ms": time_budget_ms,
+    }
+
+
+# =========================================================================
 # Função agregadora — calcula todas as métricas de uma vez
 # =========================================================================
 
@@ -554,6 +800,9 @@ def compute_all_quality_metrics(
     use_llm: bool = True,
     star_wall_clock_ms: float = 0,
     hier_wall_clock_ms: float = 0,
+    star_token_usage: dict[str, int] | None = None,
+    hier_token_usage: dict[str, int] | None = None,
+    intent_token_usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Calcula todas as métricas de qualidade e eficiência.
 
@@ -565,10 +814,20 @@ def compute_all_quality_metrics(
         hier_result: Resultado completo da topologia hierárquica.
         star_agent_metrics: Métricas por agente da estrela.
         hier_agent_metrics: Métricas por agente da hierárquica.
-        use_llm_judge: Se True, também executa avaliação via LLM.
-        use_llm: Se False, LLM Judge é desabilitado independente de use_llm_judge.
+        use_llm_judge: Se True, também executa avaliação via LLM (LLM
+            Judge) **e** a reformulação claim-based de Q2 (Etapa 6, D8) —
+            os dois únicos pontos desta função que gastam LLM extra além
+            do próprio pipeline, por isso compartilham o mesmo gate.
+        use_llm: Se False, LLM Judge/Q2 claim-based são desabilitados
+            independente de use_llm_judge.
         star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
         hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
+        star_token_usage: Snapshot de `TokenBucket` do pipeline estrela
+            (Etapa 6) — ver `api/runners.py::run_star`.
+        hier_token_usage: Idem, hierárquica.
+        intent_token_usage: Snapshot de `TokenBucket` da interpretação de
+            intenção (Etapa 1/6) — None quando a análise veio do
+            formulário REST direto (sem chat).
 
     Returns:
         Dict com todas as métricas organizadas por eixo.
@@ -633,7 +892,10 @@ def compute_all_quality_metrics(
         },
     }
 
-    # LLM-as-judge (requer use_llm ativo — sem sentido avaliar texto fallback)
+    # LLM-as-judge + Q2 claim-based (Etapa 6, D8) — ambos exigem use_llm
+    # ativo (sem sentido avaliar texto de fallback determinístico) e
+    # compartilham o gate use_llm_judge, já que ambos são LLM extra além
+    # do próprio pipeline.
     if use_llm_judge and use_llm:
         metrics["quality"]["star"]["faithfulness_llm"] = (
             compute_faithfulness_llm(
@@ -641,6 +903,7 @@ def compute_all_quality_metrics(
                 star_result.get("anomalias", []),
                 star_result.get("contexto_orcamentario", {}),
                 star_result.get("texto_analise", ""),
+                caller="llm_judge-star",
             )
         )
         metrics["quality"]["hierarchical"]["faithfulness_llm"] = (
@@ -649,7 +912,24 @@ def compute_all_quality_metrics(
                 hier_result.get("anomalias", []),
                 hier_result.get("contexto_orcamentario", {}),
                 hier_result.get("texto_analise", ""),
+                caller="llm_judge-hierarchical",
             )
+        )
+        metrics["quality"]["star"]["faithfulness_claims"] = compute_faithfulness(
+            star_result.get("correlacoes", []),
+            star_result.get("anomalias", []),
+            star_result.get("texto_analise", ""),
+            star_result.get("contexto_orcamentario", {}),
+            use_llm=True,
+            caller="faithfulness_claims-star",
+        )
+        metrics["quality"]["hierarchical"]["faithfulness_claims"] = compute_faithfulness(
+            hier_result.get("correlacoes", []),
+            hier_result.get("anomalias", []),
+            hier_result.get("texto_analise", ""),
+            hier_result.get("contexto_orcamentario", {}),
+            use_llm=True,
+            caller="faithfulness_claims-hierarchical",
         )
 
     # --- C. Resiliência ---
@@ -658,14 +938,42 @@ def compute_all_quality_metrics(
         "hierarchical": compute_partial_result_coverage(hier_result),
     }
 
+    # --- D. Custo e Comunicação ---
+    metrics["cost"] = {
+        "star": compute_token_cost(star_token_usage),
+        "hierarchical": compute_token_cost(hier_token_usage),
+        "intent_interpretation": compute_token_cost(intent_token_usage),
+    }
+    metrics["communication"] = {
+        "star": compute_communication_volume(
+            "star", star_agent_metrics,
+            despesas_count=len(star_result.get("despesas", [])),
+            indicadores_count=len(star_result.get("indicadores", [])),
+        ),
+        "hierarchical": compute_communication_volume(
+            "hierarchical", hier_agent_metrics,
+            despesas_count=len(hier_result.get("despesas", [])),
+            indicadores_count=len(hier_result.get("indicadores", [])),
+        ),
+    }
+
+    # --- E. Outcome agregado ---
+    metrics["outcome"] = {
+        "star": compute_analysis_success(star_result, star_wall_clock_ms),
+        "hierarchical": compute_analysis_success(hier_result, hier_wall_clock_ms),
+    }
+
     logger.info(
         "Quality metrics computed: consistency=%s, star_faithfulness=%.2f, "
-        "hier_faithfulness=%.2f, star_completeness=%.2f, hier_completeness=%.2f",
+        "hier_faithfulness=%.2f, star_completeness=%.2f, hier_completeness=%.2f, "
+        "star_tokens=%d, hier_tokens=%d",
         metrics["quality"]["deterministic_consistency"]["all_identical"],
         metrics["quality"]["star"]["faithfulness"]["score"],
         metrics["quality"]["hierarchical"]["faithfulness"]["score"],
         metrics["quality"]["star"]["completeness"]["score"],
         metrics["quality"]["hierarchical"]["completeness"]["score"],
+        metrics["cost"]["star"]["total_tokens"],
+        metrics["cost"]["hierarchical"]["total_tokens"],
     )
 
     return metrics

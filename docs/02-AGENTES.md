@@ -1,16 +1,17 @@
-# Sistema Multiagente BDI
+# Sistema Multiagente CoALA
 
 ## Sumário
 
 1. [O que é um Agente?](#o-que-é-um-agente)
-2. [Modelo BDI](#modelo-bdi-belief-desire-intention)
-3. [Classe Base AgenteBDI](#classe-base-agentebdi)
-4. [Agentes de Domínio (4)](#agentes-de-domínio-4)
-5. [Agentes Analíticos (2 BDI + 1 serviço)](#agentes-analíticos-2-bdi--1-serviço)
-6. [Agente de Contexto (1)](#agente-de-contexto-1)
-7. [Arquitetura Estrela](#arquitetura-estrela)
-8. [Arquitetura Hierárquica](#arquitetura-hierárquica)
-9. [Regras de Negócio](#regras-de-negócio)
+2. [Modelo CoALA](#modelo-coala-cognitive-architectures-for-language-agents)
+3. [Classe Base AgenteCoALA](#classe-base-agentecoala)
+4. [Agente de Interpretação de Intenção (1)](#agente-de-interpretação-de-intenção-1)
+5. [Agentes de Domínio (4)](#agentes-de-domínio-4)
+6. [Agentes Analíticos (2 CoALA + 1 serviço)](#agentes-analíticos-2-coala--1-serviço)
+7. [Agente de Contexto (1)](#agente-de-contexto-1)
+8. [Arquitetura Estrela](#arquitetura-estrela)
+9. [Arquitetura Hierárquica](#arquitetura-hierárquica)
+10. [Regras de Negócio](#regras-de-negócio)
 
 ---
 
@@ -21,16 +22,16 @@ Um **agente** é um programa autônomo que percebe o ambiente, toma decisões e 
 - **Autonomia** — decide sozinho o que fazer
 - **Reatividade** — responde a mudanças no ambiente
 - **Proatividade** — age para atingir objetivos, não só reage
-- **Estado interno** — mantém crenças, desejos e planos
+- **Estado interno** — mantém memória e planos de ação
 
 ```
 ┌─────────────────────────────────────────────┐
 │              AGENTE                          │
 │                                             │
 │   ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│   │ Crenças  │  │ Desejos  │  │ Intenções│ │
-│   │ (o que   │  │ (o que   │  │ (como    │ │
-│   │  sei)    │  │  quero)  │  │  farei)  │ │
+│   │ Memória  │  │Percepção │  │  Ação    │ │
+│   │ (o que   │  │ (o que   │  │ (o que   │ │
+│   │  sei)    │  │  observo)│  │  faço)   │ │
 │   └────┬─────┘  └────┬─────┘  └────┬─────┘ │
 │        │             │             │        │
 │        └──────┬──────┘             │        │
@@ -41,101 +42,120 @@ Um **agente** é um programa autônomo que percebe o ambiente, toma decisões e 
 └─────────────────────────────────────────────┘
 ```
 
-Neste projeto, cada agente é uma classe Python que herda de `AgenteBDI` e se especializa em uma tarefa: consultar dados, calcular correlações, detectar anomalias, etc.
+Neste projeto, cada agente é uma classe Python que herda de `AgenteCoALA` e se especializa em uma tarefa: interpretar a intenção do usuário, consultar dados, calcular correlações, detectar anomalias, etc.
 
 ---
 
-## Modelo BDI (Belief-Desire-Intention)
+## Modelo CoALA (Cognitive Architectures for Language Agents)
 
-O modelo **BDI** é uma arquitetura cognitiva inspirada na filosofia da mente humana. Ele organiza o raciocínio do agente em três componentes:
+O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023 — *"Cognitive Architectures for Language Agents"*, arXiv:2309.02427) é um framework para organizar agentes baseados em LLM segundo três dimensões: como armazenam informação (memória de curto e longo prazo), qual o espaço de ações disponível (internas e externas), e como decidem o que fazer (um loop de percepção-proposta-avaliação-execução).
 
-### Os três componentes
+### Memória — quatro sistemas
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                                                             │
-│   BELIEFS (Crenças)          "O que eu sei sobre o mundo"   │
-│   ─────────────────                                         │
-│   • Dados do Neo4j (despesas, indicadores)                  │
-│   • Parâmetros da análise (período, tipo)                   │
-│   • Resultados parciais de outros agentes                   │
+│   WORKING MEMORY (memória de trabalho)                      │
+│   ─────────────────────────────────────                     │
+│   Buffer ativo de curto prazo — equivalente às antigas       │
+│   "beliefs". Parâmetros da análise, resultados parciais de   │
+│   outros agentes, tudo que está "em uso" agora.               │
 │                                                             │
-│   DESIRES (Desejos)          "O que eu quero alcançar"      │
-│   ─────────────────                                         │
-│   • "Quero consultar despesas da subfunção 305"             │
-│   • "Quero calcular correlações"                            │
-│   • "Quero detectar anomalias"                              │
+│   SEMANTIC MEMORY (memória semântica)                        │
+│   ─────────────────────────────────                          │
+│   Fatos/regras declarativas de domínio — ex: mapeamento       │
+│   subfunção→indicador, limiares de classificação. Lidos via   │
+│   *retrieval* explícito dentro de `propose_actions`, nunca    │
+│   hardcoded direto do módulo no meio da lógica de decisão.    │
 │                                                             │
-│   INTENTIONS (Intenções)     "Como vou fazer"               │
-│   ──────────────────────                                    │
-│   • Plano: consultar Neo4j com query X                      │
-│   • Plano: aplicar Spearman nos dados cruzados              │
-│   • Plano: comparar com mediana                             │
+│   EPISODIC MEMORY (memória episódica)                        │
+│   ────────────────────────────────                           │
+│   Histórico de ações executadas nesta instância (sucesso e   │
+│   falha), gravado via `_observe_and_learn` — só em memória,   │
+│   descartada ao fim do processo.                              │
+│                                                             │
+│   PROCEDURAL MEMORY (memória procedural)                      │
+│   ──────────────────────────────────                         │
+│   "Como fazer" — lista ordenada de estratégias (callables)    │
+│   por goal; a primeira é a estratégia primária, as demais são │
+│   fallbacks tentados em ordem se a anterior falhar.            │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### O Ciclo BDI
+### Espaço de ações
+
+- **Internas** (reasoning/retrieval/learning) — processamento sobre a working memory, leitura de semantic memory, gravação em episodic memory. Ex.: calcular Spearman, cruzar dados, classificar tendência.
+- **Externas** (grounding) — qualquer interação com o ambiente fora do processo do agente: Neo4j, LLM, WebSocket, comunicação lateral entre agentes. Ex.: consultar despesas no Neo4j, chamar o LLM para classificar escopo/gerar texto.
+
+### O Ciclo CoALA
 
 Todo agente executa o mesmo ciclo de raciocínio:
 
 ```
     ┌──────────┐
-    │ PERCEBER │ ◄─── Observa o ambiente (lê crenças, consulta Neo4j)
+    │ PERCEBER │ ◄─── Observa o ambiente (lê working memory, consulta Neo4j)
     └────┬─────┘
          ▼
-    ┌──────────┐
-    │ ATUALIZAR│ ◄─── Incorpora novas informações às crenças
-    │ CRENÇAS  │
-    └────┬─────┘
+    ┌──────────────┐
+    │  ATUALIZAR   │ ◄─── Incorpora novas informações à working memory
+    │WORKING MEMORY│
+    └────┬─────────┘
+         ▼
+    ┌──────────────┐
+    │   PROPOR     │ ◄─── Gera candidatos de ação (goals), fazendo
+    │   AÇÕES      │      retrieval de semantic memory onde relevante
+    └────┬─────────┘
+         ▼
+    ┌──────────────┐
+    │  AVALIAR E   │ ◄─── Seleciona quais candidatos executar
+    │  SELECIONAR  │
+    └────┬─────────┘
          ▼
     ┌──────────┐
-    │ DELIBERAR│ ◄─── Decide quais objetivos perseguir
-    └────┬─────┘      (dado o que sei, o que devo fazer?)
-         ▼
-    ┌──────────┐
-    │ PLANEJAR │ ◄─── Cria planos concretos para cada objetivo
-    └────┬─────┘
-         ▼
-    ┌──────────┐
-    │ EXECUTAR │ ◄─── Executa cada plano (consulta, calcula, gera texto)
-    └──────────┘
+    │ EXECUTAR │ ◄─── Executa cada ação via procedural memory,
+    └──────────┘      registrando o episódio (observe/learn)
 ```
 
-**Exemplo concreto** — AgenteVigilanciaEpidemiologica:
+**Exemplo concreto** — `AgenteVigilanciaEpidemiologica`:
 
 ```
-1. PERCEBER:   "Tenho analysis_id=abc, período 2019-2021"
-2. ATUALIZAR:  beliefs = {analysis_id: "abc", date_from: 2019, date_to: 2021}
-3. DELIBERAR:  "Tenho os parâmetros → quero consultar despesas E indicadores"
-               desires = [{goal: "consultar_despesas"}, {goal: "consultar_indicadores"}]
-4. PLANEJAR:   intentions = [{desire: consultar_despesas, status: pending},
-                             {desire: consultar_indicadores, status: pending}]
-5. EXECUTAR:   → Query Neo4j: DespesaSIOPS subfunção 305
-               → Query Neo4j: IndicadorDataSUS tipo IN [dengue, covid]
-               → beliefs["despesas"] = [...]
-               → beliefs["indicadores"] = [...]
+1. PERCEBER:     working_memory já tem analysis_id="abc", período 2019-2021
+2. ATUALIZAR:    working_memory = {analysis_id: "abc", date_from: 2019, date_to: 2021}
+3. PROPOR AÇÕES: "Tenho os parâmetros → proponho consultar_despesas E
+                  consultar_indicadores" (retrieval de semantic_memory
+                  para saber subfunção=305, tipos=["dengue","covid"])
+4. AVALIAR/SEL.: as duas ações propostas são selecionadas (não há
+                  candidatos concorrentes a arbitrar neste agente)
+5. EXECUTAR:     → Query Neo4j: DespesaSIOPS subfunção 305
+                  → Query Neo4j: IndicadorDataSUS tipo IN [dengue, covid]
+                  → working_memory["despesas"] = [...]
+                  → working_memory["indicadores"] = [...]
 ```
 
-### O Ciclo BDI no Código
+### O Ciclo CoALA no Código
 
-O método `run_cycle()` da classe base executa o ciclo completo em 5 linhas:
+O método `run_coala_cycle()` da classe base executa o ciclo completo:
 
 ```python
-# backend/agents/base.py — AgenteBDI
+# backend/agents/base.py — AgenteCoALA
 
-def run_cycle(self) -> None:
-    """Ciclo BDI completo."""
-    perception = self.perceive()          # 1. Perceber
-    self.update_beliefs(perception)       # 2. Atualizar crenças
-    desires = self.deliberate()           # 3. Deliberar
-    self.intentions = self.plan(desires)  # 4. Planejar
-    self.execute(self.intentions)         # 5. Executar
+def run_coala_cycle(self) -> None:
+    """Ciclo CoALA completo.
+
+    perceive → update_working_memory → propose_actions →
+    evaluate_and_select → execute (que já embute observe/learn por ação).
+    """
+    perception = self.perceive()
+    self.update_working_memory(perception)
+    candidates = self.propose_actions()
+    actions = self.evaluate_and_select(candidates)
+    self.execute(actions)
 ```
 
 Cada passo corresponde a um método que as subclasses sobrescrevem:
 
-**1. Perceber** — o agente lê suas crenças e extrai o que é relevante:
+**1. Perceber** — o agente lê a working memory e extrai o que é relevante:
 
 ```python
 # Implementação padrão (retorna vazio)
@@ -145,153 +165,160 @@ def perceive(self) -> dict:
 # Implementação real (agente de domínio)
 def perceive(self) -> dict:
     return {
-        "analysis_id": self.beliefs.get("analysis_id"),
-        "date_from": self.beliefs.get("date_from"),
-        "date_to": self.beliefs.get("date_to"),
+        "analysis_id": self.working_memory.get("analysis_id"),
+        "date_from": self.working_memory.get("date_from"),
+        "date_to": self.working_memory.get("date_to"),
     }
 ```
 
-**2. Atualizar crenças** — incorpora novas informações (mesmo para todos):
+**2. Atualizar working memory** — incorpora novas informações (mesmo para todos):
 
 ```python
-def update_beliefs(self, perception: dict) -> None:
-    self.beliefs.update(perception)
+def update_working_memory(self, perception: dict) -> None:
+    self.working_memory.update(perception)
 ```
 
-**3. Deliberar** — aqui está a **tomada de decisão**. O agente avalia suas crenças e decide quais objetivos perseguir. Cada agente tem sua própria lógica:
+**3. Propor ações** — aqui está a **tomada de decisão**. O agente avalia a working memory e propõe candidatos de ação. Cada agente tem sua própria lógica:
 
 ```python
-# Agente de domínio — "se tenho parâmetros, quero consultar"
-def deliberate(self):
-    desires = []
-    if self.beliefs.get("analysis_id") and self.beliefs.get("date_from") is not None:
-        desires.append({"goal": "consultar_despesas"})
-        desires.append({"goal": "consultar_indicadores"})
-    # Se NÃO tem parâmetros → desires fica vazio → agente não faz nada
-    return desires
+# Agente de domínio — "se tenho parâmetros, proponho consultar"
+def propose_actions(self) -> list[dict]:
+    actions = []
+    if self.working_memory.get("analysis_id") and self.working_memory.get("date_from") is not None:
+        actions.append({"goal": "consultar_despesas"})
+        actions.append({"goal": "consultar_indicadores"})
+    # Se NÃO tem parâmetros → actions fica vazia → agente não faz nada
+    return actions
 
-# AgenteCorrelacao — "se tenho dados cruzados, quero calcular"
-def deliberate(self):
-    if self.beliefs.get("dados_cruzados"):
-        desires.append({"goal": "calcular_correlacoes"})
+# AgenteCorrelacao — "se tenho dados cruzados, proponho calcular"
+def propose_actions(self) -> list[dict]:
+    if self.working_memory.get("dados_cruzados"):
+        return [{"goal": "calcular_correlacoes"}]
+    return []
 
-# TextSynthesizer — serviço (não-BDI), não usa deliberate()
+# TextSynthesizer — serviço (não é agente CoALA), não usa propose_actions()
 # O caller invoca diretamente: sintetizador.generate(correlacoes, anomalias, contexto)
 ```
 
-**4. Planejar** — converte desejos em intenções executáveis (1 desejo = 1 intenção):
+**4. Avaliar e selecionar** — decide quais candidatos executar (1 candidato = 1 ação selecionada, na maioria dos agentes):
 
 ```python
-def plan(self, desires: list[dict]) -> list[dict]:
-    return [{"desire": d, "status": "pending"} for d in desires]
+def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
+    """Neste sistema não há candidatos concorrentes com score real a
+    arbitrar — evaluate e select colapsam num único passo por decisão
+    intencional (documentado no código, não por omissão)."""
+    return [dict(c, status="pending") for c in candidates]
 ```
 
-**5. Executar** — percorre cada intenção pendente, com recuperação de falha:
+**5. Executar** — percorre cada ação pendente pela procedural memory, com recuperação de falha:
 
 ```python
-def execute(self, intentions: list[dict]) -> None:
-    for intention in intentions:
-        try:
-            self._execute_intention(intention)
-        except IntentionFailure as e:
-            intention["status"] = "failed"
-            self._failed_intentions.append(intention)
-
-            # Tenta alternativa
-            alternative = self._recover_intention(intention)
-            if alternative is not None:
-                try:
-                    self._execute_intention(alternative)
-                except IntentionFailure:
-                    alternative["status"] = "failed"
+def execute(self, actions: list[dict]) -> None:
+    for action in actions:
+        goal = action.get("goal")
+        strategies = self.procedural_memory.get(goal, [])
+        for i, strategy in enumerate(strategies):
+            try:
+                strategy(action)
+            except ActionFailure as exc:
+                action["status"] = "failed"
+                self._failed_actions.append(dict(action, reason=exc.reason))
+                self._observe_and_learn(action, "failed", detail=exc.reason)
+                continue  # tenta a próxima estratégia (fallback)
+            else:
+                action["status"] = "completed"
+                self._observe_and_learn(action, "completed")
+                break
 ```
 
-### A exceção IntentionFailure
+### A exceção ActionFailure
 
-Quando algo dá errado, o agente encapsula o erro com contexto da intenção:
+Quando algo dá errado, o agente encapsula o erro com contexto da ação:
 
 ```python
 # backend/agents/base.py
-class IntentionFailure(Exception):
-    def __init__(self, intention: dict, reason: str):
-        self.intention = intention
+class ActionFailure(Exception):
+    def __init__(self, action: dict, reason: str):
+        self.action = action
         self.reason = reason
-        super().__init__(f"Intention failed: {reason}")
+        super().__init__(f"Action failed: {reason}")
 
 # Uso em um agente de domínio:
-def _execute_intention(self, intention):
+def _act_consultar_despesas(self, action: dict) -> None:
     try:
         despesas = self.neo4j_client.get_despesas(...)
     except Exception as e:
-        raise IntentionFailure(intention, str(e)) from e
+        raise ActionFailure(action, str(e)) from e
 ```
 
 ### Recuperação de Falhas
 
-Quando algo dá errado durante a execução de um plano:
+Quando uma estratégia falha, `procedural_memory[goal]` pode ter uma estratégia de fallback registrada em seguida:
 
 ```
-    Executando intenção "consultar_despesas"
+    Executando ação "consultar_despesas"
               │
               ▼
     ┌─────────────────┐
-    │  Neo4j offline!  │ ──► IntentionFailure levantada
+    │  Neo4j offline!  │ ──► ActionFailure levantada
     └────────┬────────┘
              ▼
     ┌─────────────────┐
-    │ _recover_        │ ──► Tenta alternativa:
-    │  intention()     │     "Retornar lista vazia em vez de falhar"
+    │ Próxima          │ ──► Tenta a estratégia de fallback registrada:
+    │ estratégia       │     "_act_fallback_despesas" — retorna lista vazia
     └────────┬────────┘
              ▼
     ┌─────────────────┐
-    │ Agente continua  │ ──► beliefs["despesas"] = []
+    │ Agente continua  │ ──► working_memory["despesas"] = []
     │ em estado válido │     (orquestrador recebe dados parciais)
     └─────────────────┘
 ```
 
-No código, a recuperação é implementada por cada agente:
+No código, a recuperação é implementada como uma segunda estratégia registrada para o mesmo goal:
 
 ```python
-# Agente de domínio — fallback: retorna lista vazia
-def _recover_intention(self, failed_intention):
-    goal = failed_intention["desire"]["goal"]
-    if goal == "consultar_despesas":
-        self.beliefs["despesas"] = []    # dados parciais em vez de falha total
-        return {"desire": {"goal": "noop"}, "status": "completed"}
-    elif goal == "consultar_indicadores":
-        self.beliefs["indicadores"] = []
-        return {"desire": {"goal": "noop"}, "status": "completed"}
-    return None  # sem alternativa → erro propagado
+# Agente de domínio — procedural_memory com fallback
+self.procedural_memory = {
+    "consultar_despesas": [
+        self._act_consultar_despesas,      # estratégia primária
+        self._act_fallback_despesas,        # fallback: lista vazia
+    ],
+    ...
+}
+
+def _act_fallback_despesas(self, action: dict) -> None:
+    self.working_memory["despesas"] = []    # dados parciais em vez de falha total
 ```
 
-O agente **nunca fica em estado indefinido**. Se a recuperação também falhar, o erro é propagado ao orquestrador/supervisor, que decide como continuar.
+O agente **nunca fica em estado indefinido**. Se todas as estratégias registradas falharem, a ação é marcada `"failed"` e o laço segue para a próxima ação — o erro é reportado ao orquestrador/supervisor via `_failed_actions`, que decide como continuar.
 
 ---
 
-## Classe Base AgenteBDI
+## Classe Base AgenteCoALA
 
 **Arquivo:** `backend/agents/base.py`
 
-Todos os 8 agentes herdam desta classe. Ela fornece o esqueleto do ciclo BDI:
+Todos os agentes herdam desta classe (agentes de domínio, analíticos, contexto, o agente de interpretação de intenção, e os dois orquestradores/coordenador/supervisores). Ela fornece o esqueleto do ciclo CoALA:
 
 ```python
-class AgenteBDI:
-    agent_id: str                    # ID único (ex: "star-vigilancia-a1b2c3d4")
-    beliefs: dict[str, Any]          # Base de crenças
-    desires: list[dict]              # Lista de objetivos
-    intentions: list[dict]           # Planos selecionados
-    _failed_intentions: list[dict]   # Intenções que falharam
+class AgenteCoALA:
+    agent_id: str                                          # ID único (ex: "star-vigilancia-a1b2c3d4")
+    working_memory: dict[str, Any]                         # Buffer de curto prazo
+    semantic_memory: dict[str, Any]                        # Fatos/regras de domínio
+    episodic_memory: list[dict]                            # Histórico de ações (sucesso/falha)
+    procedural_memory: dict[str, list[Callable[[dict], None]]]  # Estratégias por goal
+    _failed_actions: list[dict]                            # Ações que falharam
 ```
 
 ### Métodos que cada agente sobrescreve
 
 | Método | O que faz | Exemplo |
 |--------|-----------|---------|
-| `perceive()` | Observa o ambiente | Lê parâmetros das crenças |
-| `deliberate()` | Decide objetivos | "Tenho dados → quero calcular correlações" |
-| `plan(desires)` | Cria planos | Converte cada desejo em intenção pendente |
-| `_execute_intention(intention)` | Executa um plano | Roda query no Neo4j |
-| `_recover_intention(failed)` | Trata falha | Retorna lista vazia como fallback |
+| `perceive()` | Observa o ambiente | Lê parâmetros da working memory |
+| `propose_actions()` | Decide candidatos de ação | "Tenho dados → proponho calcular correlações" |
+| `evaluate_and_select(candidates)` | Seleciona o que executar | Passthrough na maioria dos agentes (sem candidatos concorrentes) |
+| `_act_*(action)` | Executa uma ação | Roda query no Neo4j, chama o LLM |
+| `_act_fallback_*(action)` | Trata falha (2ª estratégia) | Retorna lista vazia como fallback |
 
 ### Padrão de IDs
 
@@ -301,7 +328,83 @@ Formato: `{topologia}-{papel}-{uuid_hex[:8]}`
 star-vigilancia-a1b2c3d4     ← agente de vigilância na topologia estrela
 hier-sup-dominio-m3n4o5p6    ← supervisor de domínio na hierárquica
 star-correlacao-e5f6g7h8     ← agente de correlação na estrela
+intent-9f8e7d6c              ← agente de interpretação de intenção (uma instância por sessão de chat, não amarrado a uma topologia)
 ```
+
+---
+
+## Agente de Interpretação de Intenção (1)
+
+### AgenteInterpretacaoIntencao — Guardrail de Escopo + Extração via LLM
+
+**Arquivo:** `agents/intent/agente_interpretacao_intencao.py`
+
+Camada de entrada compartilhada pelas duas arquiteturas quando a análise é disparada via chat (`WS /ws/chat/{sessionId}`). Substitui totalmente um design anterior baseado em regex-primário/LLM-fallback — hoje **não há regex neste módulo**: toda mensagem do usuário passa pelo LLM.
+
+**Duas ações, uma única chamada LLM:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              AgenteInterpretacaoIntencao.parse(texto)             │
+│                                                                   │
+│  propose_actions() propõe as duas ações juntas — execute() as    │
+│  roda em ordem na mesma passada do ciclo CoALA:                   │
+│                                                                   │
+│  1. classificar_escopo                                            │
+│     ─────────────────                                            │
+│     Única chamada LLM do ciclo. Prompt combinado pede ao LLM:     │
+│     (a) classificar se a mensagem está DENTRO do escopo do        │
+│         assistente (dados orçamentários/saúde pública de          │
+│         Sorocaba-SP) e (b) — se estiver dentro — já extrair       │
+│         date_from/date_to/health_params/intent_summary na         │
+│         MESMA resposta JSON (decisão de custo: evita 2 chamadas   │
+│         de rede por mensagem).                                    │
+│     → grava working_memory["escopo"] = "dentro" | "fora"          │
+│     → grava working_memory["_llm_parsed"] com a resposta bruta    │
+│                                                                   │
+│  2. extrair_parametros                                            │
+│     ──────────────────                                           │
+│     Ação puramente interna — NÃO chama o LLM de novo. Só copia    │
+│     os campos já obtidos em (1) para working_memory quando        │
+│     escopo == "dentro". Existe como ação própria (e não fundida   │
+│     com a anterior) para que o guardrail apareça como um passo    │
+│     auditável e independente em episodic_memory.                  │
+│                                                                   │
+│  Se escopo == "fora": nenhum parâmetro é extraído, e parse()      │
+│  retorna uma recusa — nenhuma arquitetura (estrela/hierárquica)   │
+│  chega a ser instanciada pelo caller.                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Fallback (LLM indisponível ou resposta inválida):** `procedural_memory["classificar_escopo"]` registra uma segunda estratégia (`_act_fallback_classificar_escopo`) que grava `working_memory["escopo"] = "indisponivel"` — distinto de `"fora"`: é uma falha técnica, não uma recusa de escopo, e gera uma mensagem diferente ao usuário ("não consegui interpretar agora" em vez de "isso está fora do meu escopo").
+
+**Saída — `AnalysisIntent`:**
+
+```python
+@dataclass
+class AnalysisIntent:
+    date_from: int
+    date_to: int
+    health_params: list[str]
+    intent_summary: str   # resumo de 1 frase da intenção do usuário
+```
+
+`intent_summary` é o campo que estende o antigo `AnalysisParams` — carregado no dict `params` repassado tanto ao `OrquestradorEstrela` quanto ao `CoordenadorGeral` (chave `intent_summary`), para eventual uso por etapas futuras de priorização de achados (ver `PLANO_REFATORACAO.md`).
+
+**Segurança:** a mensagem do usuário é tratada como dado a ser classificado/interpretado, nunca como instrução — mitigação de prompt injection. A resposta do LLM é validada por parsing JSON estrito (só as chaves esperadas: `em_escopo`, `date_from`, `date_to`, `health_params`, `intent_summary`) antes de qualquer uso.
+
+**Observabilidade:** a chamada ao LLM é rotulada `caller=f"{self.agent_id}:classificar_e_extrair"` — aparece nos logs de `core/llm_client.py` identificando exatamente qual instância do agente e com qual propósito disparou a chamada.
+
+**Interface pública:**
+
+```python
+def parse(self, texto: str, reference_year: int | None = None) -> IntentResult:
+    """Retorna IntentResult(success, params, missing, clarification_message,
+    interpreted_via). Sem regex — toda mensagem não-vazia passa pelo
+    guardrail de escopo antes de qualquer extração de parâmetro."""
+```
+
+Chamado por `api/chat_websocket.py` a cada turno do chat.
 
 ---
 
@@ -343,8 +446,8 @@ Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021
                           │
                           ▼
               ┌───────────────────────┐
-              │  1. update_beliefs()  │
-              │  beliefs = {          │
+              │  update_working_memory│
+              │  working_memory = {   │
               │    analysis_id: "abc" │
               │    date_from: 2019    │
               │    date_to: 2021      │
@@ -352,22 +455,22 @@ Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021
               └──────────┬────────────┘
                          ▼
               ┌───────────────────────┐
-              │  2. perceive()        │
+              │  perceive()           │
               │  "Tenho analysis_id,  │
               │   date_from, date_to" │
               └──────────┬────────────┘
                          ▼
               ┌───────────────────────┐
-              │  3. deliberate()      │
-              │  "Quero:              │
+              │  propose_actions()    │
+              │  "Proponho:           │
               │   - consultar_despesas│
               │   - consultar_        │
               │     indicadores"      │
               └──────────┬────────────┘
                          ▼
               ┌───────────────────────┐
-              │  4. plan()            │
-              │  intentions = [       │
+              │  evaluate_and_select()│
+              │  actions = [          │
               │   {consultar_despesas,│
               │    status: pending},  │
               │   {consultar_         │
@@ -377,15 +480,15 @@ Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021
               └──────────┬────────────┘
                          ▼
               ┌───────────────────────┐
-              │  5. execute()         │
+              │  execute()            │
               │                       │
-              │  Intenção 1:          │
+              │  Ação 1:              │
               │  Neo4j ──► despesas   │
               │  WHERE subfuncao=305  │
               │  AND ano >= 2019      │
               │  AND ano <= 2021      │
               │                       │
-              │  Intenção 2:          │
+              │  Ação 2:              │
               │  Neo4j ──► indicadores│
               │  WHERE tipo IN        │
               │  ["dengue", "covid"]  │
@@ -421,11 +524,14 @@ Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021
 - Recebem `(agent_id, neo4j_client)` no construtor
 - Método público: `query(analysis_id, date_from, date_to)` → `{"despesas": [...], "indicadores": [...]}`
 - Retornam listas vazias (sem exceção) quando não há dados
-- Se o Neo4j falhar: `_recover_intention()` retorna listas vazias
+- Se o Neo4j falhar: a estratégia de fallback registrada retorna listas vazias
+- Logam os parâmetros da consulta (subfunção/tipos, período) **antes** de cada query, e o resultado (contagem) depois — ver `core/llm_client.py` e `agents/base.py` para o resto da instrumentação de execução
+
+**Decisão de design deliberada, não lacuna:** qual subfunção/indicador cada agente busca é hardcoded (constantes de módulo), sem LLM envolvido — isso é intencional; a decisão "o que buscar" já é conhecida estaticamente hoje. O `PLANO_REFATORACAO.md` (Etapa 2, ainda não implementada) propõe introduzir LLM aqui como preparação arquitetural para quando a base de dados crescer com fontes/indicadores mais ambíguos — não como necessidade atual.
 
 ---
 
-## Agentes Analíticos (2 BDI + 1 serviço)
+## Agentes Analíticos (2 CoALA + 1 serviço)
 
 Os agentes analíticos processam dados **em memória** — não acessam Neo4j. Recebem dados já coletados pelos agentes de domínio e produzem análises.
 
@@ -454,7 +560,7 @@ Os agentes analíticos processam dados **em memória** — não acessam Neo4j. R
 
 **Arquivo:** `agents/analytical/correlacao.py`
 
-Calcula correlação de Spearman entre gastos e indicadores de saúde. Spearman é baseado em ranks — robusto a outliers, captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
+Calcula correlação de Spearman entre gastos e indicadores de saúde. Spearman é baseado em ranks — robusto a outliers, captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos. **100% determinístico (scipy) — sem LLM, decisão intencional**: não há embasamento para substituir cálculo estatístico por geração de linguagem.
 
 ```
 Entrada: dados cruzados (despesa × indicador por subfunção e ano)
@@ -486,11 +592,7 @@ Saída:
 }
 ```
 
-**Comportamento:**
-- Pares com < 2 pontos de dados → retorna 0.0 (não é possível calcular correlação)
-- Pares com ≥ 2 pontos → calcula correlação Spearman normalmente
-
-**Classificação (baseada no |Spearman|):**
+**Classificação (baseada no |Spearman|, limiares em `semantic_memory`):**
 
 ```
 |r| ≥ 0.7  ──►  "alta"     (relação forte)
@@ -507,11 +609,11 @@ Saída:
 
 **Arquivo:** `agents/analytical/anomalias.py`
 
-Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada.
+Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada. **100% determinístico — sem LLM**, pelo mesmo racional de `AgenteCorrelacao`.
 
 **Polaridade dos indicadores:**
 
-A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do indicador:
+A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do indicador, obtida via *retrieval* de `semantic_memory` (não hardcoded direto do módulo no meio da lógica):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -525,42 +627,6 @@ A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do 
 │  → Valor ALTO = boa cobertura = resultado BOM               │
 │  → Valor BAIXO = baixa cobertura = resultado RUIM           │
 └─────────────────────────────────────────────────────────────┘
-```
-
-**Exemplo (indicador positivo — vacinação, subfunção 301):**
-
-```
-Entrada: dados cruzados (subfunção 301 × vacinação)
-┌──────────────────────────────────────────────────────┐
-│  2019: despesa=185M, indicador=485320                │
-│  2020: despesa=199M, indicador=412100                │
-│  2021: despesa=23M,  indicador=892450                │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────┐
-│  Calcula medianas:                                   │
-│  mediana_despesa    = 185M                           │
-│  mediana_indicador  = 485320                         │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────┐
-│  Compara cada ano com as medianas:                   │
-│                                                      │
-│  2019: despesa=185M (= mediana), indicador=485320    │
-│        → Sem anomalia (na mediana)                   │
-│                                                      │
-│  2020: despesa=199M (> mediana), indicador=412100    │
-│        indicador < mediana (cobertura baixa)         │
-│        → ⚠ ALTO GASTO + BAIXO RESULTADO             │
-│          (gastou muito E cobertura continua baixa)   │
-│                                                      │
-│  2021: despesa=23M (< mediana), indicador=892450     │
-│        indicador > mediana (cobertura alta)          │
-│        → ✓ BAIXO GASTO + ALTO RESULTADO             │
-│          (gastou pouco E cobertura está alta)        │
-└──────────────────────────────────────────────────────┘
 ```
 
 **Tipos de anomalia:**
@@ -591,11 +657,11 @@ Entrada: dados cruzados (subfunção 301 × vacinação)
 
 **Regra:** Pares com < 2 pontos de dados são ignorados (não faz sentido calcular mediana com 1 valor).
 
-### TextSynthesizer — Geração de Texto (Serviço, não-BDI)
+### TextSynthesizer — Geração de Texto (Serviço, não é agente CoALA)
 
 **Arquivo:** `agents/analytical/sintetizador.py`
 
-> **Nota arquitetural:** O sintetizador NÃO é um agente BDI. Ele não possui autonomia deliberativa — recebe dados prontos e produz texto. A decisão de modelá-lo como classe normal (não agente) reflete que ele não percebe ambiente mutável, não forma desejos concorrentes, e não escolhe entre planos alternativos. O streaming é responsabilidade do caller via `StreamingAdapter`.
+> **Nota arquitetural:** O sintetizador NÃO é um agente CoALA — não possui `working_memory`/`episodic_memory`/`semantic_memory`/`procedural_memory` própria nem participa do ciclo `propose_actions → evaluate_and_select → execute`. Ele é, em si, a implementação de duas ações do espaço de ações de quem o chama (orquestrador/supervisor): `_build_prompt`/`_generate_structured_text` são uma ação de *reasoning* interna (transforma dados já resolvidos em texto, sem tocar o ambiente); a chamada a `core.llm_client.generate_stream` é uma ação de *grounding* externa (invocação de uma ferramenta fora do processo — a API do LLM). A decisão de modelá-lo como classe normal reflete que ele não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas — quem decide isso é o caller. O streaming é responsabilidade do caller via `StreamingAdapter`.
 
 Recebe todos os resultados dos outros agentes e gera um texto de análise em português:
 
@@ -615,10 +681,9 @@ Recebe todos os resultados dos outros agentes e gera um texto de análise em por
        └────────┬────────┘
                 ▼
        ┌─────────────────┐
-       │  Tenta LLM:     │
-       │  1º llama-3.3   │──► Sucesso? → Texto do LLM
-       │  2º qwen3-32b   │
-       │  3º llama-4     │──► Falhou?  → Texto estruturado (fallback)
+       │  Tenta LLM       │──► Sucesso? → Texto do LLM (DeepSeek,
+       │  (deepseek-v4-   │              modelo único, com retry)
+       │   flash)         │──► Falhou?  → Texto estruturado (fallback)
        └────────┬────────┘
                 ▼
        ┌─────────────────┐
@@ -635,6 +700,8 @@ O streaming é realizado pelo `StreamingAdapter` (`backend/core/streaming_adapte
 - `stream_text(text)` — para texto pré-gerado (fallback estruturado)
 - `stream_tokens(generator)` — para tokens incrementais do LLM (streaming em tempo real)
 
+A chamada ao LLM é rotulada `caller=self.synthesizer_id` para rastreabilidade nos logs.
+
 **Seções do texto gerado (fallback):**
 1. Resumo Executivo
 2. Cobertura de Dados (gaps detectados)
@@ -650,7 +717,7 @@ O streaming é realizado pelo `StreamingAdapter` (`backend/core/streaming_adapte
 
 **Arquivo:** `agents/context/contexto_orcamentario.py`
 
-Analisa como o gasto de cada subfunção evoluiu ao longo dos anos:
+Analisa como o gasto de cada subfunção evoluiu ao longo dos anos. **100% determinístico — sem LLM.**
 
 ```
 Entrada: despesas agregadas por subfunção
@@ -704,7 +771,7 @@ Entrada: despesas agregadas por subfunção
 
 Na topologia estrela, um único agente central (OrquestradorEstrela) coordena todos os agentes. Nenhum agente periférico se comunica diretamente com outro — tudo passa pelo hub.
 
-**Ativação condicional de agentes de domínio:** O orquestrador usa o mapeamento `INDICADOR_TO_AGENT` para instanciar apenas os agentes de domínio relevantes aos `health_params` selecionados pelo usuário:
+**Ativação condicional de agentes de domínio:** O orquestrador usa o mapeamento `INDICADOR_TO_AGENT` para instanciar apenas os agentes de domínio relevantes aos `health_params` selecionados pelo usuário (ou extraídos pelo `AgenteInterpretacaoIntencao`, se a análise veio do chat):
 
 ```
 INDICADOR_TO_AGENT:
@@ -747,12 +814,11 @@ Se o usuário seleciona apenas `dengue` e `vacinacao`, somente `AgenteVigilancia
 
 ### Pipeline
 
-O método `run()` executa o pipeline completo de forma linear (sem delegar ao ciclo BDI via `run_cycle()`). O orquestrador herda de `AgenteBDI` por uniformidade de interface e para permitir extensão futura (ex: deliberação sobre ordem de execução ou replanejamento dinâmico), mas opera como agente de coordenação com pipeline determinístico. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo BDI para decidir quais dados consultar e como processar resultados. Os métodos BDI (`perceive`, `deliberate`, `plan`) são mantidos por conformidade de interface, mas a lógica real está no `run()`:
+O método `run()` executa o pipeline completo de forma linear (delega inteiramente ao ciclo `run_coala_cycle()` da base). O orquestrador herda de `AgenteCoALA` por uniformidade de interface e para permitir extensão futura, mas opera como agente de coordenação com pipeline determinístico. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo CoALA para decidir quais dados consultar e como processar resultados. Os métodos `perceive`/`propose_actions` são mantidos por conformidade de interface, mas `evaluate_and_select` colapsa num passthrough — não há candidatos concorrentes a arbitrar neste nível (a ordem das macro-ações é imposta por dependência de dados, não por arbitragem):
 
 ```
-Passo 1:  Instancia 8 agentes com IDs únicos; agentes de domínio são
-          instanciados condicionalmente conforme health_params do usuário
-          (via mapeamento INDICADOR_TO_AGENT)
+Passo 1:  Instancia agentes de domínio condicionalmente conforme
+          health_params (via mapeamento INDICADOR_TO_AGENT)
 Passo 2:  Executa apenas os agentes de domínio relevantes em SEQUÊNCIA
           Vigilância → Hospitalar → Primária → Mortalidade
 Passo 3:  Deduplica despesas (mortalidade retorna todas as subfunções)
@@ -763,15 +829,17 @@ Passo 7:  AgenteCorrelacao.compute(dados_cruzados)
 Passo 8:  AgenteAnomalias.detect(dados_cruzados)
 Passo 9:  *** Captura wall-clock (exclui sintetizador) ***
 Passo 10: TextSynthesizer.generate(correlações, anomalias, contexto)
+Passo 11: Persiste métricas de execução por agente
 ```
 
 **Características:**
-- Pipeline linear no método `run()` — não usa `run_cycle()` / `_execute_intention()`
+- Pipeline via `run_coala_cycle()` — cada macro-etapa é uma ação (`_act_*`) registrada em `procedural_memory`, proposta em ordem fixa por `propose_actions()`
 - Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
 - Ponto único de falha: se o orquestrador falhar, toda a análise falha
 - Ativação condicional: apenas agentes de domínio relevantes aos `health_params` são instanciados
-- Métricas de benchmark excluem o sintetizador do breakdown por agente (é serviço LLM, não agente BDI) — o overhead do orquestrador é calculado como `wall_clock - soma_workers`
+- Métricas de benchmark excluem o sintetizador do breakdown por agente (é serviço LLM, não agente CoALA) — o overhead do orquestrador é calculado como `wall_clock - soma_workers`
 - Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
+- Recebe opcionalmente `intent_summary` (quando a análise vem do chat) no dict `params` — armazenado na working memory para uso futuro por etapas de priorização de achados (ainda não implementadas)
 
 ---
 
@@ -799,7 +867,7 @@ Na topologia hierárquica, os agentes são organizados em 3 níveis com supervis
   Comunicação lateral (sem passar pelo Coordenador):
   ─────────────────────────────────────────────────
   SupervisorDominio ───────► SupervisorAnalitico
-                              (despesas + indicadores)
+                              (despesas + indicadores + intent_summary)
   SupervisorDominio ───────► SupervisorContexto
                               (despesas)
   SupervisorContexto ──────► SupervisorAnalitico
@@ -811,7 +879,7 @@ Na topologia hierárquica, os agentes são organizados em 3 níveis com supervis
 ```
 Passo 1:  Coordenador instancia 3 supervisores
 Passo 2:  SupervisorDominio.run()
-          → Executa 4 agentes de domínio em sequência
+          → Executa agentes de domínio relevantes em sequência
           → Agrega despesas + indicadores
 Passo 3:  Comunicação lateral: Domínio → Analítico (despesas + indicadores)
 Passo 4:  Comunicação lateral: Domínio → Contexto (despesas)
@@ -820,13 +888,13 @@ Passo 5:  SupervisorContexto.run()
 Passo 6:  Comunicação lateral: Contexto → Analítico (contexto orçamentário)
 Passo 7:  SupervisorAnalitico.run()
           → Cruza dados, executa correlação, anomalias
-          → Marca _bdi_end_time (fim da parte BDI)
+          → Marca fim da parte determinística (antes do sintetizador)
           → TextSynthesizer (streaming LLM)
-Passo 8:  Coordenador usa _bdi_end_time para medir supervisor analítico
+Passo 8:  Coordenador usa esse marco para medir o supervisor analítico
           sem incluir tempo do sintetizador/LLM
 Passo 9:  *** Captura wall-clock (subtrai tempo do sintetizador) ***
 Passo 10: Persiste métricas para agentes + 3 supervisores
-          (exclui sintetizador do breakdown — é serviço LLM, não agente BDI)
+          (exclui sintetizador do breakdown — é serviço LLM, não agente CoALA)
           workers_time_ms soma apenas agentes folha (nível 2);
           supervisores aparecem no breakdown para exibição mas NÃO
           são somados (evita dupla contagem — seu tempo engloba subordinados)
@@ -834,10 +902,10 @@ Passo 10: Persiste métricas para agentes + 3 supervisores
 
 **Características:**
 - Degradação graciosa: se um supervisor falha, o coordenador continua com dados parciais
-- Comunicação lateral via `receive_from_peer()` — supervisores trocam dados diretamente
+- Comunicação lateral via `receive_from_peer()` — supervisores trocam dados diretamente (e agora logam explicitamente o que repassam, de ambos os lados do hop)
 - Mensagens esperadas: ~24+ (agentes + supervisores + comunicação lateral)
 - Métricas coletadas para 11 entidades (8 agentes + 3 supervisores)
-- Supervisores implementam o ciclo BDI por uniformidade de interface, mas `_execute_intention()` é um no-op (marca `completed`). A deliberação é determinística e a execução real ocorre no método `run()` chamado pelo coordenador.
+- Supervisores implementam o ciclo CoALA por uniformidade de interface, mas `_execute_intention()`-equivalente é essencialmente determinístico. A deliberação é determinística e a execução real ocorre no método `run()` chamado pelo coordenador.
 - Cálculo de overhead: `overhead = wall_clock - soma dos agentes folha (nível 2)`. Supervisores aparecem no breakdown de métricas para exibição, mas NÃO são somados em `workers_time_ms` — seu tempo já engloba o dos subordinados, somá-los causaria dupla contagem. O overhead captura: tempo dos supervisores fora dos subordinados + comunicação lateral + instanciação.
 
 ### Degradação Graciosa
@@ -962,377 +1030,16 @@ O resultado é passado ao sintetizador para que o texto mencione explicitamente 
 
 ---
 
-## Apêndice: Código-Fonte dos Agentes
-
-Esta seção mostra trechos reais do código de cada agente, demonstrando como o ciclo BDI é implementado na prática.
-
-### A. Classe Base — AgenteBDI
-
-O ciclo completo é executado por `run_cycle()`:
-
-```python
-# backend/agents/base.py
-
-class AgenteBDI:
-    def __init__(self, agent_id: str):
-        self.agent_id = agent_id
-        self.beliefs: dict[str, Any] = {}
-        self.desires: list[dict] = []
-        self.intentions: list[dict] = []
-        self._failed_intentions: list[dict] = []
-
-    def run_cycle(self):
-        """Executa o ciclo BDI completo: perceive → deliberate → plan → execute."""
-        perception = self.perceive()
-        self.update_beliefs(perception)
-        desires = self.deliberate()
-        self.intentions = self.plan(desires)
-        self.execute()
-
-    def execute(self):
-        """Executa cada intenção pendente, com recuperação de falha."""
-        for intention in self.intentions:
-            if intention["status"] != "pending":
-                continue
-            try:
-                self._execute_intention(intention)
-            except IntentionFailure as e:
-                intention["status"] = "failed"
-                self._failed_intentions.append(intention)
-                recovered = self._recover_intention(intention)
-                if recovered:
-                    self.intentions.append(recovered)
-```
-
-### B. Agente de Domínio — AgenteVigilanciaEpidemiologica
-
-Cada agente de domínio segue o mesmo padrão. A diferença está na **configuração** (subfunção e tipos de indicador):
-
-```python
-# backend/agents/domain/vigilancia_epidemiologica.py
-
-SUBFUNCAO = 305
-TIPOS_INDICADOR = ["dengue", "covid"]
-
-class AgenteVigilanciaEpidemiologica(AgenteBDI):
-    def __init__(self, agent_id, neo4j_client):
-        super().__init__(agent_id)
-        self.neo4j_client = neo4j_client
-
-    # PERCEBER: "O que eu sei?"
-    def perceive(self):
-        return {
-            "analysis_id": self.beliefs.get("analysis_id"),
-            "date_from": self.beliefs.get("date_from"),
-            "date_to": self.beliefs.get("date_to"),
-        }
-
-    # DELIBERAR: "O que eu quero fazer?"
-    def deliberate(self):
-        desires = []
-        if self.beliefs.get("analysis_id") and self.beliefs.get("date_from") is not None:
-            desires.append({"goal": "consultar_despesas"})
-            desires.append({"goal": "consultar_indicadores"})
-        #                    ↑ Se não tem parâmetros, desires fica vazio
-        #                      e o agente não faz nada
-        self.desires = desires
-        return desires
-
-    # EXECUTAR: "Fazendo o trabalho"
-    def _execute_intention(self, intention):
-        goal = intention["desire"]["goal"]
-        if goal == "consultar_despesas":
-            all_despesas = self.neo4j_client.get_despesas(...)
-            # Filtra APENAS subfunção 305
-            despesas = [d for d in all_despesas if d.get("subfuncao") == 305]
-            self.beliefs["despesas"] = despesas
-
-        elif goal == "consultar_indicadores":
-            indicadores = self.neo4j_client.get_indicadores(
-                ..., health_params=["dengue", "covid"]
-            )
-            self.beliefs["indicadores"] = indicadores
-
-    # RECUPERAR: "Deu errado, o que faço?"
-    def _recover_intention(self, failed_intention):
-        goal = failed_intention["desire"]["goal"]
-        if goal == "consultar_despesas":
-            self.beliefs["despesas"] = []    # fallback: lista vazia
-            return {"desire": {"goal": "noop"}, "status": "completed"}
-```
-
-### C. Diferença entre os 4 agentes de domínio
-
-A única diferença real entre eles é a configuração:
-
-```python
-# vigilancia_epidemiologica.py     # saude_hospitalar.py
-SUBFUNCAO = 305                    SUBFUNCAO = 302
-TIPOS_INDICADOR = ["dengue",      TIPOS_INDICADOR = ["internacoes"]
-                   "covid"]
-
-# atencao_primaria.py              # mortalidade.py
-SUBFUNCAO = 301                    SUBFUNCOES = [301, 302, 303, 305]  # TODAS!
-TIPOS_INDICADOR = ["vacinacao"]    TIPOS_INDICADOR = ["mortalidade"]
-```
-
-O `AgenteMortalidade` é especial — não filtra por uma subfunção, retorna despesas de TODAS:
-
-```python
-# mortalidade.py — _execute_intention
-despesas = [d for d in all_despesas if d.get("subfuncao") in [301, 302, 303, 305]]
-#                                                             ↑ todas as subfunções
-```
-
-### D. AgenteCorrelacao — Correlação Spearman
-
-```python
-# backend/agents/analytical/correlacao.py
-
-class AgenteCorrelacao(AgenteBDI):
-    # DELIBERAR: se há dados cruzados, deseja calcular correlações
-    def deliberate(self):
-        desires = []
-        if self.beliefs.get("dados_cruzados"):
-            desires.append({"goal": "calcular_correlacoes"})
-        return desires
-
-    # EXECUTAR: calcula Spearman por par subfunção-indicador
-    def _compute_correlations(self):
-        crossed = self.beliefs["dados_cruzados"]
-
-        # Agrupa por (subfunção, tipo_indicador)
-        pairs = {}
-        for item in crossed:
-            key = (item["subfuncao"], item["tipo_indicador"])
-            pairs.setdefault(key, []).append(item)
-
-        for (subfuncao, tipo), items in pairs.items():
-            xs = [it["valor_despesa"] for it in items]
-            ys = [it["valor_indicador"] for it in items]
-            n = len(items)
-
-            if n < 2:
-                # < 2 pontos → impossível calcular → retorna 0.0
-                correlacoes.append({
-                    "subfuncao": subfuncao,
-                    "tipo_indicador": tipo,
-                    "spearman": 0.0,
-                    "classificacao": "baixa",
-                    "n_pontos": n,
-                })
-            else:
-                r_spearman = _safe_correlation(stats.spearmanr, xs, ys)
-                correlacoes.append({
-                    "subfuncao": subfuncao,
-                    "tipo_indicador": tipo,
-                    "spearman": round(r_spearman, 4),
-                    "classificacao": _classify(r_spearman),  # "alta"/"média"/"baixa"
-                    "n_pontos": n,
-                })
-```
-
-### E. AgenteAnomalias — Detecção via mediana
-
-```python
-# backend/agents/analytical/anomalias.py
-
-class AgenteAnomalias(AgenteBDI):
-    def _detect_anomalies(self):
-        crossed = self.beliefs["dados_cruzados"]
-
-        # Agrupa por par e calcula medianas
-        for (subfuncao, tipo), items in pairs.items():
-            if len(items) < 2:
-                continue  # ignora pares com poucos dados
-
-            med_desp = _median([it["valor_despesa"] for it in items])
-            med_ind  = _median([it["valor_indicador"] for it in items])
-
-            for it in items:
-                high_spend  = it["valor_despesa"] > med_desp
-                low_outcome = it["valor_indicador"] < med_ind
-
-                if high_spend and low_outcome:
-                    anomalias.append({
-                        "tipo_anomalia": "alto_gasto_baixo_resultado",
-                        "descricao": f"Gasto acima da mediana com indicador abaixo..."
-                    })
-
-                low_spend    = it["valor_despesa"] < med_desp
-                high_outcome = it["valor_indicador"] > med_ind
-
-                if low_spend and high_outcome:
-                    anomalias.append({
-                        "tipo_anomalia": "baixo_gasto_alto_resultado",
-                        "descricao": f"Gasto abaixo da mediana com indicador acima..."
-                    })
-```
-
-### F. TextSynthesizer — Serviço LLM (não-BDI)
-
-```python
-# backend/agents/analytical/sintetizador.py
-
-class TextSynthesizer:
-    """Serviço de geração de texto — NÃO herda de AgenteBDI."""
-
-    def __init__(self, synthesizer_id: str):
-        self.synthesizer_id = synthesizer_id
-
-    def generate(self, correlacoes, anomalias, contexto_orcamentario,
-                 data_coverage=None, use_llm=True) -> str:
-        """Gera texto completo (batch). Tenta LLM, fallback estruturado."""
-        if not use_llm:
-            return self._generate_structured_text(...)
-        try:
-            import core.llm_client as llm_client
-            prompt = self._build_prompt(...)
-            text = "".join(llm_client.generate_stream(prompt))
-            if text:
-                return text
-        except Exception:
-            pass
-        return self._generate_structured_text(...)
-
-    def generate_stream(self, correlacoes, anomalias, contexto_orcamentario,
-                        data_coverage=None):
-        """Retorna generator de tokens para streaming via caller."""
-        import core.llm_client as llm_client
-        prompt = self._build_prompt(...)
-        yield from llm_client.generate_stream(prompt)
-
-    def generate_fallback(self, correlacoes, anomalias, contexto_orcamentario,
-                          data_coverage=None) -> str:
-        """Texto estruturado sem LLM (determinístico)."""
-        return self._generate_structured_text(...)
-```
-
-O streaming é feito pelo caller (orquestrador/supervisor) via `StreamingAdapter`:
-
-```python
-# No orquestrador/supervisor:
-adapter = StreamingAdapter(ws_queue, analysis_id, architecture)
-try:
-    token_gen = sintetizador.generate_stream(correlacoes, anomalias, contexto)
-    texto = adapter.stream_tokens(token_gen)
-except Exception:
-    texto = sintetizador.generate_fallback(correlacoes, anomalias, contexto)
-    adapter.stream_text(texto)
-```
-
-### G. AgenteContextoOrcamentario — Tendências YoY
-
-```python
-# backend/agents/context/contexto_orcamentario.py
-
-STAGNATION_THRESHOLD = 5.0  # |variação| < 5% → estagnação
-
-class AgenteContextoOrcamentario(AgenteBDI):
-    def _analyze_trends(self):
-        despesas = self.beliefs["despesas"]
-
-        # Agrupa por subfunção, ordena por ano
-        for subfuncao, items in by_subfuncao.items():
-            sorted_years = sorted(year_values.keys())
-
-            if len(sorted_years) < 2:
-                tendencias[subfuncao] = {"tendencia": "insuficiente"}
-                continue
-
-            # Calcula variação ano a ano
-            variations = []
-            for i in range(1, len(sorted_years)):
-                prev = year_values[sorted_years[i - 1]]
-                curr = year_values[sorted_years[i]]
-                variation = ((curr - prev) / prev) * 100  # variação percentual
-                variations.append(variation)
-
-            # Classifica
-            tendencia = _classify_trend(variations)
-            # "crescimento" se positivo consecutivo ≥ 2 anos
-            # "corte" se negativo consecutivo ≥ 2 anos
-            # "estagnacao" se todas |variação| < 5%
-```
-
-### H. OrquestradorEstrela — Coordenação central
-
-O `OrquestradorEstrela` herda de `AgenteBDI` por uniformidade de interface e extensibilidade futura, mas opera como agente de coordenação com pipeline determinístico — não exerce deliberação autônoma sobre a ordem de execução. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo BDI. Os métodos BDI (`perceive`, `deliberate`, `plan`) são mantidos por conformidade de interface mas não são invocados durante a execução real:
-
-```python
-# backend/agents/star/orchestrator.py
-
-class OrquestradorEstrela(AgenteBDI):
-    def run(self, analysis_id, params, ws_queue):
-        # Configura crenças (para conformidade BDI)
-        self.update_beliefs({...})
-
-        # Fase 1: Domínio (sequencial, ativação condicional)
-        for agent_id, agent_type, agent in domain_agents:
-            mc = MetricsCollector(agent_id, agent_type)
-            mc.start()
-            try:
-                result = agent.query(analysis_id, date_from, date_to)
-                all_despesas.extend(result["despesas"])
-                all_indicadores.extend(result["indicadores"])
-            except Exception as exc:
-                ws_queue.put({..., "type": "error", "payload": str(exc)})
-                # continua com dados parciais
-            mc.stop()
-
-        # Deduplica despesas (mortalidade retorna todas)
-        # Cruza dados
-        dados_cruzados = cross_domain_data(unique_despesas, all_indicadores)
-
-        # Fase 2: Analítica
-        contexto = agente_contexto.analyze_trends(unique_despesas)
-        correlacoes = agente_correlacao.compute(dados_cruzados)
-        anomalias = agente_anomalias.detect(dados_cruzados)
-
-        # Streaming via StreamingAdapter
-        adapter = StreamingAdapter(ws_queue, analysis_id, "star")
-        token_gen = sintetizador.generate_stream(correlacoes, anomalias, contexto)
-        texto = adapter.stream_tokens(token_gen)
-
-        # Persiste métricas e envia evento WebSocket com benchmarks
-        return {despesas, indicadores, correlacoes, anomalias, texto, ...}
-```
-
-### I. CoordenadorGeral — Hierarquia com comunicação lateral
-
-```python
-# backend/agents/hierarchical/coordinator.py
-
-class CoordenadorGeral(AgenteBDI):
-    def run(self, analysis_id, params, ws_queue):
-        # Instancia 3 supervisores
-        sup_dominio = SupervisorDominio(...)
-        sup_analitico = SupervisorAnalitico(...)
-        sup_contexto = SupervisorContexto(...)
-
-        # Supervisor de domínio executa 4 agentes
-        dominio_data = sup_dominio.run(analysis_id, date_from, date_to, counter)
-
-        # Comunicação LATERAL (sem passar pelo coordenador):
-        sup_analitico.receive_from_peer({
-            "despesas": dominio_data["despesas"],
-            "indicadores": dominio_data["indicadores"],
-        })
-        sup_contexto.receive_from_peer({
-            "despesas": dominio_data["despesas"],
-        })
-
-        # Supervisor de contexto executa AgenteContextoOrcamentario
-        contexto_data = sup_contexto.run(counter=counter)
-
-        # Mais comunicação lateral:
-        sup_analitico.receive_from_peer({
-            "contexto_orcamentario": contexto_data["contexto_orcamentario"],
-        })
-
-        # Supervisor analítico executa correlação, anomalias, sintetizador
-        analitico_data = sup_analitico.run(analysis_id, ws_queue, counter)
-
-        # Degradação graciosa: se um supervisor falha, continua com dados parciais
-        # try/except em cada supervisor com ws_queue.put({"type": "error", ...})
-```
+## Uso de LLM — resumo
+
+| Agente/serviço | Usa LLM? | Observação |
+|---|---|---|
+| `AgenteInterpretacaoIntencao` | **Sim** — única chamada, combinando guardrail de escopo + extração | Único ponto de entrada de linguagem natural do sistema |
+| Agentes de domínio (4) | Não | Filtro de subfunção/indicador é hardcoded (decisão de escopo atual, não lacuna definitiva — ver `PLANO_REFATORACAO.md`) |
+| `AgenteCorrelacao` | Não | Estatística determinística (scipy), decisão intencional |
+| `AgenteAnomalias` | Não | Comparação com mediana, decisão intencional |
+| `AgenteContextoOrcamentario` | Não | Variação percentual, decisão intencional |
+| `TextSynthesizer` | **Sim** | Síntese textual final, com fallback estruturado determinístico |
+| `OrquestradorEstrela` / `CoordenadorGeral` / supervisores | Não | Coordenação — ordem de macro-ações fixa por dependência de dados, sem arbitragem real |
+
+Ver `PLANO_REFATORACAO.md` na raiz do repositório para o plano (em andamento, Etapa 1 de 6 concluída) de introduzir uso adicional de LLM nos agentes de domínio (construção de consultas), priorização de achados, verificação pós-síntese e comunicação lateral semântica.

@@ -1,7 +1,8 @@
 """Pacote de agentes multiagente — exporta todos os agentes especializados.
 
 Organização:
-- agents.base: Classe base AgenteBDI
+- agents.base: Classe base AgenteCoALA (framework CoALA)
+- agents.intent: Agente de interpretação de intenção (chat, sem regex)
 - agents.domain: Agentes de domínio (Req 14.1)
 - agents.analytical: Agentes analíticos (Req 14.2) + TextSynthesizer
 - agents.context: Agente de contexto (Req 14.3)
@@ -10,7 +11,10 @@ Organização:
 """
 
 # Base
-from agents.base import AgenteBDI, IntentionFailure
+from agents.base import AgenteCoALA, ActionFailure
+
+# Intent agent (PLANO_REFATORACAO.md, Etapa 1)
+from agents.intent import AgenteInterpretacaoIntencao, AnalysisIntent, IntentResult
 
 # Domain agents (Req 14.1)
 from agents.domain import (
@@ -38,8 +42,12 @@ from agents.hierarchical import CoordenadorGeral
 
 __all__ = [
     # Base
-    "AgenteBDI",
-    "IntentionFailure",
+    "AgenteCoALA",
+    "ActionFailure",
+    # Intent
+    "AgenteInterpretacaoIntencao",
+    "AnalysisIntent",
+    "IntentResult",
     # Domain
     "AgenteVigilanciaEpidemiologica",
     "AgenteSaudeHospitalar",

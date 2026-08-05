@@ -41,6 +41,9 @@ def dispatch_analysis(
     use_llm_judge: bool,
     source_question: str | None = None,
     interpreted_via: str | None = None,
+    intent_summary: str | None = None,
+    use_self_check: bool = False,
+    intent_token_usage: dict[str, Any] | None = None,
 ) -> str:
     """Persiste a análise no Neo4j e dispara as threads star + hierarchical.
 
@@ -49,9 +52,30 @@ def dispatch_analysis(
     opcionais e só preenchidos quando a análise vem do chat — permitem
     auditar depois a qualidade da interpretação de intenção.
 
+    `intent_summary` (opcional, só vem do chat) é o resumo de intenção
+    produzido pelo AgenteInterpretacaoIntencao (Etapa 1 do plano de
+    refatoração) — repassado no dict `params` para as duas arquiteturas,
+    que é a camada de entrada estruturada compartilhada por ambas.
+
+    `use_self_check` (opcional, default False — mesmo padrão de
+    `use_llm_judge`) habilita a verificação pós-síntese via LLM (Etapa 4
+    do plano de refatoração) em ambas as arquiteturas.
+
+    `intent_token_usage` (opcional, só vem do chat) é o snapshot de custo
+    de tokens da interpretação de intenção (Etapa 6) — persistido em
+    `active_results` para ser reportado separado do custo por topologia
+    no payload de `/api/analysis/{id}/quality`.
+
     Requisitos: 9.1, 10.4
     """
     analysis_id = str(uuid.uuid4())
+    logger.info(
+        "Analysis [%s]: disparando análise (periodo=%s-%s, health_params=%s, "
+        "use_llm=%s, use_llm_judge=%s, use_self_check=%s, interpreted_via=%s, "
+        "intent_summary=%r)",
+        analysis_id[:8], date_from, date_to, health_params,
+        use_llm, use_llm_judge, use_self_check, interpreted_via, intent_summary,
+    )
 
     neo4j_client = get_neo4j_client()
     try:
@@ -102,6 +126,8 @@ def dispatch_analysis(
         "health_params": health_params,
         "use_llm": use_llm,
         "use_llm_judge": use_llm_judge,
+        "intent_summary": intent_summary,
+        "use_self_check": use_self_check,
     }
 
     t_star = threading.Thread(
@@ -115,8 +141,15 @@ def dispatch_analysis(
         daemon=True,
     )
     active_threads[analysis_id] = [t_star, t_hier]
-    active_results[analysis_id] = {"use_llm_judge": use_llm_judge, "use_llm": use_llm}
+    active_results[analysis_id] = {
+        "use_llm_judge": use_llm_judge,
+        "use_llm": use_llm,
+        "intent_token_usage": intent_token_usage,
+    }
     t_star.start()
     t_hier.start()
+    logger.info(
+        "Analysis [%s]: threads star e hierarchical iniciadas", analysis_id[:8]
+    )
 
     return analysis_id

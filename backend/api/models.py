@@ -23,6 +23,7 @@ class AnalysisRequest(BaseModel):
     healthParams: HealthParams
     useLlm: bool = True
     useLlmJudge: bool = False
+    useSelfCheck: bool = False
 
 
 class AnalysisResponse(BaseModel):

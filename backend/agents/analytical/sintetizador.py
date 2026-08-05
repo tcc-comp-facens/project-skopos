@@ -1,17 +1,23 @@
 """
 Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (Groq, cadeia de fallback entre modelos)
+Gera texto consolidado de análise via LLM (DeepSeek)
 a partir de correlações, anomalias e contexto orçamentário.
 
 Quando o LLM está indisponível, gera texto estruturado como fallback.
 
-Nota arquitetural: o sintetizador NÃO é um agente BDI. Ele não possui
-autonomia deliberativa — recebe dados prontos e produz texto. A decisão
-de modelá-lo como classe normal (não agente) reflete que ele não percebe
-ambiente mutável, não forma desejos concorrentes, e não escolhe entre
-planos alternativos. O streaming é responsabilidade do caller via
-StreamingAdapter.
+Nota arquitetural (CoALA): o sintetizador NÃO é um agente CoALA — não
+possui working/episodic/semantic/procedural memory própria nem participa
+do ciclo propose→evaluate→select→execute. Ele é, em si, a implementação
+de duas ações do espaço de ações de quem o chama (orquestrador/supervisor):
+`_build_prompt`/`_generate_structured_text` são uma ação de *reasoning*
+interna (transforma dados já resolvidos em texto, sem tocar o ambiente);
+a chamada a `core.llm_client.generate_stream` é uma ação de *grounding*
+externa (invocação de uma ferramenta fora do processo — a API do LLM). A
+decisão de modelá-lo como classe normal (não agente) reflete que ele não
+percebe ambiente mutável, não propõe ações concorrentes, e não escolhe
+entre estratégias alternativas — quem decide isso é o caller. O streaming
+é responsabilidade do caller via StreamingAdapter.
 
 Requisitos: 7.1, 7.2, 7.3, 7.4
 """
@@ -34,8 +40,10 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 class TextSynthesizer:
     """Serviço de geração de texto analítico via LLM com fallback estruturado.
 
-    Não é um agente BDI — é um serviço consumido pelos orquestradores
-    e supervisores. Responsabilidade: dado um conjunto de correlações,
+    Não é um agente CoALA — é um serviço consumido pelos orquestradores
+    e supervisores, que implementa as ações de reasoning (montagem de
+    prompt/texto estruturado) e grounding externo (chamada ao LLM) desses
+    chamadores. Responsabilidade: dado um conjunto de correlações,
     anomalias e contexto orçamentário, produzir texto analítico.
 
     Args:
@@ -52,17 +60,22 @@ class TextSynthesizer:
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
         use_llm: bool = True,
+        enfase: str | None = None,
     ) -> str:
         """Gera texto completo de análise (batch, sem streaming).
 
         Tenta LLM primeiro; se indisponível, retorna fallback estruturado.
 
         Args:
-            correlacoes: Lista de dicts com correlações calculadas.
-            anomalias: Lista de dicts com anomalias detectadas.
+            correlacoes: Lista de dicts com correlações calculadas — se vier
+                da Etapa 3 (`AgentePriorizacaoAnalitica`), já reordenada por
+                relevância; os valores em si nunca são alterados.
+            anomalias: Lista de dicts com anomalias detectadas, idem.
             contexto_orcamentario: Dict com tendências orçamentárias por subfunção.
             data_coverage: Dict com cobertura de dados e gaps detectados.
             use_llm: Se True, tenta usar LLM; se False, usa fallback direto.
+            enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
+                (opcional) — vira uma instrução explícita no prompt.
 
         Returns:
             Texto completo da análise gerada.
@@ -74,9 +87,13 @@ class TextSynthesizer:
         try:
             import core.llm_client as llm_client
 
-            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
+            logger.info(
+                "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
+                self.synthesizer_id, len(prompt),
+            )
             # Consume the stream fully for batch mode
-            text = "".join(llm_client.generate_stream(prompt))
+            text = "".join(llm_client.generate_stream(prompt, caller=self.synthesizer_id))
             if text:
                 logger.info("TextSynthesizer %s: LLM generation complete (%d chars)", self.synthesizer_id, len(text))
                 return text
@@ -86,6 +103,10 @@ class TextSynthesizer:
                 self.synthesizer_id,
             )
 
+        logger.info(
+            "TextSynthesizer %s: usando fallback estruturado (LLM indisponível ou vazio)",
+            self.synthesizer_id,
+        )
         return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
 
     def generate_stream(
@@ -94,6 +115,7 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        enfase: str | None = None,
     ) -> Generator[str, None, None]:
         """Retorna generator de tokens para streaming via LLM.
 
@@ -102,10 +124,13 @@ class TextSynthesizer:
         para que o caller use o fallback.
 
         Args:
-            correlacoes: Lista de dicts com correlações calculadas.
+            correlacoes: Lista de dicts com correlações calculadas (ver
+                nota sobre `enfase`/Etapa 3 em `generate`).
             anomalias: Lista de dicts com anomalias detectadas.
             contexto_orcamentario: Dict com tendências orçamentárias.
             data_coverage: Dict com cobertura de dados e gaps detectados.
+            enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
+                (opcional).
 
         Yields:
             Tokens individuais do LLM.
@@ -115,8 +140,12 @@ class TextSynthesizer:
         """
         import core.llm_client as llm_client
 
-        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage)
-        yield from llm_client.generate_stream(prompt)
+        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
+        logger.info(
+            "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
+            self.synthesizer_id, len(prompt),
+        )
+        yield from llm_client.generate_stream(prompt, caller=self.synthesizer_id)
 
     def generate_fallback(
         self,
@@ -146,11 +175,25 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        enfase: str | None = None,
     ) -> str:
-        """Build the LLM prompt from analysis data (Req 7.4)."""
+        """Build the LLM prompt from analysis data (Req 7.4).
+
+        `enfase` (Etapa 3 — AgentePriorizacaoAnalitica) vira uma instrução
+        explícita de destaque, além da própria ordem de `correlacoes`/
+        `anomalias` (já reordenadas por relevância quando vêm da Etapa 3).
+        """
         coverage = data_coverage or {}
         gaps = coverage.get("gaps", [])
         summary = coverage.get("summary", {})
+
+        enfase_section = ""
+        if enfase:
+            enfase_section = (
+                f"\nÊNFASE DESTA ANÁLISE: {enfase}\n"
+                "Dê destaque especial a esse aspecto no texto (ex.: mencione-o "
+                "primeiro), sem deixar de cobrir os demais achados relevantes.\n"
+            )
 
         coverage_section = ""
         if gaps:
@@ -188,7 +231,8 @@ class TextSynthesizer:
             "  302 = investimento em hospitais e atendimentos especializados\n"
             "  303 = investimento em medicamentos e insumos\n"
             "  305 = investimento em prevenção de epidemias e vigilância sanitária\n"
-            "- Diga o que os números significam para a vida das pessoas\n\n"
+            "- Diga o que os números significam para a vida das pessoas\n"
+            f"{enfase_section}\n"
             "DADOS ANALISADOS:\n\n"
             "Relações encontradas entre gastos e resultados de saúde:\n"
             f"{correlacoes}\n\n"
