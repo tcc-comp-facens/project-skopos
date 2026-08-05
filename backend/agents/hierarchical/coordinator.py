@@ -225,9 +225,11 @@ class CoordenadorGeral(AgenteCoALA):
         analysis_id = self.working_memory["analysis_id"]
         ws_queue = self.working_memory["_ws_queue"]
         use_llm = self.working_memory.get("use_llm", True)
+        use_self_check = self.working_memory.get("use_self_check", False)
         try:
             analitico_data = sup_analitico.run(
-                analysis_id=analysis_id, ws_queue=ws_queue, use_llm=use_llm
+                analysis_id=analysis_id, ws_queue=ws_queue, use_llm=use_llm,
+                use_self_check=use_self_check,
             )
             # Usa o timestamp de fim da parte determinística (exclui tempo
             # do sintetizador/LLM) — mais preciso que mc.stop() aqui.
@@ -318,10 +320,11 @@ class CoordenadorGeral(AgenteCoALA):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     m = agent_mc.collect()
-                    # Exclui sintetizador (serviço LLM, não agente CoALA) e
-                    # priorizacao (Etapa 3 — roda depois de capturar_wallclock,
-                    # inclui 1 chamada LLM, mesma lógica de exclusão)
-                    if m.get("agentType") in ("sintetizador", "priorizacao"):
+                    # Exclui sintetizador (serviço LLM, não agente CoALA),
+                    # priorizacao (Etapa 3) e verificacao (Etapa 4) — todos
+                    # rodam depois de capturar_wallclock e incluem chamada
+                    # LLM, mesma lógica de exclusão.
+                    if m.get("agentType") in ("sintetizador", "priorizacao", "verificacao"):
                         continue
                     agent_metrics.append({
                         "agentName": m["agentType"],
@@ -338,11 +341,13 @@ class CoordenadorGeral(AgenteCoALA):
         coord_end = time.time()
         wall_clock_ms_raw = round((coord_end - coord_start) * 1000, 2)
 
-        # Subtrair tempo do sintetizador e da priorização (Etapa 3) —
-        # ambos os collectors do SupervisorAnalitico, ambos incluem
-        # chamada LLM e rodam depois de capturar_wallclock.
+        # Subtrair tempo do sintetizador, da priorização (Etapa 3) e da
+        # verificação pós-síntese (Etapa 4) — todos os collectors do
+        # SupervisorAnalitico, todos incluem chamada LLM e rodam depois de
+        # capturar_wallclock.
         sint_time_ms = 0.0
         prior_time_ms = 0.0
+        verif_time_ms = 0.0
         for agent_mc in getattr(sup_analitico, "_collectors", []):
             try:
                 m = agent_mc.collect()
@@ -350,10 +355,14 @@ class CoordenadorGeral(AgenteCoALA):
                     sint_time_ms = m.get("executionTimeMs", 0)
                 elif m.get("agentType") == "priorizacao":
                     prior_time_ms = m.get("executionTimeMs", 0)
+                elif m.get("agentType") == "verificacao":
+                    verif_time_ms = m.get("executionTimeMs", 0)
             except Exception:
                 pass
 
-        wall_clock_ms = round(max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms), 2)
+        wall_clock_ms = round(
+            max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms - verif_time_ms), 2
+        )
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({
@@ -423,6 +432,7 @@ class CoordenadorGeral(AgenteCoALA):
             "date_to": params.get("date_to"),
             "health_params": params.get("health_params", []),
             "use_llm": params.get("use_llm", True),
+            "use_self_check": params.get("use_self_check", False),
             "intent_summary": params.get("intent_summary"),
             "_ws_queue": ws_queue,
             "_sup_dominio": SupervisorDominio(sup_dominio_id, self.neo4j_client),

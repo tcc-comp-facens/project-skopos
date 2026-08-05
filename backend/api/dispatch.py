@@ -42,6 +42,7 @@ def dispatch_analysis(
     source_question: str | None = None,
     interpreted_via: str | None = None,
     intent_summary: str | None = None,
+    use_self_check: bool = False,
 ) -> str:
     """Persiste a análise no Neo4j e dispara as threads star + hierarchical.
 
@@ -55,14 +56,19 @@ def dispatch_analysis(
     refatoração) — repassado no dict `params` para as duas arquiteturas,
     que é a camada de entrada estruturada compartilhada por ambas.
 
+    `use_self_check` (opcional, default False — mesmo padrão de
+    `use_llm_judge`) habilita a verificação pós-síntese via LLM (Etapa 4
+    do plano de refatoração) em ambas as arquiteturas.
+
     Requisitos: 9.1, 10.4
     """
     analysis_id = str(uuid.uuid4())
     logger.info(
         "Analysis [%s]: disparando análise (periodo=%s-%s, health_params=%s, "
-        "use_llm=%s, use_llm_judge=%s, interpreted_via=%s, intent_summary=%r)",
+        "use_llm=%s, use_llm_judge=%s, use_self_check=%s, interpreted_via=%s, "
+        "intent_summary=%r)",
         analysis_id[:8], date_from, date_to, health_params,
-        use_llm, use_llm_judge, interpreted_via, intent_summary,
+        use_llm, use_llm_judge, use_self_check, interpreted_via, intent_summary,
     )
 
     neo4j_client = get_neo4j_client()
@@ -115,6 +121,7 @@ def dispatch_analysis(
         "use_llm": use_llm,
         "use_llm_judge": use_llm_judge,
         "intent_summary": intent_summary,
+        "use_self_check": use_self_check,
     }
 
     t_star = threading.Thread(

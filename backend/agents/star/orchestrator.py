@@ -51,6 +51,7 @@ from agents.analytical.anomalias import AgenteAnomalias
 from agents.analytical.priorizacao import AgentePriorizacaoAnalitica
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
+from core import claim_verifier
 from core.metrics import MetricsCollector
 from core.streaming_adapter import StreamingAdapter
 
@@ -115,6 +116,7 @@ class OrquestradorEstrela(AgenteCoALA):
             "capturar_wallclock": [self._act_capturar_wallclock],
             "priorizar_achados": [self._act_priorizar_achados],
             "sintetizar_texto": [self._act_sintetizar_texto],
+            "verificar_afirmacoes": [self._act_verificar_afirmacoes],
             "persistir_metricas": [self._act_persistir_metricas],
         }
 
@@ -166,6 +168,7 @@ class OrquestradorEstrela(AgenteCoALA):
         actions.append({"goal": "capturar_wallclock"})
         actions.append({"goal": "priorizar_achados"})
         actions.append({"goal": "sintetizar_texto"})
+        actions.append({"goal": "verificar_afirmacoes"})
         actions.append({"goal": "persistir_metricas"})
         return actions
 
@@ -476,6 +479,65 @@ class OrquestradorEstrela(AgenteCoALA):
             self.working_memory.setdefault("_collectors", []).append((sint_id, "sintetizador", mc))
             raise ActionFailure(action, str(exc)) from exc
 
+    def _act_verificar_afirmacoes(self, action: dict) -> None:
+        """Ação externa (reasoning + grounding): self-check pós-síntese (Etapa 4).
+
+        Opcional (flag `use_self_check`, default False) e só roda quando
+        `use_llm=True` — não faz sentido verificar um texto gerado pelo
+        fallback determinístico contra os próprios dados que o originaram
+        (mesma regra já aplicada ao LLM Judge/Q2+). Falha aqui nunca
+        propaga: se a verificação não rodar, o texto sintetizado permanece
+        como está (comportamento pré-Etapa-4).
+        """
+        if not self.working_memory.get("use_self_check", False):
+            return
+        if not self.working_memory.get("use_llm", True):
+            return
+
+        texto_analise = self.working_memory.get("texto_analise", "")
+        if not texto_analise:
+            return
+
+        verif_id = f"star-verificacao-{uuid.uuid4().hex[:8]}"
+        logger.info(
+            "[%s] OrquestradorEstrela: iniciando self-check pós-síntese (verif_id=%s)",
+            self.agent_id, verif_id,
+        )
+        mc = MetricsCollector(verif_id, "verificacao")
+        mc.start()
+        try:
+            correlacoes = self.working_memory.get("correlacoes", [])
+            anomalias = self.working_memory.get("anomalias", [])
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
+
+            resultado = claim_verifier.self_check(
+                texto_analise, correlacoes, anomalias, contexto_orcamentario, caller=verif_id,
+            )
+            mc.stop()
+            self.working_memory["self_check"] = resultado
+            if resultado["revisado"]:
+                self.working_memory["texto_analise"] = resultado["texto_final"]
+                nao_suportadas = sum(1 for c in resultado["claims"] if not c["suportado"])
+                logger.info(
+                    "[%s] OrquestradorEstrela: self-check corrigiu o texto "
+                    "(%d/%d afirmações não suportadas)",
+                    self.agent_id, nao_suportadas, len(resultado["claims"]),
+                )
+            else:
+                logger.info(
+                    "[%s] OrquestradorEstrela: self-check concluído sem correções "
+                    "(%d afirmações verificadas)",
+                    self.agent_id, len(resultado["claims"]),
+                )
+            self.working_memory.setdefault("_collectors", []).append((verif_id, "verificacao", mc))
+        except Exception as exc:
+            mc.stop()
+            logger.warning(
+                "[%s] OrquestradorEstrela: self-check falhou (%s) — texto original mantido",
+                self.agent_id, exc,
+            )
+            self.working_memory.setdefault("_collectors", []).append((verif_id, "verificacao", mc))
+
     def _act_persistir_metricas(self, action: dict) -> None:
         """Ação externa: persiste métricas de cada agente e emite evento `metric` (Req 9.7, 11.2)."""
         try:
@@ -498,10 +560,11 @@ class OrquestradorEstrela(AgenteCoALA):
             agent_metrics = []
             workers_time_ms = 0.0
             for _, agent_type, mc in collectors:
-                # Exclui sintetizador (serviço LLM, não agente CoALA) e
-                # priorizacao (Etapa 3 — roda depois de capturar_wallclock,
-                # inclui 1 chamada LLM, mesma lógica de exclusão)
-                if agent_type in ("sintetizador", "priorizacao"):
+                # Exclui sintetizador (serviço LLM, não agente CoALA),
+                # priorizacao (Etapa 3) e verificacao (Etapa 4) — todos
+                # rodam depois de capturar_wallclock e incluem chamada LLM,
+                # mesma lógica de exclusão para não distorcer o wall-clock.
+                if agent_type in ("sintetizador", "priorizacao", "verificacao"):
                     continue
                 try:
                     m = mc.collect()
@@ -584,6 +647,7 @@ class OrquestradorEstrela(AgenteCoALA):
             "date_to": params.get("date_to"),
             "health_params": params.get("health_params", []),
             "use_llm": params.get("use_llm", True),
+            "use_self_check": params.get("use_self_check", False),
             "intent_summary": params.get("intent_summary"),
             "_ws_queue": ws_queue,
             "_orch_start": time.time(),
@@ -603,6 +667,7 @@ class OrquestradorEstrela(AgenteCoALA):
             "anomalias": self.working_memory.get("anomalias", []),
             "texto_analise": self.working_memory.get("texto_analise", ""),
             "data_coverage": self.working_memory.get("data_coverage", {}),
+            "self_check": self.working_memory.get("self_check"),
         }
 
         self.working_memory["result"] = result

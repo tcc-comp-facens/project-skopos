@@ -52,6 +52,7 @@ async def create_analysis(req: AnalysisRequest):
         health_params=health_list,
         use_llm=req.useLlm,
         use_llm_judge=req.useLlmJudge,
+        use_self_check=req.useSelfCheck,
         interpreted_via="form",
     )
 

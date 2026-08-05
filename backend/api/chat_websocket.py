@@ -90,6 +90,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
             text = str(payload.get("text", ""))
             use_llm = bool(payload.get("useLlm", True))
             use_llm_judge = bool(payload.get("useLlmJudge", False))
+            use_self_check = bool(payload.get("useSelfCheck", False))
 
             await websocket.send_json({"type": "user_ack", "payload": ""})
 
@@ -134,6 +135,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                     source_question=text,
                     interpreted_via=result.interpreted_via,
                     interpreter=interpreter,
+                    use_self_check=use_self_check,
                 )
 
                 await websocket.send_json({

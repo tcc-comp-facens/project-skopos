@@ -25,6 +25,7 @@ def run_chat_analysis(
     source_question: str,
     interpreted_via: str,
     interpreter: AgenteInterpretacaoIntencao,
+    use_self_check: bool = False,
 ) -> tuple[str, str]:
     """Dispara a análise a partir de parâmetros extraídos do chat.
 
@@ -39,6 +40,8 @@ def run_chat_analysis(
         interpreted_via: sempre "llm" — mantido para compatibilidade do
             registro de auditoria em Neo4j (não há mais caminho "regex").
         interpreter: Instância usada para gerar o texto de confirmação.
+        use_self_check: Se True, habilita a verificação pós-síntese via
+            LLM (Etapa 4 do plano de refatoração). Default False.
 
     Returns:
         Tupla (analysis_id, texto_de_confirmacao).
@@ -57,6 +60,7 @@ def run_chat_analysis(
         source_question=source_question,
         interpreted_via=interpreted_via,
         intent_summary=params.intent_summary,
+        use_self_check=use_self_check,
     )
     confirmation = interpreter.pretty_print(params)
     logger.info("ChatRunner: análise [%s] despachada a partir do chat", analysis_id[:8])

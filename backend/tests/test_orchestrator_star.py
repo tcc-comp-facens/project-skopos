@@ -127,3 +127,103 @@ class TestErrorEventsOnFailure:
             if event.get("type") == "error":
                 errors.append(event)
         assert len(errors) >= 1
+
+
+class TestSelfCheckWiring:
+    """Etapa 4 — verificação pós-síntese: gating por flag e por use_llm."""
+
+    def test_disabled_by_default_no_call(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": False,
+        }
+        with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
+            result = orchestrator.run("analysis-sc-1", params, ws_queue)
+        mock_self_check.assert_not_called()
+        assert result.get("self_check") is None
+
+    def test_skipped_when_use_llm_false_even_if_flag_on(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": False, "use_self_check": True,
+        }
+        with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
+            orchestrator.run("analysis-sc-2", params, ws_queue)
+        mock_self_check.assert_not_called()
+
+    def test_runs_and_revises_text_when_enabled(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto ", "gerado"])
+            with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
+                mock_self_check.return_value = {
+                    "texto_final": "texto corrigido",
+                    "claims": [{"claim": "x", "suportado": False, "justificativa": "y"}],
+                    "revisado": True,
+                    "verificado": True,
+                }
+                result = orchestrator.run("analysis-sc-3", params, ws_queue)
+
+        mock_self_check.assert_called_once()
+        assert result["texto_analise"] == "texto corrigido"
+        assert result["self_check"]["revisado"] is True
+
+    def test_no_correction_keeps_synthesized_text(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto original"])
+            with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
+                mock_self_check.return_value = {
+                    "texto_final": "texto original", "claims": [], "revisado": False, "verificado": True,
+                }
+                result = orchestrator.run("analysis-sc-4", params, ws_queue)
+
+        assert result["texto_analise"] == "texto original"
+        assert result["self_check"]["revisado"] is False
+
+    def test_verificacao_excluded_from_agent_metrics(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto"])
+            with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
+                mock_self_check.return_value = {
+                    "texto_final": "texto", "claims": [], "revisado": False, "verificado": True,
+                }
+                orchestrator.run("analysis-sc-5", params, ws_queue)
+
+        metric_events = []
+        while not ws_queue.empty():
+            event = ws_queue.get()
+            if event.get("type") == "metric":
+                metric_events.append(event)
+        assert metric_events
+        agent_names = {m["agentName"] for m in metric_events[0]["payload"]["agentMetrics"]}
+        assert "verificacao" not in agent_names
+
+    def test_self_check_failure_does_not_break_pipeline(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2019, "date_to": 2021,
+            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto original"])
+            with patch(
+                "agents.star.orchestrator.claim_verifier.self_check",
+                side_effect=Exception("LLM indisponível"),
+            ):
+                result = orchestrator.run("analysis-sc-6", params, ws_queue)
+
+        assert result["texto_analise"] == "texto original"

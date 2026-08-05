@@ -42,6 +42,7 @@ from agents.analytical.anomalias import AgenteAnomalias
 from agents.analytical.priorizacao import AgentePriorizacaoAnalitica
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
+from core import claim_verifier
 from core.metrics import MetricsCollector
 from core.streaming_adapter import StreamingAdapter
 
@@ -299,6 +300,7 @@ class SupervisorAnalitico(AgenteCoALA):
             "capturar_wallclock": [self._act_capturar_wallclock],
             "priorizar_achados": [self._act_priorizar_achados],
             "sintetizar_texto": [self._act_sintetizar_texto],
+            "verificar_afirmacoes": [self._act_verificar_afirmacoes],
         }
         self._collectors: list[MetricsCollector] = []
         # Marca o fim da parte determinística (antes do sintetizador/LLM) —
@@ -331,6 +333,7 @@ class SupervisorAnalitico(AgenteCoALA):
             {"goal": "capturar_wallclock"},
             {"goal": "priorizar_achados"},
             {"goal": "sintetizar_texto"},
+            {"goal": "verificar_afirmacoes"},
         ]
 
     # -- Comunicação lateral (Reqs 10.5, 10.6) ------------------------------
@@ -553,6 +556,58 @@ class SupervisorAnalitico(AgenteCoALA):
             self._collectors.append(mc)
             raise ActionFailure(action, str(exc)) from exc
 
+    def _act_verificar_afirmacoes(self, action: dict) -> None:
+        """Ação externa (reasoning + grounding): self-check pós-síntese (Etapa 4).
+
+        Mesmo mecanismo/regras do OrquestradorEstrela (ver docstring
+        equivalente lá): opcional via `use_self_check`, só roda com
+        `use_llm=True`, nunca propaga falha.
+        """
+        if not self.working_memory.get("use_self_check", False):
+            return
+        if not self.working_memory.get("use_llm", True):
+            return
+
+        texto_analise = self.working_memory.get("texto_analise", "")
+        if not texto_analise:
+            return
+
+        verif_id = f"hier-verificacao-{uuid.uuid4().hex[:8]}"
+        mc = MetricsCollector(verif_id, "verificacao")
+        mc.start()
+        try:
+            correlacoes = self.working_memory.get("correlacoes", [])
+            anomalias = self.working_memory.get("anomalias", [])
+            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
+
+            resultado = claim_verifier.self_check(
+                texto_analise, correlacoes, anomalias, contexto_orcamentario, caller=verif_id,
+            )
+            mc.stop()
+            self.working_memory["self_check"] = resultado
+            if resultado["revisado"]:
+                self.working_memory["texto_analise"] = resultado["texto_final"]
+                nao_suportadas = sum(1 for c in resultado["claims"] if not c["suportado"])
+                logger.info(
+                    "SupervisorAnalitico %s: self-check corrigiu o texto "
+                    "(%d/%d afirmações não suportadas)",
+                    self.agent_id, nao_suportadas, len(resultado["claims"]),
+                )
+            else:
+                logger.info(
+                    "SupervisorAnalitico %s: self-check concluído sem correções "
+                    "(%d afirmações verificadas)",
+                    self.agent_id, len(resultado["claims"]),
+                )
+            self._collectors.append(mc)
+        except Exception as exc:
+            mc.stop()
+            logger.warning(
+                "SupervisorAnalitico %s: self-check falhou (%s) — texto original mantido",
+                self.agent_id, exc,
+            )
+            self._collectors.append(mc)
+
     # -- Interface pública chamada pelo CoordenadorGeral -------------------
 
     def run(
@@ -560,6 +615,7 @@ class SupervisorAnalitico(AgenteCoALA):
         analysis_id: str,
         ws_queue: Queue,
         use_llm: bool = True,
+        use_self_check: bool = False,
     ) -> dict[str, Any]:
         """Executa o pipeline analítico via 3 agentes subordinados.
 
@@ -571,6 +627,8 @@ class SupervisorAnalitico(AgenteCoALA):
             analysis_id: UUID da análise em andamento.
             ws_queue: Fila para streaming de eventos WebSocket.
             use_llm: Se True, tenta gerar texto via LLM antes do fallback.
+            use_self_check: Se True (e use_llm=True), roda a verificação
+                pós-síntese (Etapa 4) sobre o texto gerado.
 
         Returns:
             Dicionário com "correlacoes", "anomalias", "texto_analise",
@@ -582,6 +640,7 @@ class SupervisorAnalitico(AgenteCoALA):
             "analysis_id": analysis_id,
             "_ws_queue": ws_queue,
             "use_llm": use_llm,
+            "use_self_check": use_self_check,
         })
 
         self.run_coala_cycle()
@@ -592,6 +651,7 @@ class SupervisorAnalitico(AgenteCoALA):
             "texto_analise": self.working_memory.get("texto_analise", ""),
             "data_coverage": self.working_memory.get("data_coverage", {}),
             "dados_cruzados": self.working_memory.get("dados_cruzados", []),
+            "self_check": self.working_memory.get("self_check"),
         }
 
         self.working_memory["aggregated"] = result
