@@ -2,20 +2,23 @@
 
 > Documento de planejamento, derivado do diagnóstico repositório-vs-literatura (ver histórico da conversa) e da leitura do survey `s44336-024-00009-2.pdf` (Li et al., 2024) + pesquisa acadêmica complementar. Também serve como checklist de execução — atualizado conforme cada etapa é implementada.
 
-## Status atual (última atualização: sessão que implementou a Etapa 2)
+## Status atual (última atualização: sessão que implementou a Etapa 5)
 
 | Etapa | Status |
 |---|---|
-| 1 — Agente de Interpretação de Intenção | ✅ **Concluída** — código + testes commitados e pushados (`5a828ff`) |
-| 2 — Agentes de busca com LLM (query planning) | 🟡 **Implementada, não commitada** — código + 29 testes novos passam isolados (131 testes coletados no total); suíte completa ainda não re-executada nem commitada |
-| 3 — Priorização de achados via LLM | ⬜ Não iniciada |
-| 4 — Verificação pós-síntese (self-check) | ⬜ Não iniciada |
-| 5 — Comunicação lateral semântica (hierárquica) | ⬜ Não iniciada |
+| 1 — Agente de Interpretação de Intenção | ✅ **Concluída** — commitada e pushada (`19473b0`) |
+| 2 — Agentes de busca com LLM (query planning) | ✅ **Concluída** — commitada (`f1c7015`) |
+| 3 — Priorização de achados via LLM | ✅ **Concluída** — commitada (`7b4493b`) |
+| 4 — Verificação pós-síntese (self-check) | ✅ **Concluída** — commitada (`c76735d`) |
+| 5 — Comunicação lateral semântica (hierárquica) | 🟡 **Implementada, não commitada** — código + 17 testes novos passam (190 testes coletados no total, suíte completa verde) |
 | 6 — Novas métricas de avaliação | ⬜ Não iniciada |
 
 Desvios entre o planejado e o implementado, registrados para não gerar confusão em quem ler este arquivo depois:
 - **Etapa 1:** o campo estruturado ficou com o nome `AnalysisIntent` em vez de `AnalysisRequest` (citado abaixo) — `AnalysisRequest` já era o nome do modelo Pydantic do corpo do `POST /api/analysis` em `api/models.py`, então usar o mesmo nome para o objeto do agente de intenção colidiria conceitualmente. `IntentResult` manteve o nome original (não foi rebatizado). A decisão de custo (1 chamada LLM combinando classificação de escopo + extração) foi a escolha efetivamente implementada, não as duas chamadas separadas do padrão "topical rail" mais robusto.
 - **Etapa 2:** a lógica compartilhada (cache, flag, chamada LLM, parsing) ficou centralizada em um módulo novo, `backend/agents/domain/query_planning.py`, usado pelos 4 agentes de domínio — não estava explicitamente nomeado no plano original, mas segue exatamente o design descrito (fast-path, cache, flag `USE_LLM_QUERY_PLANNING`). A chave de cache é `(agent_type, intent_summary, tuple(health_params))` em vez de um hash — equivalente na prática.
+- **Etapa 3:** durante a implementação, identifiquei antes de escrever os testes que `evaluate_and_select` tentava a chamada LLM incondicionalmente, ignorando a flag `use_llm` da análise — corrigido adicionando o gate no início do método (quando `use_llm=False`, usa só o score determinístico, nunca chama o LLM). Threading de `use_llm` até `prioritize()` e os dois call sites (orquestrador/supervisor) foi consequência direta dessa correção.
+- **Etapa 4:** implementada como planejado, sem desvios de fundo. `self_check()` (função de orquestração dos 3 passos) não estava nomeada explicitamente no plano original, mas é a interface pública natural para o pipeline chamar — mantém `extract_claims`/`verify_claims` reutilizáveis isoladamente pela Etapa 6, como previsto.
+- **Etapa 5:** (a) o resumo de `SupervisorDominio` é gerado **uma única vez** (1 chamada LLM) e reaproveitado nas duas comunicações laterais que partem dele (`Dominio→Analitico` e, via `_dominio_data`, potencialmente `Dominio→Contexto`) — mais barato que gerar um resumo por hop, sem perda de conteúdo. (b) O resumo de domínio **não é** de fato repassado no hop `Dominio→Contexto`: `SupervisorContexto` só consome despesas brutas (seu cálculo é puramente determinístico), e o critério de aceite do plano só exige que `SupervisorAnalitico` receba os resumos upstream — escopo reduzido intencionalmente para não gerar um repasse sem consumidor. (c) O insumo opcional na priorização (item 3 da Etapa 5) foi implementado concatenando os resumos ao `intent_summary` existente (`SupervisorAnalitico._compor_intent_summary`), sem alterar a assinatura de `AgentePriorizacaoAnalitica.prioritize` — não como um parâmetro novo separado.
 
 ---
 
@@ -46,10 +49,10 @@ Ordem de execução obrigatória: **1 → 2 → 3 → 4 → 5 → 6**, com a Eta
 | Etapa | Nome | Depende de | Esforço estimado | Status |
 |---|---|---|---|---|
 | 1 | Agente de Interpretação de Intenção (substitui totalmente o regex; guardrail de escopo) | — | Médio | ✅ Concluída |
-| 2 | Agentes de busca com LLM (interpretação + construção de queries) | Etapa 1 | Médio | 🟡 Implementada, não commitada |
-| 3 | Priorização de achados via LLM (loop CoALA real) | — (recomenda-se após 1–2) | Médio | ⬜ Não iniciada |
-| 4 | Verificação pós-síntese (self-check) | Etapa 3 | Médio | ⬜ Não iniciada |
-| 5 | Comunicação lateral semântica (hierárquica) | — (independente) | Médio | ⬜ Não iniciada |
+| 2 | Agentes de busca com LLM (interpretação + construção de queries) | Etapa 1 | Médio | ✅ Concluída |
+| 3 | Priorização de achados via LLM (loop CoALA real) | — (recomenda-se após 1–2) | Médio | ✅ Concluída |
+| 4 | Verificação pós-síntese (self-check) | Etapa 3 | Médio | ✅ Concluída |
+| 5 | Comunicação lateral semântica (hierárquica) | — (independente) | Médio | 🟡 Implementada, não commitada |
 | 6 | Novas métricas de avaliação | Etapas 1, 2, 3, 4, 5 | Alto | ⬜ Não iniciada |
 
 ---
@@ -85,7 +88,7 @@ Regex cobre um vocabulário fechado (a lista `HEALTH_ALIASES` precisava ser mant
 
 ---
 
-### Etapa 2 — Agentes de busca com LLM (interpretação + construção de queries) 🟡 Implementada, não commitada
+### Etapa 2 — Agentes de busca com LLM (interpretação + construção de queries) ✅ Concluída
 
 **O que será feito:**
 - [x] Adicionar uma nova ação (`goal: "planejar_consulta"`) à `procedural_memory` de cada um dos 4 agentes de domínio (`AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade`), executada **antes** de `consultar_despesas`/`consultar_indicadores`.
@@ -107,60 +110,60 @@ A base de dados de hoje tem mapeamento 1:1 fixo (subfunção → tipo de indicad
 
 **Dependências:** Etapa 1 completa — os agentes de domínio precisam do `AnalysisIntent` estruturado (incluindo `intent_summary`) como entrada do plano de consulta; sem ele não há o que interpretar além do que o regex antigo já entregava. `OrquestradorEstrela._act_consultar_dominio` e `SupervisorDominio._act_consultar_dominio` foram atualizados para repassar `intent_summary`/`health_params` (lidos da própria working memory) para `agent.query(...)`.
 
-**Critério de aceite:** com a flag desligada (padrão), o comportamento e o custo de LLM são idênticos ao sistema pré-Etapa-2; com a flag ligada e um cenário de teste simulando um novo indicador com nome ambíguo, o agente decide corretamente o filtro via LLM e o registra em `episodic_memory`. **Verificado** — 29 testes novos (`test_query_planning.py` + extensão de `test_domain_agents.py`) passam isolados, incluindo demonstração ao vivo via log (`--log-cli-level=INFO`) de fast-path, chamada LLM real (mockada), cache entre instâncias, e fallback em falha do LLM. **Pendente:** rodar a suíte completa (131 testes) antes de considerar a etapa fechada — as mudanças em `orchestrator.py`/`supervisors.py` (repasse de `intent_summary`/`health_params`) não têm teste dedicado à Etapa 2 e só são exercitadas indiretamente por `test_orchestrator_star.py`.
+**Critério de aceite:** com a flag desligada (padrão), o comportamento e o custo de LLM são idênticos ao sistema pré-Etapa-2; com a flag ligada e um cenário de teste simulando um novo indicador com nome ambíguo, o agente decide corretamente o filtro via LLM e o registra em `episodic_memory`. **Verificado** — 29 testes novos (`test_query_planning.py` + extensão de `test_domain_agents.py`), suíte completa re-executada e verde depois, commitada em `f1c7015`.
 
 ---
 
-### Etapa 3 — Priorização de achados via LLM (loop CoALA real)
+### Etapa 3 — Priorização de achados via LLM (loop CoALA real) ✅ Concluída
 
 **O que será feito:**
-- [ ] Criar um novo agente CoALA — `AgentePriorizacaoAnalitica` (`backend/agents/analytical/priorizacao.py`) — que recebe `correlacoes`, `anomalias`, `contexto_orcamentario` já calculados e o `intent_summary` (Etapa 1) e decide **quais destacar e em que ordem** antes de montar o prompt do `TextSynthesizer`.
-- [ ] Implementar `propose_actions` para gerar **candidatos de ênfase narrativa** reais (ex.: "focar em ineficiências", "focar em tendência orçamentária", "focar em achados estatisticamente mais fortes", "focar no que o usuário pediu explicitamente via `intent_summary`") — isto é o primeiro lugar do sistema onde `propose_actions` gera mais de um candidato de verdade.
-- [ ] Implementar `evaluate_and_select` combinando (a) um score determinístico simples (ex.: magnitude do Spearman, nº de anomalias por tipo) com (b) uma chamada LLM que escolhe/pondera entre os candidatos propostos, informada pelo `intent_summary` — isto é o primeiro uso real de `evaluate_and_select` no sistema (hoje é passthrough em todo agente).
-- [ ] `TextSynthesizer._build_prompt` passa a receber a saída priorizada (ordem/ênfase) em vez do dump bruto de todas as correlações e anomalias sem hierarquia.
-- [ ] Integrar a chamada no pipeline: `OrquestradorEstrela.run()` e `SupervisorAnalitico.run()` (hierárquica) precisam de fato invocar `run_coala_cycle()` deste novo agente — hoje nenhum orquestrador invoca o ciclo CoALA em nada além dos agentes-folha.
-- [ ] **Importante — não deve afetar Q1:** a saída de `AgenteCorrelacao`/`AgenteAnomalias` (os dados brutos usados na métrica de consistência determinística Q1) não deve ser alterada por este agente — ele só decide *o que aparece primeiro/com mais destaque no texto*, nunca recalcula ou filtra os dados analíticos em si.
+- [x] Criar um novo agente CoALA — `AgentePriorizacaoAnalitica` (`backend/agents/analytical/priorizacao.py`) — que recebe `correlacoes`, `anomalias`, `contexto_orcamentario` já calculados e o `intent_summary` (Etapa 1) e decide **quais destacar e em que ordem** antes de montar o prompt do `TextSynthesizer`.
+- [x] Implementar `propose_actions` para gerar **candidatos de ênfase narrativa** reais (ex.: "focar em ineficiências", "focar em tendência orçamentária", "focar em achados estatisticamente mais fortes", "focar no que o usuário pediu explicitamente via `intent_summary`") — isto é o primeiro lugar do sistema onde `propose_actions` gera mais de um candidato de verdade.
+- [x] Implementar `evaluate_and_select` combinando (a) um score determinístico simples (ex.: magnitude do Spearman, nº de anomalias por tipo) com (b) uma chamada LLM que escolhe/pondera entre os candidatos propostos, informada pelo `intent_summary` — isto é o primeiro uso real de `evaluate_and_select` no sistema (hoje é passthrough em todo agente).
+- [x] `TextSynthesizer._build_prompt` passa a receber a saída priorizada (ordem/ênfase) em vez do dump bruto de todas as correlações e anomalias sem hierarquia.
+- [x] Integrar a chamada no pipeline: `OrquestradorEstrela.run()` e `SupervisorAnalitico.run()` (hierárquica) precisam de fato invocar `run_coala_cycle()` deste novo agente — hoje nenhum orquestrador invoca o ciclo CoALA em nada além dos agentes-folha.
+- [x] **Importante — não deve afetar Q1:** a saída de `AgenteCorrelacao`/`AgenteAnomalias` (os dados brutos usados na métrica de consistência determinística Q1) não deve ser alterada por este agente — ele só decide *o que aparece primeiro/com mais destaque no texto*, nunca recalcula ou filtra os dados analíticos em si.
 
 **Por que essa mudança está sendo feita (racional técnico):**
 Hoje o sintetizador recebe todos os achados sem hierarquia e delega implicitamente ao prompt a decisão de "o que é mais importante" — decisão que fica invisível, não testável e não auditável. Extrair essa decisão para um agente CoALA explícito torna o processo de priorização uma etapa observável (aparece em `episodic_memory`, pode ser logada, pode ser testada) e é um dos únicos lugares do sistema onde existem, de fato, planos alternativos concorrentes que fazem sentido avaliar via LLM — exatamente o caso de uso que CoALA descreve para `propose→evaluate→select`. Ver justificativa D2 na Seção 3.
 
 **Dependências:** Nenhuma dependência técnica rígida das Etapas 1–2, mas recomenda-se executar depois, tanto para reaproveitar `intent_summary` (Etapa 1) quanto para não editar os mesmos arquivos de orquestração em paralelo com a Etapa 2.
 
-**Critério de aceite:** dado o mesmo conjunto de correlações/anomalias, o texto final muda de ênfase (ordem/qual achado é discutido primeiro) quando os dados de entrada mudam de magnitude relativa ou quando o `intent_summary` muda — testável com fixtures onde se varia artificialmente qual anomalia é "mais extrema" ou o que o usuário pediu.
+**Critério de aceite:** dado o mesmo conjunto de correlações/anomalias, o texto final muda de ênfase (ordem/qual achado é discutido primeiro) quando os dados de entrada mudam de magnitude relativa ou quando o `intent_summary` muda — testável com fixtures onde se varia artificialmente qual anomalia é "mais extrema" ou o que o usuário pediu. **Verificado** — 16 testes dedicados em `test_priorizacao.py`, todos passando, commitado em `7b4493b`.
 
 ---
 
-### Etapa 4 — Verificação pós-síntese (self-check)
+### Etapa 4 — Verificação pós-síntese (self-check) ✅ Concluída
 
 **O que será feito:**
-- [ ] Criar `backend/core/claim_verifier.py` com duas funções: `extract_claims(texto: str) -> list[str]` (via LLM, extrai afirmações factuais discretas do texto gerado) e `verify_claims(claims: list[str], dados: dict) -> list[dict]` (via LLM, para cada claim retorna `{claim, suportado: bool, justificativa}` comparando contra `correlacoes`/`anomalias`/`contexto_orcamentario` brutos).
-- [ ] No pipeline de síntese (`TextSynthesizer.generate`/`generate_stream`, chamado a partir de `OrquestradorEstrela`/`SupervisorAnalitico`), adicionar uma passada opcional de verificação **após** o texto ser gerado: se `verify_claims` encontrar afirmações não suportadas, uma única chamada adicional ao LLM pede uma revisão focada só nessas afirmações (padrão Chain-of-Verification — CoVe). Sem loop: no máximo 1 correção por análise.
-- [ ] Tornar esse passo opcional via flag (mesmo padrão de `use_llm_judge` já existente), para não forçar custo extra em toda análise.
-- [ ] Reutilizar `claim_verifier.py` na Etapa 6 para reformular a métrica Q2 (ver lá) — este módulo é compartilhado entre o pipeline de execução e o cálculo de métricas.
+- [x] Criar `backend/core/claim_verifier.py` com duas funções: `extract_claims(texto: str) -> list[str]` (via LLM, extrai afirmações factuais discretas do texto gerado) e `verify_claims(claims: list[str], dados: dict) -> list[dict]` (via LLM, para cada claim retorna `{claim, suportado: bool, justificativa}` comparando contra `correlacoes`/`anomalias`/`contexto_orcamentario` brutos).
+- [x] No pipeline de síntese (`TextSynthesizer.generate`/`generate_stream`, chamado a partir de `OrquestradorEstrela`/`SupervisorAnalitico`), adicionar uma passada opcional de verificação **após** o texto ser gerado: se `verify_claims` encontrar afirmações não suportadas, uma única chamada adicional ao LLM pede uma revisão focada só nessas afirmações (padrão Chain-of-Verification — CoVe). Sem loop: no máximo 1 correção por análise.
+- [x] Tornar esse passo opcional via flag (mesmo padrão de `use_llm_judge` já existente), para não forçar custo extra em toda análise.
+- [ ] Reutilizar `claim_verifier.py` na Etapa 6 para reformular a métrica Q2 (ver lá) — este módulo é compartilhado entre o pipeline de execução e o cálculo de métricas. **Ainda pendente** — vai acontecer na própria Etapa 6, `extract_claims`/`verify_claims` já estão prontas para reuso isolado (sem a passada de revisão).
 
 **Por que essa mudança está sendo feita (racional técnico):**
 A métrica Q2 atual (checklist por substring/regex) não verifica se o que o texto afirma é *correto*, só se as palavras certas aparecem — um texto pode citar "subfunção 305" e "2020" ao lado de uma conclusão inventada e ainda pontuar bem em Q2. Um passo de verificação real, rodando antes do texto chegar ao usuário, é tanto uma melhoria de qualidade de produto quanto a base para uma métrica de fidelidade mais forte. Ver justificativa D3 na Seção 3.
 
 **Dependências:** Etapa 3 completa — a verificação deve rodar sobre o texto já priorizado (senão seria descartada/refeita quando a Etapa 3 entrar).
 
-**Critério de aceite:** injetando propositalmente uma alucinação num texto de teste (afirmação não suportada pelos dados), `verify_claims` a marca como não suportada; a passada de correção remove ou corrige a afirmação no texto final.
+**Critério de aceite:** injetando propositalmente uma alucinação num texto de teste (afirmação não suportada pelos dados), `verify_claims` a marca como não suportada; a passada de correção remove ou corrige a afirmação no texto final. **Verificado** — 20 testes dedicados em `test_claim_verifier.py` (incluindo o cenário exato de alucinação injetada/corrigida) + testes de integração de gating (`TestSelfCheckWiring` em `test_orchestrator_star.py`), suíte completa verde, commitado em `c76735d`.
 
 ---
 
-### Etapa 5 — Comunicação lateral semântica (hierárquica)
+### Etapa 5 — Comunicação lateral semântica (hierárquica) ✅ Concluída (implementada, não commitada)
 
 **O que será feito:**
-- [ ] Em `backend/agents/hierarchical/coordinator.py` e `supervisors.py`: quando `SupervisorDominio` envia dados para `SupervisorAnalitico`/`SupervisorContexto` via `receive_from_peer()`, e quando `SupervisorContexto` envia para `SupervisorAnalitico`, acompanhar o payload de dados brutos com um **resumo textual curto gerado por LLM** (1–2 frases) descrevendo o que aquele supervisor concluiu antes de repassar — ex.: `SupervisorContexto` não manda só o dict de tendências, manda também "gasto em Vigilância Epidemiológica caiu de forma consistente nos últimos 2 anos".
-- [ ] Adicionar essa geração de resumo como uma nova ação (`goal: "resumir_para_par"`) na `procedural_memory` de cada supervisor emissor — mantendo o padrão CoALA já usado no resto do código (ação registrada, com fallback determinístico simples — ex.: template de texto sem LLM — caso o LLM falhe).
-- [ ] `SupervisorAnalitico` passa a ter acesso a esses resumos e pode (opcionalmente, reaproveitando a Etapa 3) usá-los como insumo adicional na priorização de achados.
-- [ ] **Escopo explicitamente limitado à hierárquica** — a estrela não tem comunicação lateral por definição de topologia (é hub-and-spoke), então essa mudança amplia a diferença de custo entre as duas arquiteturas. Isso deve ser tratado como um resultado a discutir no TCC, não escondido nas métricas.
+- [x] Em `backend/agents/hierarchical/coordinator.py` e `supervisors.py`: quando `SupervisorDominio` envia dados para `SupervisorAnalitico`/`SupervisorContexto` via `receive_from_peer()`, e quando `SupervisorContexto` envia para `SupervisorAnalitico`, acompanhar o payload de dados brutos com um **resumo textual curto gerado por LLM** (1–2 frases) descrevendo o que aquele supervisor concluiu antes de repassar — ex.: `SupervisorContexto` não manda só o dict de tendências, manda também "gasto em Vigilância Epidemiológica caiu de forma consistente nos últimos 2 anos". (Ver "Desvios" no topo do arquivo — o hop `Dominio→Contexto` não carrega resumo, só `Dominio→Analitico` e `Contexto→Analitico`.)
+- [x] Adicionar essa geração de resumo como uma nova ação (`goal: "resumir_para_par"`) na `procedural_memory` de cada supervisor emissor — mantendo o padrão CoALA já usado no resto do código (ação registrada, com fallback determinístico simples — ex.: template de texto sem LLM — caso o LLM falhe).
+- [x] `SupervisorAnalitico` passa a ter acesso a esses resumos e pode (opcionalmente, reaproveitando a Etapa 3) usá-los como insumo adicional na priorização de achados.
+- [x] **Escopo explicitamente limitado à hierárquica** — a estrela não tem comunicação lateral por definição de topologia (é hub-and-spoke), então essa mudança amplia a diferença de custo entre as duas arquiteturas. Isso deve ser tratado como um resultado a discutir no TCC, não escondido nas métricas.
 
 **Por que essa mudança está sendo feita (racional técnico):**
 Hoje `receive_from_peer()` é só transporte de dado (despesas, indicadores, contexto brutos) — não há nada que distinga essa "comunicação lateral" de uma simples atribuição de variável compartilhada. A literatura descreve interação cooperativa como troca de informação **interpretada**, que alimenta decisão colaborativa — dar conteúdo semântico à comunicação lateral é o que torna a hierárquica genuinamente diferente da estrela em *processo*, não só em tempo de execução, o que fortalece o argumento comparativo central do TCC. Ver justificativa D4 na Seção 3.
 
 **Dependências:** Nenhuma dependência técnica das Etapas 1–4. Pode ser feita em paralelo, mas evitar tocar `supervisors.py` ao mesmo tempo que a Etapa 3 mexe em `SupervisorAnalitico.run()`, e evitar tocar `SupervisorDominio` ao mesmo tempo que a Etapa 2, para não gerar conflito de merge.
 
-**Critério de aceite:** logs/testes mostram que `SupervisorAnalitico` recebe, além dos dados brutos, um resumo textual não-vazio de cada supervisor upstream; se o LLM falhar, o fallback determinístico (template) ainda popula o campo sem quebrar o pipeline.
+**Critério de aceite:** logs/testes mostram que `SupervisorAnalitico` recebe, além dos dados brutos, um resumo textual não-vazio de cada supervisor upstream; se o LLM falhar, o fallback determinístico (template) ainda popula o campo sem quebrar o pipeline. **Verificado** — 17 testes dedicados em `test_lateral_summaries.py` (geração via LLM e fallback para os dois supervisores emissores, recebimento e composição em `SupervisorAnalitico`, repasse correto em `CoordenadorGeral`), suíte completa (190 testes) verde. **Pendente:** commitar.
 
 ---
 
@@ -250,15 +253,14 @@ Medir o sistema antes de ele estar refatorado produziria números que não descr
 
 ## Resumo do checklist (visão rápida)
 
-- [x] **Etapa 1** — `AgenteInterpretacaoIntencao` (novo agente CoALA, substitui `IntentInterpreter`): remoção total do regex, guardrail de escopo, `AnalysisIntent` compartilhado (com `intent_summary`) para estrela e hierárquica. **Commitada e pushada** (`5a828ff`).
-- [x] **Etapa 2** — Agentes de domínio ganham ação `planejar_consulta` via LLM (com fast-path/cache/flag desligada por padrão) — preparação para crescimento da base. **Código e testes prontos (131 testes coletados), suíte completa ainda não re-executada, nada commitado ainda.**
-- [ ] **Etapa 3** — `AgentePriorizacaoAnalitica` (novo agente CoALA) + integração nos orquestradores
-- [ ] **Etapa 4** — `core/claim_verifier.py` + passo de self-check opcional pós-síntese
-- [ ] **Etapa 5** — Resumos semânticos na comunicação lateral hierárquica
+- [x] **Etapa 1** — `AgenteInterpretacaoIntencao` (novo agente CoALA, substitui `IntentInterpreter`): remoção total do regex, guardrail de escopo, `AnalysisIntent` compartilhado (com `intent_summary`) para estrela e hierárquica. **Commitada** (`19473b0`).
+- [x] **Etapa 2** — Agentes de domínio ganham ação `planejar_consulta` via LLM (com fast-path/cache/flag desligada por padrão) — preparação para crescimento da base. **Commitada** (`f1c7015`).
+- [x] **Etapa 3** — `AgentePriorizacaoAnalitica` (novo agente CoALA) + integração nos orquestradores. **Commitada** (`7b4493b`).
+- [x] **Etapa 4** — `core/claim_verifier.py` + passo de self-check opcional pós-síntese. **Commitada** (`c76735d`).
+- [x] **Etapa 5** — Resumos semânticos na comunicação lateral hierárquica. **Implementada, 190 testes verdes, ainda não commitada.**
 - [ ] **Etapa 6** — Refatorar contabilização de tokens (pré-requisito) → `compute_token_cost`, `compute_communication_volume`, Q2 claim-based, harness de escalabilidade, taxa de rejeição do guardrail, taxa de acerto do cache, `compute_analysis_success`
 
 ### Próximos passos imediatos (nesta ordem)
 
-1. Rodar a suíte completa (`cd backend && pytest`) para confirmar que a Etapa 2 não quebrou nada no resto do sistema.
-2. Commitar e dar push na Etapa 2 (hoje só está no working tree local).
-3. Seguir para a Etapa 3 (priorização de achados via LLM).
+1. Commitar a Etapa 5 (hoje só está no working tree local).
+2. Seguir para a Etapa 6 (novas métricas de avaliação) — a única etapa restante do plano, e a mais extensa (pré-requisito de refatorar a contabilização de tokens antes de tudo o mais nela).

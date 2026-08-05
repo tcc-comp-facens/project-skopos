@@ -148,16 +148,21 @@ class CoordenadorGeral(AgenteCoALA):
     def _act_comunicar_dominio_analitico(self, action: dict) -> None:
         """Comunicação lateral: SupervisorDominio → SupervisorAnalitico (Req 10.5).
 
-        Repassa despesas e indicadores para o pipeline analítico.
+        Repassa despesas e indicadores para o pipeline analítico, acompanhados
+        do resumo textual gerado por SupervisorDominio (Etapa 5) — dá
+        conteúdo semântico à comunicação lateral, não só transporte de dados
+        brutos (D4 do PLANO_REFATORACAO.md).
         """
         sup_analitico = self.working_memory["_sup_analitico"]
         dominio_data = self.working_memory.get("_dominio_data", {})
+        resumo_dominio = dominio_data.get("resumo", "")
         logger.info(
             "[%s] CoordenadorGeral: comunicação lateral Dominio -> Analitico "
-            "(%d despesas, %d indicadores)",
+            "(%d despesas, %d indicadores, resumo=%r)",
             self.agent_id,
             len(dominio_data.get("despesas", [])),
             len(dominio_data.get("indicadores", [])),
+            resumo_dominio,
         )
         sup_analitico.receive_from_peer({
             "despesas": dominio_data.get("despesas", []),
@@ -166,6 +171,7 @@ class CoordenadorGeral(AgenteCoALA):
             "date_to": self.working_memory["date_to"],
             "health_params": self.working_memory.get("health_params", []),
             "intent_summary": self.working_memory.get("intent_summary"),
+            "resumo_dominio": resumo_dominio,
         })
 
     def _act_comunicar_dominio_contexto(self, action: dict) -> None:
@@ -205,16 +211,21 @@ class CoordenadorGeral(AgenteCoALA):
     def _act_comunicar_contexto_analitico(self, action: dict) -> None:
         """Comunicação lateral: SupervisorContexto → SupervisorAnalitico (Req 10.6).
 
-        Repassa contexto orçamentário para enriquecer a síntese textual.
+        Repassa contexto orçamentário para enriquecer a síntese textual,
+        acompanhado do resumo textual gerado por SupervisorContexto
+        (Etapa 5) — ver docstring de `_act_comunicar_dominio_analitico`.
         """
         sup_analitico = self.working_memory["_sup_analitico"]
         contexto_data = self.working_memory.get("_contexto_data", {})
+        resumo_contexto = contexto_data.get("resumo", "")
         logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Contexto -> Analitico (%d subfunções)",
-            self.agent_id, len(contexto_data.get("contexto_orcamentario", {})),
+            "[%s] CoordenadorGeral: comunicação lateral Contexto -> Analitico "
+            "(%d subfunções, resumo=%r)",
+            self.agent_id, len(contexto_data.get("contexto_orcamentario", {})), resumo_contexto,
         )
         sup_analitico.receive_from_peer({
             "contexto_orcamentario": contexto_data.get("contexto_orcamentario", {}),
+            "resumo_contexto": resumo_contexto,
         })
 
     def _act_delegar_analitico(self, action: dict) -> None:
