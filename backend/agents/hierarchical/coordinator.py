@@ -118,6 +118,7 @@ class CoordenadorGeral(AgenteCoALA):
         date_to = self.working_memory["date_to"]
         health_params = self.working_memory.get("health_params", [])
         intent_summary = self.working_memory.get("intent_summary")
+        use_llm = self.working_memory.get("use_llm", True)
         try:
             dominio_data = sup_dominio.run(
                 analysis_id=analysis_id,
@@ -125,6 +126,7 @@ class CoordenadorGeral(AgenteCoALA):
                 date_to=date_to,
                 health_params=health_params,
                 intent_summary=intent_summary,
+                use_llm=use_llm,
             )
             mc.stop()
             logger.info(
@@ -192,8 +194,9 @@ class CoordenadorGeral(AgenteCoALA):
         sup_contexto = self.working_memory["_sup_contexto"]
         mc = MetricsCollector(sup_contexto.agent_id, "supervisor_contexto")
         mc.start()
+        use_llm = self.working_memory.get("use_llm", True)
         try:
-            contexto_data = sup_contexto.run()
+            contexto_data = sup_contexto.run(use_llm=use_llm)
             mc.stop()
             logger.info("CoordenadorGeral %s: SupervisorContexto completed", self.agent_id)
         except Exception as exc:

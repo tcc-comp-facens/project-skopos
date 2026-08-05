@@ -19,6 +19,7 @@ from typing import Any
 
 from agents.star.orchestrator import OrquestradorEstrela
 from agents.hierarchical.coordinator import CoordenadorGeral
+from core.llm_client import TokenBucket
 from db.neo4j_client import Neo4jClient
 from api.state import active_results, get_neo4j_client
 
@@ -63,17 +64,23 @@ def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
     neo4j_client: Neo4jClient | None = None
     inicio = time.time()
     logger.info("Analysis [%s] [star]: pipeline iniciado", analysis_id[:8])
+    # Etapa 6: bucket dedicado desta thread — qualquer chamada LLM feita
+    # por qualquer agente durante orchestrator.run() (mesmo em profundidade)
+    # é contabilizada aqui, isolada da thread concorrente da hierárquica.
+    token_bucket = TokenBucket()
     try:
         neo4j_client = get_neo4j_client()
         orchestrator = OrquestradorEstrela(
             agent_id=f"star-orch-{uuid.uuid4().hex[:8]}",
             neo4j_client=neo4j_client,
         )
-        result = orchestrator.run(analysis_id, params, ws_queue)
+        with token_bucket:
+            result = orchestrator.run(analysis_id, params, ws_queue)
 
         if analysis_id not in active_results:
             active_results[analysis_id] = {}
         active_results[analysis_id]["star"] = result
+        active_results[analysis_id]["star_token_usage"] = token_bucket.snapshot()
 
         _persist_topology_result(
             neo4j_client,
@@ -94,6 +101,7 @@ def run_star(analysis_id: str, params: dict[str, Any], ws_queue: Queue) -> None:
         )
     except Exception as exc:
         logger.error("Analysis [%s] [star]: pipeline falhou — %s", analysis_id[:8], exc)
+        active_results.setdefault(analysis_id, {})["star_token_usage"] = token_bucket.snapshot()
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "star",
@@ -113,17 +121,20 @@ def run_hierarchical(analysis_id: str, params: dict[str, Any], ws_queue: Queue) 
     neo4j_client: Neo4jClient | None = None
     inicio = time.time()
     logger.info("Analysis [%s] [hierarchical]: pipeline iniciado", analysis_id[:8])
+    token_bucket = TokenBucket()
     try:
         neo4j_client = get_neo4j_client()
         coordinator = CoordenadorGeral(
             agent_id=f"hier-coord-{uuid.uuid4().hex[:8]}",
             neo4j_client=neo4j_client,
         )
-        result = coordinator.run(analysis_id, params, ws_queue)
+        with token_bucket:
+            result = coordinator.run(analysis_id, params, ws_queue)
 
         if analysis_id not in active_results:
             active_results[analysis_id] = {}
         active_results[analysis_id]["hierarchical"] = result
+        active_results[analysis_id]["hier_token_usage"] = token_bucket.snapshot()
 
         _persist_topology_result(
             neo4j_client,
@@ -145,6 +156,7 @@ def run_hierarchical(analysis_id: str, params: dict[str, Any], ws_queue: Queue) 
         )
     except Exception as exc:
         logger.error("Analysis [%s] [hierarchical]: pipeline falhou — %s", analysis_id[:8], exc)
+        active_results.setdefault(analysis_id, {})["hier_token_usage"] = token_bucket.snapshot()
         ws_queue.put({
             "analysisId": analysis_id,
             "architecture": "hierarchical",

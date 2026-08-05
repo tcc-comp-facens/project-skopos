@@ -16,6 +16,7 @@ from queue import Empty
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.state import active_queues, active_results, active_threads
+from core.llm_client import TokenBucket
 from core.quality_metrics import compute_all_quality_metrics, generate_comparative_report
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,9 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     use_llm=results.get("use_llm", True),
                     star_wall_clock_ms=captured_wall_clock.get("star", 0),
                     hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
+                    star_token_usage=results.get("star_token_usage"),
+                    hier_token_usage=results.get("hier_token_usage"),
+                    intent_token_usage=results.get("intent_token_usage"),
                 )
                 await websocket.send_json({
                     "analysisId": analysis_id,
@@ -159,20 +163,46 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                         "type": "llm_judge",
                         "payload": "",
                     })
-                    from core.quality_metrics import compute_faithfulness_llm
+                    from core.quality_metrics import (
+                        compute_faithfulness,
+                        compute_faithfulness_llm,
+                        compute_token_cost,
+                    )
 
+                    judge_token_usage: dict[str, dict] = {}
                     for arch_key, arch_result in [("star", star_result), ("hierarchical", hier_result)]:
-                        judge_result = compute_faithfulness_llm(
-                            arch_result.get("correlacoes", []),
-                            arch_result.get("anomalias", []),
-                            arch_result.get("contexto_orcamentario", {}),
-                            arch_result.get("texto_analise", ""),
-                        )
+                        # Etapa 6: um bucket por arquitetura, cobrindo tanto o
+                        # LLM Judge (score 1-5) quanto a faithfulness
+                        # claim-based (D8) — ambos rodam sequencialmente na
+                        # MainThread aqui, contabilizados juntos sob "llm_judge"
+                        # (a categoria de custo "avaliação opcional extra").
+                        with TokenBucket() as arch_bucket:
+                            judge_result = compute_faithfulness_llm(
+                                arch_result.get("correlacoes", []),
+                                arch_result.get("anomalias", []),
+                                arch_result.get("contexto_orcamentario", {}),
+                                arch_result.get("texto_analise", ""),
+                                caller=f"llm_judge-{arch_key}",
+                            )
+                            claims_result = compute_faithfulness(
+                                arch_result.get("correlacoes", []),
+                                arch_result.get("anomalias", []),
+                                arch_result.get("texto_analise", ""),
+                                arch_result.get("contexto_orcamentario", {}),
+                                use_llm=True,
+                                caller=f"faithfulness_claims-{arch_key}",
+                            )
+                        judge_token_usage[arch_key] = arch_bucket.snapshot()
+
                         # Store in active_results
                         if "quality_metrics" in active_results.get(analysis_id, {}):
                             qm = active_results[analysis_id]["quality_metrics"]
                             if arch_key in qm.get("quality", {}):
                                 qm["quality"][arch_key]["faithfulness_llm"] = judge_result
+                                qm["quality"][arch_key]["faithfulness_claims"] = claims_result
+                            qm.setdefault("cost", {})["llm_judge"] = {
+                                k: compute_token_cost(v) for k, v in judge_token_usage.items()
+                            }
 
                     # Build combined text for streaming
                     star_judge = active_results.get(analysis_id, {}).get(

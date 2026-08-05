@@ -43,6 +43,7 @@ def dispatch_analysis(
     interpreted_via: str | None = None,
     intent_summary: str | None = None,
     use_self_check: bool = False,
+    intent_token_usage: dict[str, Any] | None = None,
 ) -> str:
     """Persiste a análise no Neo4j e dispara as threads star + hierarchical.
 
@@ -59,6 +60,11 @@ def dispatch_analysis(
     `use_self_check` (opcional, default False — mesmo padrão de
     `use_llm_judge`) habilita a verificação pós-síntese via LLM (Etapa 4
     do plano de refatoração) em ambas as arquiteturas.
+
+    `intent_token_usage` (opcional, só vem do chat) é o snapshot de custo
+    de tokens da interpretação de intenção (Etapa 6) — persistido em
+    `active_results` para ser reportado separado do custo por topologia
+    no payload de `/api/analysis/{id}/quality`.
 
     Requisitos: 9.1, 10.4
     """
@@ -135,7 +141,11 @@ def dispatch_analysis(
         daemon=True,
     )
     active_threads[analysis_id] = [t_star, t_hier]
-    active_results[analysis_id] = {"use_llm_judge": use_llm_judge, "use_llm": use_llm}
+    active_results[analysis_id] = {
+        "use_llm_judge": use_llm_judge,
+        "use_llm": use_llm,
+        "intent_token_usage": intent_token_usage,
+    }
     t_star.start()
     t_hier.start()
     logger.info(

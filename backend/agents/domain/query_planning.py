@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # limpo apenas via reset_cache() (usado nos testes).
 _cache: dict[tuple[str, str, tuple[str, ...]], dict[str, Any]] = {}
 
+# Contadores de origem do plano (Etapa 6 do PLANO_REFATORACAO.md) —
+# process-wide, alimenta compute_cache_hit_rate(). Não é por análise (o
+# volume é baixo demais por análise — no máximo 4 chamadas — para uma
+# taxa fazer sentido isolada; o valor é acompanhar a tendência ao longo
+# da vida do processo, à medida que a base cresce e a flag é ligada).
+_stats: dict[str, int] = {"fast_path": 0, "cache": 0, "llm": 0, "llm_failed_fallback": 0}
+
 
 def llm_query_planning_enabled() -> bool:
     """Lê a flag a cada chamada (não cacheada em import) para permitir
@@ -40,6 +47,34 @@ def llm_query_planning_enabled() -> bool:
 def reset_cache() -> None:
     """Limpa o cache de planos de consulta. Usado nos testes."""
     _cache.clear()
+
+
+def reset_stats() -> None:
+    """Zera os contadores de origem do plano. Usado nos testes."""
+    for key in _stats:
+        _stats[key] = 0
+
+
+def compute_cache_hit_rate() -> dict[str, Any]:
+    """Etapa 6 — proporção de planos de consulta resolvidos sem chamada LLM
+    (fast-path ou cache) vs. via LLM (sucesso ou fallback por falha).
+
+    Evidencia diretamente o trade-off custo-atual/preparação-futura
+    descrito na Etapa 2: enquanto a base tiver mapeamento trivial e/ou a
+    flag estiver desligada, a taxa fica em 100% (nenhuma chamada LLM).
+    """
+    total = sum(_stats.values())
+    llm_calls = _stats["llm"] + _stats["llm_failed_fallback"]
+    non_llm_calls = total - llm_calls
+    rate = non_llm_calls / total if total > 0 else 1.0
+    return {
+        "total": total,
+        "fast_path": _stats["fast_path"],
+        "cache": _stats["cache"],
+        "llm": _stats["llm"],
+        "llm_failed_fallback": _stats["llm_failed_fallback"],
+        "cache_or_fastpath_rate": round(rate, 4),
+    }
 
 
 def plan_query(
@@ -77,12 +112,14 @@ def plan_query(
         "llm", "llm_failed_fallback".
     """
     if is_trivial or not llm_query_planning_enabled():
+        _stats["fast_path"] += 1
         return static_plan, "fast_path"
 
     cache_key = (agent_type, intent_summary or "", tuple(sorted(health_params or [])))
     cached = _cache.get(cache_key)
     if cached is not None:
         logger.info("Agent %s: plano de consulta obtido do cache", agent_id)
+        _stats["cache"] += 1
         return cached, "cache"
 
     try:
@@ -93,12 +130,14 @@ def plan_query(
         plan = _parse_plan(raw)
         _cache[cache_key] = plan
         logger.info("Agent %s: plano de consulta resolvido via LLM: %s", agent_id, plan)
+        _stats["llm"] += 1
         return plan, "llm"
     except Exception as exc:
         logger.warning(
             "Agent %s: planejamento de consulta via LLM falhou (%s) — usando plano estático",
             agent_id, exc,
         )
+        _stats["llm_failed_fallback"] += 1
         return static_plan, "llm_failed_fallback"
 
 

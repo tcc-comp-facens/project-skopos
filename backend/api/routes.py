@@ -23,8 +23,10 @@ from api.models import (
     health_params_to_list,
     validate_analysis_params,
 )
+from agents.domain.query_planning import compute_cache_hit_rate
 from api.dispatch import dispatch_analysis, get_available_year_range
 from api.state import active_results
+from core.guardrail_stats import compute_guardrail_rejection_rate
 from core.quality_metrics import compute_all_quality_metrics, generate_comparative_report
 
 logger = logging.getLogger(__name__)
@@ -148,10 +150,39 @@ async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = Non
         use_llm=use_llm,
         star_wall_clock_ms=results.get("star_wall_clock_ms", 0),
         hier_wall_clock_ms=results.get("hier_wall_clock_ms", 0),
+        star_token_usage=results.get("star_token_usage"),
+        hier_token_usage=results.get("hier_token_usage"),
+        intent_token_usage=results.get("intent_token_usage"),
     )
 
     active_results[analysis_id]["quality_metrics"] = quality
     return quality
+
+
+@router.get("/api/metrics/guardrail")
+async def get_guardrail_metrics():
+    """Etapa 6 — taxa de rejeição do guardrail de escopo (Etapa 1).
+
+    Métrica process-wide (não por análise — uma análise sequer é
+    disparada quando o guardrail rejeita), acumulada desde o início do
+    processo backend (ou desde o último reset). Útil para monitorar
+    falsos positivos/negativos do prompt de classificação ao longo do
+    tempo (ver risco registrado na Etapa 1 do plano de refatoração).
+    """
+    return compute_guardrail_rejection_rate()
+
+
+@router.get("/api/metrics/query-planning-cache")
+async def get_query_planning_cache_metrics():
+    """Etapa 6 — taxa de acerto do cache/fast-path de planejamento de
+    consulta dos agentes de domínio (Etapa 2).
+
+    Métrica process-wide, acumulada desde o início do processo. Evidencia
+    o trade-off custo-atual/preparação-futura: enquanto a base tiver
+    mapeamento trivial e/ou a flag USE_LLM_QUERY_PLANNING estiver
+    desligada, a taxa fica em 100% (nenhuma chamada LLM).
+    """
+    return compute_cache_hit_rate()
 
 
 @router.get("/api/analysis/{analysis_id}/report")

@@ -12,11 +12,13 @@ from agents.domain import query_planning
 
 @pytest.fixture(autouse=True)
 def _clean_cache_and_env(monkeypatch):
-    """Cada teste começa com cache vazio e a flag desligada (default)."""
+    """Cada teste começa com cache vazio, contadores zerados e a flag desligada (default)."""
     query_planning.reset_cache()
+    query_planning.reset_stats()
     monkeypatch.delenv("USE_LLM_QUERY_PLANNING", raising=False)
     yield
     query_planning.reset_cache()
+    query_planning.reset_stats()
 
 
 class TestFlag:
@@ -188,3 +190,71 @@ class TestParsePlan:
             query_planning._parse_plan(
                 json.dumps({"subfuncoes": [301], "tipos_indicador": [1, 2]})
             )
+
+
+class TestCacheHitRate:
+    """Etapa 6 — compute_cache_hit_rate() sobre os contadores de origem
+    do plano (fast_path/cache/llm/llm_failed_fallback)."""
+
+    def _plan(self, agent_type="vigilancia_epidemiologica", is_trivial=True, **kwargs):
+        static_plan = {"subfuncoes": [305], "tipos_indicador": ["dengue"]}
+        defaults = dict(
+            agent_id="a", agent_type=agent_type, static_plan=static_plan,
+            is_trivial=is_trivial, intent_summary="x", health_params=["dengue"],
+        )
+        defaults.update(kwargs)
+        return query_planning.plan_query(**defaults)
+
+    def test_no_calls_yet_rate_is_1(self):
+        result = query_planning.compute_cache_hit_rate()
+        assert result["total"] == 0
+        assert result["cache_or_fastpath_rate"] == 1.0
+
+    def test_fast_path_counts_toward_rate(self):
+        self._plan(is_trivial=True)
+        self._plan(is_trivial=True)
+        result = query_planning.compute_cache_hit_rate()
+        assert result["fast_path"] == 2
+        assert result["total"] == 2
+        assert result["cache_or_fastpath_rate"] == 1.0
+
+    def test_llm_call_lowers_the_rate(self, monkeypatch):
+        monkeypatch.setenv("USE_LLM_QUERY_PLANNING", "true")
+        with patch("core.llm_client.generate", return_value=json.dumps(
+            {"subfuncoes": [305], "tipos_indicador": ["dengue"]}
+        )):
+            self._plan(is_trivial=False, intent_summary="a")
+        self._plan(is_trivial=True)  # fast-path
+        result = query_planning.compute_cache_hit_rate()
+        assert result["total"] == 2
+        assert result["llm"] == 1
+        assert result["fast_path"] == 1
+        assert result["cache_or_fastpath_rate"] == 0.5
+
+    def test_cache_hit_counts_separately_from_llm(self, monkeypatch):
+        monkeypatch.setenv("USE_LLM_QUERY_PLANNING", "true")
+        with patch("core.llm_client.generate", return_value=json.dumps(
+            {"subfuncoes": [305], "tipos_indicador": ["dengue"]}
+        )):
+            self._plan(is_trivial=False, intent_summary="mesma-intencao")
+        self._plan(is_trivial=False, intent_summary="mesma-intencao")  # cache hit
+
+        result = query_planning.compute_cache_hit_rate()
+        assert result["llm"] == 1
+        assert result["cache"] == 1
+        assert result["total"] == 2
+        assert result["cache_or_fastpath_rate"] == 0.5
+
+    def test_llm_failed_fallback_counts_as_llm_not_fastpath(self, monkeypatch):
+        monkeypatch.setenv("USE_LLM_QUERY_PLANNING", "true")
+        with patch("core.llm_client.generate", side_effect=Exception("indisponível")):
+            self._plan(is_trivial=False, intent_summary="x")
+        result = query_planning.compute_cache_hit_rate()
+        assert result["llm_failed_fallback"] == 1
+        assert result["cache_or_fastpath_rate"] == 0.0
+
+    def test_reset_stats_zeroes_everything(self):
+        self._plan(is_trivial=True)
+        query_planning.reset_stats()
+        result = query_planning.compute_cache_hit_rate()
+        assert result["total"] == 0

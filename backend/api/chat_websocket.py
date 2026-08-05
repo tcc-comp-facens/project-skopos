@@ -35,9 +35,16 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agents.intent import AgenteInterpretacaoIntencao
+from agents.intent.agente_interpretacao_intencao import (
+    MISSING_LLM_UNAVAILABLE,
+    MISSING_OUT_OF_SCOPE,
+    MISSING_TEXT,
+)
 from api.chat_runner import run_chat_analysis
 from api.dispatch import get_available_year_range
 from api.state import active_chat_sessions
+from core import guardrail_stats
+from core.llm_client import TokenBucket
 
 logger = logging.getLogger(__name__)
 
@@ -117,11 +124,20 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                     "Chat WS %s: interpretando mensagem (%d chars): %r",
                     session_id[:8], len(text), text[:120],
                 )
-                result = interpreter.parse(text)
+                with TokenBucket() as intent_bucket:
+                    result = interpreter.parse(text)
                 logger.info(
                     "Chat WS %s: interpretação -> success=%s missing=%s",
                     session_id[:8], result.success, result.missing,
                 )
+
+                # Etapa 6 — registra a decisão do guardrail (dentro/fora de
+                # escopo), exceto quando não houve decisão real: mensagem
+                # vazia (nem chega ao LLM) ou falha técnica do LLM.
+                if MISSING_TEXT not in result.missing and MISSING_LLM_UNAVAILABLE not in result.missing:
+                    guardrail_stats.record_guardrail_decision(
+                        out_of_scope=MISSING_OUT_OF_SCOPE in result.missing
+                    )
 
                 if not result.success:
                     await _send_chunks(websocket, result.clarification_message)
@@ -136,6 +152,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                     interpreted_via=result.interpreted_via,
                     interpreter=interpreter,
                     use_self_check=use_self_check,
+                    intent_token_usage=intent_bucket.snapshot(),
                 )
 
                 await websocket.send_json({

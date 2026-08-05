@@ -72,6 +72,21 @@ class TestSupervisorDominioResumo:
 
         assert result["resumo"]
 
+    def test_use_llm_false_pula_direto_para_fallback_sem_chamar_llm(self):
+        """Regressão: achado ao inspecionar log de execução real — antes
+        desta correção, resumir_para_par ignorava a flag use_llm=False da
+        análise inteira e gastava tokens de qualquer forma."""
+        neo4j_client = _neo4j_client(
+            despesas=[{"subfuncao": 305, "ano": 2020, "valor": 100.0}],
+            indicadores=[],
+        )
+        sup = SupervisorDominio("test-sup-dominio-5", neo4j_client)
+        with patch("core.llm_client.generate") as mock_generate:
+            result = sup.run("analysis-5", 2019, 2021, health_params=["dengue"], use_llm=False)
+
+        mock_generate.assert_not_called()
+        assert result["resumo"]
+
 
 class TestSupervisorContextoResumo:
     def test_resumo_gerado_via_llm(self):
@@ -105,6 +120,19 @@ class TestSupervisorContextoResumo:
         with patch("core.llm_client.generate", side_effect=Exception("LLM indisponível")):
             result = sup.run()
 
+        assert result["resumo"]
+
+    def test_use_llm_false_pula_direto_para_fallback_sem_chamar_llm(self):
+        sup = SupervisorContexto("test-sup-contexto-3b")
+        sup.receive_from_peer({"despesas": [{"subfuncao": 301, "ano": 2020, "valor": 1.0}]})
+        trends = {"301": {"tendencia": "crescimento", "variacao_media_percentual": 5.0}}
+        with patch(
+            "agents.context.contexto_orcamentario.AgenteContextoOrcamentario.analyze_trends",
+            return_value=trends,
+        ), patch("core.llm_client.generate") as mock_generate:
+            result = sup.run(use_llm=False)
+
+        mock_generate.assert_not_called()
         assert result["resumo"]
 
     def test_no_despesas_no_resumir_para_par_proposto(self):
@@ -224,3 +252,34 @@ class TestCoordenadorGeralRepasseDeResumos:
 
         payload = sup_analitico.receive_from_peer.call_args[0][0]
         assert payload["resumo_dominio"] == ""
+
+    def test_delegar_dominio_repassa_use_llm(self):
+        """Regressão: use_llm da análise inteira precisa chegar em
+        SupervisorDominio.run() para que resumir_para_par (Etapa 5)
+        respeite use_llm=False."""
+        coord = CoordenadorGeral("test-coord-4", MagicMock())
+        sup_dominio = MagicMock()
+        sup_dominio.run.return_value = {"despesas": [], "indicadores": [], "resumo": ""}
+        coord.working_memory.update({
+            "_sup_dominio": sup_dominio,
+            "_metrics_collectors": [],
+            "analysis_id": "a1", "date_from": 2019, "date_to": 2021,
+            "health_params": [], "intent_summary": None, "use_llm": False,
+        })
+        coord._act_delegar_dominio({"goal": "delegar_dominio"})
+
+        sup_dominio.run.assert_called_once()
+        assert sup_dominio.run.call_args.kwargs["use_llm"] is False
+
+    def test_delegar_contexto_repassa_use_llm(self):
+        coord = CoordenadorGeral("test-coord-5", MagicMock())
+        sup_contexto = MagicMock()
+        sup_contexto.run.return_value = {"contexto_orcamentario": {}, "resumo": ""}
+        coord.working_memory.update({
+            "_sup_contexto": sup_contexto,
+            "_metrics_collectors": [],
+            "use_llm": False,
+        })
+        coord._act_delegar_contexto({"goal": "delegar_contexto"})
+
+        sup_contexto.run.assert_called_once_with(use_llm=False)

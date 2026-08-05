@@ -227,7 +227,16 @@ class SupervisorDominio(AgenteCoALA):
         Se o LLM falhar, `_act_resumir_fallback` (próxima estratégia)
         gera um resumo determinístico equivalente — a comunicação lateral
         nunca fica sem resumo.
+
+        Respeita `use_llm=False` (mesma regra já aplicada a
+        `priorizar_achados`/`verificar_afirmacoes`): levanta ActionFailure
+        de propósito para cair direto no fallback determinístico, sem
+        gastar uma chamada LLM quando a análise pediu explicitamente para
+        não usar LLM em lugar nenhum.
         """
+        if not self.working_memory.get("use_llm", True):
+            raise ActionFailure(action, "use_llm=False")
+
         aggregated = self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
         despesas = aggregated.get("despesas", [])
         indicadores = aggregated.get("indicadores", [])
@@ -304,6 +313,7 @@ class SupervisorDominio(AgenteCoALA):
         date_to: int | None,
         health_params: list[str] | None = None,
         intent_summary: str | None = None,
+        use_llm: bool = True,
     ) -> dict[str, Any]:
         """Executa o pipeline de domínio via agentes subordinados.
 
@@ -319,6 +329,9 @@ class SupervisorDominio(AgenteCoALA):
                 Etapa 1 do plano de refatoração) — insumo para a construção
                 de queries via LLM dos agentes de domínio (Etapa 2, ainda
                 não implementada; armazenado aqui para uso futuro).
+            use_llm: Se False, `resumir_para_par` (Etapa 5) pula direto
+                para o fallback determinístico — nenhuma chamada LLM é
+                feita em nenhum lugar deste supervisor.
 
         Returns:
             Dicionário com "despesas" e "indicadores" agregados.
@@ -330,6 +343,7 @@ class SupervisorDominio(AgenteCoALA):
             "date_to": date_to,
             "health_params": health_params,
             "intent_summary": intent_summary,
+            "use_llm": use_llm,
             "despesas": [],
             "indicadores": [],
         })
@@ -855,7 +869,13 @@ class SupervisorContexto(AgenteCoALA):
         Vigilância Epidemiológica caiu de forma consistente nos últimos
         2 anos"). Se o LLM falhar, `_act_resumir_fallback` gera o
         equivalente determinístico.
+
+        Respeita `use_llm=False` — ver docstring equivalente em
+        `SupervisorDominio._act_resumir_para_par`.
         """
+        if not self.working_memory.get("use_llm", True):
+            raise ActionFailure(action, "use_llm=False")
+
         contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
         if not contexto_orcamentario:
             self.working_memory["resumo"] = ""
@@ -910,16 +930,21 @@ class SupervisorContexto(AgenteCoALA):
 
     # -- Interface pública chamada pelo CoordenadorGeral -------------------
 
-    def run(self) -> dict[str, Any]:
+    def run(self, use_llm: bool = True) -> dict[str, Any]:
         """Executa a análise de contexto orçamentário via subordinado.
 
         Espera que ``receive_from_peer`` já tenha sido chamado com
         as despesas do SupervisorDominio. Delega ao ciclo CoALA (Req 10.4).
 
+        Args:
+            use_llm: Se False, `resumir_para_par` (Etapa 5) pula direto
+                para o fallback determinístico.
+
         Returns:
             Dicionário com "contexto_orcamentario" e "resumo".
         """
         self._collectors = []
+        self.update_working_memory({"use_llm": use_llm})
         self.run_coala_cycle()
 
         result = {

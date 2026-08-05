@@ -11,6 +11,7 @@ Requisitos: 6.1, 6.5 (spec realtime-chat-interface)
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from agents.intent import AgenteInterpretacaoIntencao, AnalysisIntent
 from api.dispatch import dispatch_analysis
@@ -26,6 +27,7 @@ def run_chat_analysis(
     interpreted_via: str,
     interpreter: AgenteInterpretacaoIntencao,
     use_self_check: bool = False,
+    intent_token_usage: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Dispara a análise a partir de parâmetros extraídos do chat.
 
@@ -42,6 +44,10 @@ def run_chat_analysis(
         interpreter: Instância usada para gerar o texto de confirmação.
         use_self_check: Se True, habilita a verificação pós-síntese via
             LLM (Etapa 4 do plano de refatoração). Default False.
+        intent_token_usage: Snapshot de `core.llm_client.TokenBucket`
+            capturado ao redor de `interpreter.parse()` (Etapa 6) — custo
+            de tokens da interpretação de intenção, anterior à bifurcação
+            estrela/hierárquica, reportado separado do custo por topologia.
 
     Returns:
         Tupla (analysis_id, texto_de_confirmacao).
@@ -61,6 +67,7 @@ def run_chat_analysis(
         interpreted_via=interpreted_via,
         intent_summary=params.intent_summary,
         use_self_check=use_self_check,
+        intent_token_usage=intent_token_usage,
     )
     confirmation = interpreter.pretty_print(params)
     logger.info("ChatRunner: análise [%s] despachada a partir do chat", analysis_id[:8])
