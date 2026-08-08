@@ -42,6 +42,12 @@ class Neo4jClient:
         self._driver = GraphDatabase.driver(
             self._uri, auth=(self._user, self._password)
         )
+        # Log de queries executadas por get_indicadores_por_sistema,
+        # get_despesas_por_subfuncao e get_variacao_anual — consumido pelo
+        # orquestrador/coordenador para expor ao frontend (aba técnica) a
+        # query Cypher + dados brutos que cada agente usou, sem alterar a
+        # assinatura desses métodos.
+        self.query_log: list[dict] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -105,7 +111,11 @@ class Neo4jClient:
 
         with self._driver.session() as session:
             result = session.run(query, **params)
-            return [dict(record) for record in result]
+            rows = [dict(record) for record in result]
+            self.query_log.append(
+                {"query": query.strip(), "params": params, "rowCount": len(rows), "rows": rows}
+            )
+            return rows
 
     def get_variacao_anual(
         self, subfuncao_codigos: list[int], date_from: int, date_to: int
@@ -139,14 +149,18 @@ class Neo4jClient:
                v.classificacao AS classificacao
         ORDER BY atual.ano, atual.subfuncaoCodigo
         """
+        params = {
+            "subfuncaoCodigos": subfuncao_codigos,
+            "dateFrom": date_from,
+            "dateTo": date_to,
+        }
         with self._driver.session() as session:
-            result = session.run(
-                query,
-                subfuncaoCodigos=subfuncao_codigos,
-                dateFrom=date_from,
-                dateTo=date_to,
+            result = session.run(query, **params)
+            rows = [dict(record) for record in result]
+            self.query_log.append(
+                {"query": query.strip(), "params": params, "rowCount": len(rows), "rows": rows}
             )
-            return [dict(record) for record in result]
+            return rows
 
     def get_indicadores_por_sistema(
         self,
@@ -185,7 +199,11 @@ class Neo4jClient:
 
         with self._driver.session() as session:
             result = session.run(query, **params)
-            return [dict(record) for record in result]
+            rows = [dict(record) for record in result]
+            self.query_log.append(
+                {"query": query.strip(), "params": params, "rowCount": len(rows), "rows": rows}
+            )
+            return rows
 
     def get_past_analises(
         self,

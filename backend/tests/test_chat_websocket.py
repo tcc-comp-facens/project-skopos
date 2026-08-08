@@ -59,6 +59,38 @@ class TestChatWebsocketProtocol:
 
                 assert "".join(_drain_chunks(ws)) == "Analisar dengue de 2019 a 2022."
 
+    def test_use_llm_is_always_true_regardless_of_payload(self):
+        """Regressão: o toggle useLlm foi removido do frontend — o backend
+        deve sempre dispatchar com use_llm=True, mesmo que o payload tente
+        mandar False (cliente antigo/adulterado)."""
+        session_id = _session_id()
+        llm_response = (
+            '{"em_escopo": true, "date_from": 2019, "date_to": 2022, '
+            '"health_params": ["dengue"], "intent_summary": "comparar dengue"}'
+        )
+        with patch(
+            "api.chat_websocket.get_available_year_range", return_value=(2015, 2025)
+        ), patch(
+            "core.llm_client.generate", return_value=llm_response
+        ), patch(
+            "api.chat_websocket.run_chat_analysis",
+            return_value=("analysis-123", "Analisar dengue de 2019 a 2022."),
+        ) as mock_run:
+            with client.websocket_connect(f"/ws/chat/{session_id}") as ws:
+                ws.send_json({
+                    "type": "user_message",
+                    "payload": {
+                        "text": "compare dengue de 2019 a 2022",
+                        "useLlm": False,
+                    },
+                })
+
+                ws.receive_json()  # user_ack
+                ws.receive_json()  # analysis_started
+                _drain_chunks(ws)
+
+        assert mock_run.call_args.kwargs["use_llm"] is True
+
     def test_incomplete_message_asks_for_clarification(self):
         session_id = _session_id()
         with patch(

@@ -1,11 +1,12 @@
-import { parseWinner } from './parseWinner';
 import type { UseWebSocketState } from '../types';
 
 /**
- * Monta o texto da bolha de resumo de uma rodada de chat a partir do
- * estado do useWebSocket (mesma fonte de dados da aba Agentes) — o chat
- * não recebe um stream de resultado próprio, reaproveita o /ws/{analysisId}
- * existente (ver plano: dedicated chat WS cuida só do turno de intenção).
+ * Monta o texto de fallback da bolha de resposta de uma rodada de chat
+ * quando ainda não há texto completo pra mostrar — enquanto a análise
+ * está rodando, ou quando as duas arquiteturas falham e não há vencedor
+ * pra exibir na íntegra (ver ChatInterface: o caso de sucesso substitui
+ * essa bolha pelo texto completo da arquitetura vencedora, não usa mais
+ * este resumo).
  *
  * Requirements: 6.2, 6.3 (spec realtime-chat-interface)
  */
@@ -20,14 +21,5 @@ export function formatRoundSummary(ws: UseWebSocketState, question: string): str
     return `Não consegui concluir a análise para "${question}". Tente reformular a pergunta.`;
   }
 
-  const winner = parseWinner(ws.comparativeReport);
-  if (!winner) {
-    return 'Análise concluída. Veja o resultado abaixo.';
-  }
-
-  const winnerLabel = winner === 'star' ? 'Estrela ⭐' : 'Hierárquica 🏛';
-  return (
-    `Análise concluída — arquitetura vencedora: ${winnerLabel}. ` +
-    'Veja o resultado completo abaixo e os detalhes técnicos na aba Agentes.'
-  );
+  return 'Análise concluída, mas não foi possível determinar um resultado completo. Veja os detalhes técnicos na aba Agentes.';
 }

@@ -214,3 +214,36 @@ class TestDetectDataGaps:
         result = detect_data_gaps(despesas, indicadores, 2019, 2021)
         assert result["summary"]["has_gaps"] is True
         assert len(result["gaps"]) > 0
+
+    def test_null_valor_indicador_counts_as_missing_not_covered(self):
+        """Regressão: CNES 'tipo_atendimento'/'leitos_consultorios' não
+        têm total válido na fonte (planilha sem coluna "Total") — a
+        linha (tipo, ano) sempre existe no retorno do Neo4j, mas com
+        valor=None. Sem checar valor is not None, isso aparecia como
+        "100% completo" no relatório de cobertura."""
+        despesas = [
+            {"subfuncao": 122, "ano": 2022, "valor": 100.0},
+            {"subfuncao": 122, "ano": 2023, "valor": 100.0},
+        ]
+        indicadores = [
+            {"tipo": "tipo_atendimento", "ano": 2022, "valor": None},
+            {"tipo": "tipo_atendimento", "ano": 2023, "valor": None},
+        ]
+        result = detect_data_gaps(
+            despesas, indicadores, 2022, 2023, health_params=["tipo_atendimento"]
+        )
+        coverage = result["indicadores_coverage"]["tipo_atendimento"]
+        assert coverage["present"] == []
+        assert coverage["missing"] == [2022, 2023]
+        assert coverage["coverage"] == 0.0
+        assert result["summary"]["has_gaps"] is True
+
+    def test_null_valor_despesa_counts_as_missing_not_covered(self):
+        despesas = [{"subfuncao": 301, "ano": 2020, "valor": None}]
+        indicadores = [{"tipo": "cobertura_vacinal", "ano": 2020, "valor": 50.0}]
+        result = detect_data_gaps(
+            despesas, indicadores, 2020, 2020, health_params=["cobertura_vacinal"]
+        )
+        coverage = result["despesas_coverage"][301]
+        assert coverage["present"] == []
+        assert coverage["missing"] == [2020]

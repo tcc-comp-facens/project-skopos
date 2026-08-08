@@ -346,8 +346,15 @@ class OrquestradorEstrela(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, agent_type)
         mc.start()
         try:
+            log_start = len(self.neo4j_client.query_log)
             result = agent.query(analysis_id, date_from, date_to, **query_kwargs)
             mc.stop()
+            queries = self.neo4j_client.query_log[log_start:]
+            self.working_memory.setdefault("agent_queries", []).append({
+                "agentName": agent_type,
+                "agentLabel": agent_type.upper(),
+                "queries": queries,
+            })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))
             logger.info(
@@ -388,12 +395,19 @@ class OrquestradorEstrela(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, "orcamento_subfuncao")
         mc.start()
         try:
+            log_start = len(self.neo4j_client.query_log)
             result = agent.query(
                 analysis_id, date_from, date_to,
                 intent_summary=self.working_memory.get("intent_summary"),
                 use_llm=self.working_memory.get("use_llm", True),
             )
             mc.stop()
+            queries = self.neo4j_client.query_log[log_start:]
+            self.working_memory.setdefault("agent_queries", []).append({
+                "agentName": f"orcamento_subfuncao_{codigo}",
+                "agentLabel": f"{nome} ({codigo})",
+                "queries": queries,
+            })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("tendencias", {})[codigo] = result.get("tendencia", {})
             self.working_memory.setdefault("variacao_anual", {})[codigo] = result.get(
@@ -584,6 +598,8 @@ class OrquestradorEstrela(AgenteCoALA):
             analysis_id = self.working_memory["analysis_id"]
             data_coverage = self.working_memory.get("data_coverage")
             use_llm = self.working_memory.get("use_llm", True)
+            date_from = self.working_memory.get("date_from")
+            date_to = self.working_memory.get("date_to")
 
             # Correlações/anomalias/ênfase priorizadas (Etapa 3), se disponíveis
             # — nunca substitui os dados brutos usados em Q1, só a ordem/ênfase
@@ -609,12 +625,15 @@ class OrquestradorEstrela(AgenteCoALA):
                         contexto_orcamentario=contexto_orcamentario,
                         data_coverage=data_coverage,
                         enfase=enfase,
+                        date_from=date_from,
+                        date_to=date_to,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
                         # LLM returned empty — use fallback
                         texto_analise = sintetizador.generate_fallback(
-                            correlacoes, anomalias, contexto_orcamentario, data_coverage
+                            correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                            date_from, date_to,
                         )
                         adapter.stream_text(texto_analise)
                 except Exception:
@@ -623,12 +642,14 @@ class OrquestradorEstrela(AgenteCoALA):
                         self.agent_id,
                     )
                     texto_analise = sintetizador.generate_fallback(
-                        correlacoes, anomalias, contexto_orcamentario, data_coverage
+                        correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                        date_from, date_to,
                     )
                     adapter.stream_text(texto_analise)
             else:
                 texto_analise = sintetizador.generate_fallback(
-                    correlacoes, anomalias, contexto_orcamentario, data_coverage
+                    correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                    date_from, date_to,
                 )
                 adapter.stream_text(texto_analise)
 
@@ -768,6 +789,15 @@ class OrquestradorEstrela(AgenteCoALA):
                     "agentMetrics": agent_metrics,
                 },
             })
+            ws_queue.put({
+                "analysisId": analysis_id,
+                "architecture": "star",
+                "type": "agent_data",
+                "payload": {
+                    "architecture": "star",
+                    "agents": self.working_memory.get("agent_queries", []),
+                },
+            })
         except Exception as exc:
             raise ActionFailure(action, str(exc)) from exc
 
@@ -835,6 +865,7 @@ class OrquestradorEstrela(AgenteCoALA):
             "texto_analise": self.working_memory.get("texto_analise", ""),
             "data_coverage": self.working_memory.get("data_coverage", {}),
             "self_check": self.working_memory.get("self_check"),
+            "agent_queries": self.working_memory.get("agent_queries", []),
         }
 
         self.working_memory["result"] = result

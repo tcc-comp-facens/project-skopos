@@ -153,8 +153,7 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
 
                 # Run LLM Judge AFTER report is sent (can be slow due to retries)
                 use_llm_judge = results.get("use_llm_judge", False)
-                use_llm = results.get("use_llm", True)
-                if use_llm_judge and use_llm:
+                if use_llm_judge:
                     logger.info("WS %s: running LLM Judge (post-report)", analysis_id[:8])
                     # Notify frontend that LLM Judge is starting
                     await websocket.send_json({

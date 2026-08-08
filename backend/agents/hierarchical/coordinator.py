@@ -487,6 +487,18 @@ class CoordenadorGeral(AgenteCoALA):
             },
         })
 
+        orcamento_data = self.working_memory.get("_orcamento_data", {})
+        saude_data = self.working_memory.get("_saude_data", {})
+        agent_queries = orcamento_data.get("agent_queries", []) + saude_data.get(
+            "agent_queries", []
+        )
+        ws_queue.put({
+            "analysisId": analysis_id,
+            "architecture": "hierarchical",
+            "type": "agent_data",
+            "payload": {"architecture": "hierarchical", "agents": agent_queries},
+        })
+
     # -- Helpers --------------------------------------------------------
 
     def _send_error(self, message: str) -> None:
@@ -562,6 +574,9 @@ class CoordenadorGeral(AgenteCoALA):
         )
         result["indicadores"] = saude_data.get("indicadores", [])
         result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
+        result["agent_queries"] = orcamento_data.get("agent_queries", []) + saude_data.get(
+            "agent_queries", []
+        )
 
         self.working_memory["result"] = result
         logger.info("CoordenadorGeral %s: pipeline complete", self.agent_id)

@@ -6,7 +6,6 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 interface OutgoingMessage {
   text: string;
-  useLlm: boolean;
   useLlmJudge: boolean;
 }
 
@@ -21,7 +20,7 @@ export interface UseChatWebSocketCallbacks {
 export interface UseChatWebSocketState {
   connectionStatus: ConnectionStatus;
   hasEverConnected: boolean;
-  sendMessage: (text: string, useLlm: boolean, useLlmJudge: boolean) => void;
+  sendMessage: (text: string, useLlmJudge: boolean) => void;
 }
 
 /**
@@ -54,7 +53,7 @@ export function useChatWebSocket(
       if (!msg) break;
       ws.send(JSON.stringify({
         type: 'user_message',
-        payload: { text: msg.text, useLlm: msg.useLlm, useLlmJudge: msg.useLlmJudge },
+        payload: { text: msg.text, useLlmJudge: msg.useLlmJudge },
       }));
     }
   }, []);
@@ -128,15 +127,15 @@ export function useChatWebSocket(
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, useLlm: boolean, useLlmJudge: boolean) => {
+    (text: string, useLlmJudge: boolean) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'user_message',
-          payload: { text, useLlm, useLlmJudge },
+          payload: { text, useLlmJudge },
         }));
       } else {
-        outgoingQueueRef.current.push({ text, useLlm, useLlmJudge });
+        outgoingQueueRef.current.push({ text, useLlmJudge });
       }
     },
     [],

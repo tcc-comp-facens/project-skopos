@@ -1,27 +1,19 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { TabNav } from './components/TabNav';
 import { UserTab } from './components/UserTab';
 import { TechTab } from './components/TechTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useWebSocket, INITIAL_STATE } from './hooks/useWebSocket';
-import { parseWinner } from './utils/parseWinner';
 import type { ActiveTab, ChatRound } from './types';
 
 export function App() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
-  const [useLlm, setUseLlm] = useState(false);
   const [useLlmJudge, setUseLlmJudge] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('user');
   const [rounds, setRounds] = useState<ChatRound[]>([]);
 
   const ws = useWebSocket(analysisId);
-
-  // Derived state — winner identified from comparative report
-  const winner = useMemo(
-    () => parseWinner(ws.comparativeReport),
-    [ws.comparativeReport],
-  );
 
   // O chat (ChatInterface, dentro de UserTab) dispara a análise via seu
   // próprio WebSocket de intenção e avisa aqui quando ela começa. Cada
@@ -70,21 +62,17 @@ export function App() {
 
       <div style={{ display: activeTab === 'user' ? 'block' : 'none' }}>
         <UserTab
-          useLlm={useLlm}
           useLlmJudge={useLlmJudge}
           onAnalysisStarted={handleAnalysisStarted}
           activeRoundId={analysisId}
           activeRoundWs={analysisId ? ws : null}
-          winner={winner}
         />
       </div>
 
       <div style={{ display: activeTab === 'tech' ? 'block' : 'none' }}>
         <ErrorBoundary>
           <TechTab
-            useLlm={useLlm}
             useLlmJudge={useLlmJudge}
-            onUseLlmChange={setUseLlm}
             onUseLlmJudgeChange={setUseLlmJudge}
             rounds={rounds}
             isActiveRoundRunning={isActiveRoundRunning}

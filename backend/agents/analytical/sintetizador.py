@@ -61,6 +61,8 @@ class TextSynthesizer:
         data_coverage: dict[str, Any] | None = None,
         use_llm: bool = True,
         enfase: str | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
     ) -> str:
         """Gera texto completo de análise (batch, sem streaming).
 
@@ -76,18 +78,28 @@ class TextSynthesizer:
             use_llm: Se True, tenta usar LLM; se False, usa fallback direto.
             enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
                 (opcional) — vira uma instrução explícita no prompt.
+            date_from: Ano inicial do período analisado — quando informado,
+                o texto (LLM ou fallback) declara esse período no início,
+                mesmo quando foi inferido pelo guardrail (ver
+                `AgenteInterpretacaoIntencao`), não só quando explicitado
+                pelo usuário.
+            date_to: Ano final do período analisado (idem).
 
         Returns:
             Texto completo da análise gerada.
         """
         if not use_llm:
             logger.info("TextSynthesizer %s: LLM disabled, using structured fallback", self.synthesizer_id)
-            return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+            return self._generate_structured_text(
+                correlacoes, anomalias, contexto_orcamentario, data_coverage, date_from, date_to
+            )
 
         try:
             import core.llm_client as llm_client
 
-            prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
+            prompt = self._build_prompt(
+                correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase, date_from, date_to
+            )
             logger.info(
                 "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
                 self.synthesizer_id, len(prompt),
@@ -107,7 +119,9 @@ class TextSynthesizer:
             "TextSynthesizer %s: usando fallback estruturado (LLM indisponível ou vazio)",
             self.synthesizer_id,
         )
-        return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+        return self._generate_structured_text(
+            correlacoes, anomalias, contexto_orcamentario, data_coverage, date_from, date_to
+        )
 
     def generate_stream(
         self,
@@ -116,6 +130,8 @@ class TextSynthesizer:
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
         enfase: str | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
     ) -> Generator[str, None, None]:
         """Retorna generator de tokens para streaming via LLM.
 
@@ -131,6 +147,8 @@ class TextSynthesizer:
             data_coverage: Dict com cobertura de dados e gaps detectados.
             enfase: Descrição do ângulo de ênfase escolhido pela Etapa 3
                 (opcional).
+            date_from: Ano inicial do período analisado (ver `generate`).
+            date_to: Ano final do período analisado (ver `generate`).
 
         Yields:
             Tokens individuais do LLM.
@@ -140,7 +158,9 @@ class TextSynthesizer:
         """
         import core.llm_client as llm_client
 
-        prompt = self._build_prompt(correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase)
+        prompt = self._build_prompt(
+            correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase, date_from, date_to
+        )
         logger.info(
             "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
             self.synthesizer_id, len(prompt),
@@ -153,6 +173,8 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
     ) -> str:
         """Gera texto estruturado sem LLM (fallback determinístico).
 
@@ -161,11 +183,15 @@ class TextSynthesizer:
             anomalias: Lista de dicts com anomalias detectadas.
             contexto_orcamentario: Dict com tendências orçamentárias.
             data_coverage: Dict com cobertura de dados e gaps detectados.
+            date_from: Ano inicial do período analisado (ver `generate`).
+            date_to: Ano final do período analisado (ver `generate`).
 
         Returns:
             Texto estruturado com seções de análise.
         """
-        return self._generate_structured_text(correlacoes, anomalias, contexto_orcamentario, data_coverage)
+        return self._generate_structured_text(
+            correlacoes, anomalias, contexto_orcamentario, data_coverage, date_from, date_to
+        )
 
     # -- Internal methods ------------------------------------------------
 
@@ -176,16 +202,32 @@ class TextSynthesizer:
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
         enfase: str | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
     ) -> str:
         """Build the LLM prompt from analysis data (Req 7.4).
 
         `enfase` (Etapa 3 — AgentePriorizacaoAnalitica) vira uma instrução
         explícita de destaque, além da própria ordem de `correlacoes`/
         `anomalias` (já reordenadas por relevância quando vêm da Etapa 3).
+
+        `date_from`/`date_to`, quando informados, viram uma instrução para
+        o texto declarar o período analisado logo no início — inclusive
+        quando o período foi inferido pelo guardrail de intenção (o
+        usuário não especificou datas), para o leitor sempre saber qual
+        intervalo de anos embasa a análise.
         """
         coverage = data_coverage or {}
         gaps = coverage.get("gaps", [])
         summary = coverage.get("summary", {})
+
+        periodo_section = ""
+        if date_from is not None and date_to is not None:
+            periodo_section = (
+                f"\nPERÍODO ANALISADO: {date_from} a {date_to}.\n"
+                "Logo no início do texto, deixe claro em linguagem natural qual "
+                "período de anos foi considerado nesta análise.\n"
+            )
 
         enfase_section = ""
         if enfase:
@@ -232,6 +274,14 @@ class TextSynthesizer:
             "  303 = investimento em medicamentos e insumos\n"
             "  305 = investimento em prevenção de epidemias e vigilância sanitária\n"
             "- Diga o que os números significam para a vida das pessoas\n"
+            "- Cada correlação abaixo já vem com um campo \"leitura\" dizendo se o "
+            "sinal (positivo/negativo) é DESEJÁVEL ou INDESEJÁVEL para aquele "
+            "indicador especificamente — use esse campo como a fonte da verdade "
+            "sobre se o resultado é bom ou ruim, não deduza pelo nome do "
+            "indicador nem por associação (ex.: \"prevenção deveria reduzir "
+            "mortes\") sem checar o campo \"leitura\": o sinal real da correlação "
+            "pode contrariar essa intuição\n"
+            f"{periodo_section}"
             f"{enfase_section}\n"
             "DADOS ANALISADOS:\n\n"
             "Relações encontradas entre gastos e resultados de saúde:\n"
@@ -256,11 +306,18 @@ class TextSynthesizer:
         anomalias: list[dict],
         contexto_orcamentario: dict[str, Any],
         data_coverage: dict[str, Any] | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
     ) -> str:
         """Generate structured fallback text when LLM is unavailable (Req 7.3, 7.4).
 
         Includes: resumo executivo, cobertura de dados, correlações analysis,
         anomalias discussion, and contexto orçamentário.
+
+        `date_from`/`date_to`, quando informados, viram uma linha explícita
+        no Resumo Executivo — mesma garantia de transparência do caminho
+        via LLM (ver `_build_prompt`), inclusive quando o período foi
+        inferido pelo guardrail de intenção.
         """
         coverage = data_coverage or {}
         gaps = coverage.get("gaps", [])
@@ -275,6 +332,8 @@ class TextSynthesizer:
             "do município de Sorocaba-SP, integrando correlações estatísticas, "
             "detecção de anomalias e contexto orçamentário.\n"
         )
+        if date_from is not None and date_to is not None:
+            sections.append(f"Período analisado: {date_from} a {date_to}.\n")
         sections.append(
             f"Foram analisadas {len(correlacoes)} correlação(ões) e "
             f"identificadas {len(anomalias)} anomalia(s).\n"

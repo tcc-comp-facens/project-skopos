@@ -25,6 +25,8 @@ const { EMPTY_WS_STATE, mockWsStates } = vi.hoisted(() => {
     qualityMetrics: null,
     llmJudgeText: '',
     llmJudgeLoading: false,
+    starAgentData: null,
+    hierAgentData: null,
   };
   return { EMPTY_WS_STATE, mockWsStates: {} as Record<string, typeof EMPTY_WS_STATE> };
 });
@@ -61,16 +63,14 @@ describe('App — modelo de rodadas', () => {
     mockWsStates['analysis-2'] = { ...EMPTY_WS_STATE, starText: 'resultado da rodada 2' };
     fireEvent.click(screen.getByText('start-round-2'));
 
-    // Vai para a aba Agentes conferir o histórico de rodadas
+    // Vai para a aba Agentes conferir o panorama de rodadas
     fireEvent.click(screen.getByTestId('tab-tech'));
 
-    // Rodada mais nova (2) selecionada automaticamente
-    expect(screen.getByText('resultado da rodada 2')).toBeInTheDocument();
-
-    // Volta para a rodada 1 — o snapshot dela deve seguir intacto
-    fireEvent.change(screen.getByTestId('round-selector-select'), {
-      target: { value: 'analysis-1' },
-    });
+    // Rodada 1 ficou expandida desde quando era a mais nova, e continua
+    // assim mesmo depois que a rodada 2 começa (estado local não é
+    // resetado por uma rodada nova chegando) — o snapshot dela segue
+    // intacto, ambas visíveis ao mesmo tempo (panorama, não seleção única).
     expect(screen.getByText('resultado da rodada 1')).toBeInTheDocument();
+    expect(screen.getByText('resultado da rodada 2')).toBeInTheDocument();
   });
 });

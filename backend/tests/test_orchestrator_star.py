@@ -155,6 +155,86 @@ class TestResultKeys:
         assert expected_keys.issubset(result.keys())
 
 
+class TestAgentQueriesCapture:
+    """Etapa nova — captura de query Cypher + dados brutos por agente
+    (exposta na aba técnica do frontend, evento `agent_data`)."""
+
+    @pytest.fixture
+    def neo4j_client_with_query_log(self):
+        client = MagicMock()
+        client.query_log = []
+
+        def _despesas(*args, **kwargs):
+            rows = [{"subfuncao": 305, "subfuncaoNome": "Vigilância", "ano": 2020, "valor": 100.0}]
+            client.query_log.append({
+                "query": "MATCH (d:DespesaAnual) RETURN d",
+                "params": {"subfuncaoCodigos": [305]},
+                "rowCount": len(rows),
+                "rows": rows,
+            })
+            return rows
+
+        def _indicadores(*args, **kwargs):
+            rows = [{"tipo": "dengue", "ano": 2020, "valor": 30.0}]
+            client.query_log.append({
+                "query": "MATCH (i:IndicadorSaude) RETURN i",
+                "params": {"sistema": "SINAN"},
+                "rowCount": len(rows),
+                "rows": rows,
+            })
+            return rows
+
+        client.get_despesas_por_subfuncao.side_effect = _despesas
+        client.get_indicadores_por_sistema.side_effect = _indicadores
+        client.save_metrica = MagicMock()
+        return client
+
+    def test_result_includes_agent_queries_per_activated_agent(
+        self, neo4j_client_with_query_log, ws_queue
+    ):
+        orch = OrquestradorEstrela("test-orch-queries", neo4j_client_with_query_log)
+        params = {
+            "date_from": 2019,
+            "date_to": 2021,
+            "health_params": ["dengue"],
+            "use_llm": False,
+        }
+        result = orch.run("analysis-queries", params, ws_queue)
+
+        agent_queries = result["agent_queries"]
+        assert len(agent_queries) > 0
+        names = {aq["agentName"] for aq in agent_queries}
+        assert "sinan" in names
+        assert any(n.startswith("orcamento_subfuncao_") for n in names)
+
+        sinan_entry = next(aq for aq in agent_queries if aq["agentName"] == "sinan")
+        assert len(sinan_entry["queries"]) == 1
+        assert sinan_entry["queries"][0]["rowCount"] == 1
+        assert sinan_entry["queries"][0]["rows"][0]["tipo"] == "dengue"
+
+    def test_agent_data_event_emitted_to_ws_queue(
+        self, neo4j_client_with_query_log, ws_queue
+    ):
+        orch = OrquestradorEstrela("test-orch-queries-ws", neo4j_client_with_query_log)
+        params = {
+            "date_from": 2019,
+            "date_to": 2021,
+            "health_params": ["dengue"],
+            "use_llm": False,
+        }
+        orch.run("analysis-queries-ws", params, ws_queue)
+
+        events = []
+        while not ws_queue.empty():
+            events.append(ws_queue.get_nowait())
+
+        agent_data_events = [e for e in events if e["type"] == "agent_data"]
+        assert len(agent_data_events) == 1
+        assert agent_data_events[0]["architecture"] == "star"
+        assert agent_data_events[0]["payload"]["architecture"] == "star"
+        assert len(agent_data_events[0]["payload"]["agents"]) > 0
+
+
 class TestErrorEventsOnFailure:
     def test_error_events_sent_to_ws_queue(self, ws_queue):
         """When agent.query() raises at orchestrator level, error event is sent."""
@@ -282,3 +362,37 @@ class TestSelfCheckWiring:
                 result = orchestrator.run("analysis-sc-6", params, ws_queue)
 
         assert result["texto_analise"] == "texto original"
+
+
+class TestPeriodoNoSintetizador:
+    """date_from/date_to de working_memory chegam ao TextSynthesizer, para
+    o texto final sempre declarar o período analisado (guardrail
+    "natural" — ver AgenteInterpretacaoIntencao)."""
+
+    def test_generate_stream_receives_date_from_and_date_to(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2020, "date_to": 2025,
+            "health_params": ["covid"], "use_llm": True,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto"])
+            orchestrator.run("analysis-periodo-1", params, ws_queue)
+
+        instance.generate_stream.assert_called_once()
+        assert instance.generate_stream.call_args.kwargs["date_from"] == 2020
+        assert instance.generate_stream.call_args.kwargs["date_to"] == 2025
+
+    def test_generate_fallback_receives_date_from_and_date_to(self, orchestrator, neo4j_client, ws_queue):
+        params = {
+            "date_from": 2020, "date_to": 2025,
+            "health_params": ["covid"], "use_llm": False,
+        }
+        with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_fallback.return_value = "texto fallback"
+            orchestrator.run("analysis-periodo-2", params, ws_queue)
+
+        instance.generate_fallback.assert_called_once()
+        call_args = instance.generate_fallback.call_args.args
+        assert call_args[-2:] == (2020, 2025)

@@ -403,3 +403,101 @@ class TestCoordenadorGeralRepasseDeResumos:
         coord._act_delegar_contexto({"goal": "delegar_contexto"})
 
         sup_contexto.run.assert_called_once_with(use_llm=False)
+
+
+class TestCoordenadorGeralAgentDataEvent:
+    """Etapa nova — evento `agent_data` combinando as queries capturadas
+    por SupervisorOrcamento e SupervisorSaude (mesma exposição que a
+    topologia estrela, via _act_persistir_metricas)."""
+
+    def test_persistir_metricas_emite_agent_data_combinando_supervisores(self):
+        ws_queue = Queue()
+        coord = CoordenadorGeral("test-coord-agent-data", MagicMock())
+        coord.working_memory.update({
+            "analysis_id": "a1",
+            "_ws_queue": ws_queue,
+            "_metrics_collectors": [],
+            "_sup_orcamento": MagicMock(_collectors=[]),
+            "_sup_saude": MagicMock(_collectors=[]),
+            "_sup_analitico": MagicMock(_collectors=[]),
+            "_sup_contexto": MagicMock(_collectors=[]),
+            "_orcamento_data": {
+                "agent_queries": [{
+                    "agentName": "orcamento_subfuncao_301",
+                    "agentLabel": "AB (301)",
+                    "queries": [{
+                        "query": "MATCH (d:DespesaAnual) RETURN d",
+                        "params": {},
+                        "rowCount": 1,
+                        "rows": [{"ano": 2020, "valor": 100.0}],
+                    }],
+                }],
+            },
+            "_saude_data": {
+                "agent_queries": [{
+                    "agentName": "sinan",
+                    "agentLabel": "SINAN",
+                    "queries": [{
+                        "query": "MATCH (i:IndicadorSaude) RETURN i",
+                        "params": {},
+                        "rowCount": 1,
+                        "rows": [{"ano": 2020, "valor": 30.0}],
+                    }],
+                }],
+            },
+        })
+        coord._act_persistir_metricas({"goal": "persistir_metricas"})
+
+        events = []
+        while not ws_queue.empty():
+            events.append(ws_queue.get_nowait())
+
+        agent_data_events = [e for e in events if e["type"] == "agent_data"]
+        assert len(agent_data_events) == 1
+        payload = agent_data_events[0]["payload"]
+        assert payload["architecture"] == "hierarchical"
+        names = {a["agentName"] for a in payload["agents"]}
+        assert names == {"orcamento_subfuncao_301", "sinan"}
+
+
+class TestPeriodoNoSintetizadorHierarquico:
+    """date_from/date_to de peer_data chegam ao TextSynthesizer em
+    SupervisorAnalitico — mesma garantia da topologia estrela (ver
+    test_orchestrator_star.py::TestPeriodoNoSintetizador)."""
+
+    def _sup_pronto(self, use_llm: bool) -> SupervisorAnalitico:
+        sup = SupervisorAnalitico("test-sup-periodo")
+        sup.receive_from_peer({
+            "despesas": [], "indicadores": [],
+            "date_from": 2020, "date_to": 2025,
+        })
+        sup.working_memory.update({
+            "_ws_queue": Queue(),
+            "analysis_id": "a1",
+            "use_llm": use_llm,
+            "correlacoes": [],
+            "anomalias": [],
+        })
+        return sup
+
+    def test_generate_stream_receives_date_from_and_date_to(self):
+        sup = self._sup_pronto(use_llm=True)
+        with patch("agents.hierarchical.supervisors.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_stream.return_value = iter(["texto"])
+            sup._act_sintetizar_texto({"goal": "sintetizar_texto"})
+
+        instance.generate_stream.assert_called_once()
+        assert instance.generate_stream.call_args.kwargs["date_from"] == 2020
+        assert instance.generate_stream.call_args.kwargs["date_to"] == 2025
+
+    def test_generate_fallback_receives_date_from_and_date_to(self):
+        sup = self._sup_pronto(use_llm=False)
+        with patch("agents.hierarchical.supervisors.TextSynthesizer") as MockSynth:
+            instance = MockSynth.return_value
+            instance.generate_fallback.return_value = "texto fallback"
+            sup._act_sintetizar_texto({"goal": "sintetizar_texto"})
+
+        instance.generate_fallback.assert_called_once()
+        call_args = instance.generate_fallback.call_args.args
+        assert call_args[-2:] == (2020, 2025)

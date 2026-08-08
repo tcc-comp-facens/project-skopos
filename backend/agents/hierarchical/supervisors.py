@@ -245,12 +245,19 @@ class SupervisorOrcamento(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, "orcamento_subfuncao")
         mc.start()
         try:
+            log_start = len(self.neo4j_client.query_log)
             result = agent.query(
                 analysis_id, date_from, date_to,
                 intent_summary=intent_summary,
                 use_llm=self.working_memory.get("use_llm", True),
             )
             mc.stop()
+            queries = self.neo4j_client.query_log[log_start:]
+            self.working_memory.setdefault("agent_queries", []).append({
+                "agentName": f"orcamento_subfuncao_{codigo}",
+                "agentLabel": f"{nome} ({codigo})",
+                "queries": queries,
+            })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("tendencias", {})[codigo] = result.get("tendencia", {})
             self.working_memory.setdefault("variacao_anual", {})[codigo] = result.get(
@@ -394,6 +401,7 @@ class SupervisorOrcamento(AgenteCoALA):
             self.working_memory.get("aggregated", {"despesas": [], "tendencias": {}})
         )
         result["resumo"] = self.working_memory.get("resumo", "")
+        result["agent_queries"] = self.working_memory.get("agent_queries", [])
         return result
 
 
@@ -513,8 +521,15 @@ class SupervisorSaude(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, agent_type)
         mc.start()
         try:
+            log_start = len(self.neo4j_client.query_log)
             result = agent.query(analysis_id, date_from, date_to, **query_kwargs)
             mc.stop()
+            queries = self.neo4j_client.query_log[log_start:]
+            self.working_memory.setdefault("agent_queries", []).append({
+                "agentName": agent_type,
+                "agentLabel": agent_type.upper(),
+                "queries": queries,
+            })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))
             logger.info(
@@ -691,6 +706,7 @@ class SupervisorSaude(AgenteCoALA):
             self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
         )
         result["resumo"] = self.working_memory.get("resumo", "")
+        result["agent_queries"] = self.working_memory.get("agent_queries", [])
         return result
 
 
@@ -915,6 +931,8 @@ class SupervisorAnalitico(AgenteCoALA):
             analysis_id = self.working_memory["analysis_id"]
             data_coverage = self.working_memory.get("data_coverage")
             use_llm = self.working_memory.get("use_llm", True)
+            date_from = self.peer_data.get("date_from")
+            date_to = self.peer_data.get("date_to")
 
             # Correlações/anomalias/ênfase priorizadas (Etapa 3), se
             # disponíveis — nunca substitui os dados brutos usados em Q1.
@@ -939,11 +957,14 @@ class SupervisorAnalitico(AgenteCoALA):
                         contexto_orcamentario=contexto_orcamentario,
                         data_coverage=data_coverage,
                         enfase=enfase,
+                        date_from=date_from,
+                        date_to=date_to,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
                         texto_analise = sintetizador.generate_fallback(
-                            correlacoes, anomalias, contexto_orcamentario, data_coverage
+                            correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                            date_from, date_to,
                         )
                         adapter.stream_text(texto_analise)
                 except Exception:
@@ -952,12 +973,14 @@ class SupervisorAnalitico(AgenteCoALA):
                         self.agent_id,
                     )
                     texto_analise = sintetizador.generate_fallback(
-                        correlacoes, anomalias, contexto_orcamentario, data_coverage
+                        correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                        date_from, date_to,
                     )
                     adapter.stream_text(texto_analise)
             else:
                 texto_analise = sintetizador.generate_fallback(
-                    correlacoes, anomalias, contexto_orcamentario, data_coverage
+                    correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                    date_from, date_to,
                 )
                 adapter.stream_text(texto_analise)
 

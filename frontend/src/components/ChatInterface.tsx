@@ -2,12 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import { MessageBubble } from './MessageBubble';
 import { formatRoundSummary } from '../utils/formatRoundSummary';
+import { parseWinner } from '../utils/parseWinner';
 import { isBlank, isTooLong, MAX_CHAT_MESSAGE_LENGTH } from '../utils/validateMessage';
 import { API_URL } from '../config';
-import type { ChatMessage, UseWebSocketState } from '../types';
+import type { ChatMessage, UseWebSocketState, WinnerArchitecture } from '../types';
 
 export interface ChatInterfaceProps {
-  useLlm: boolean;
   useLlmJudge: boolean;
   onAnalysisStarted: (analysisId: string, question: string) => void;
   activeRoundId: string | null;
@@ -19,6 +19,15 @@ function nextId(): string {
   messageCounter += 1;
   return `msg-${Date.now()}-${messageCounter}`;
 }
+
+// Revelação progressiva simulada da resposta vencedora na aba Saúde — o
+// texto completo já chegou do backend antes de sabermos quem venceu (só
+// depois que as duas arquiteturas terminam), então "streaming" aqui é um
+// replay client-side do texto final, não os chunks reais do WebSocket
+// (esses viram visíveis só na aba Agentes, sem crescimento — ver
+// ArchitecturePanel).
+const REVEAL_CHUNK_SIZE = 6;
+const REVEAL_INTERVAL_MS = 20;
 
 const WELCOME_TEXT =
   'Olá! Pergunte sobre gastos públicos em saúde de Sorocaba-SP — por ' +
@@ -34,7 +43,6 @@ const WELCOME_TEXT =
  * Requirements: 1.1-1.5, 2.1-2.5, 5.1-5.4, 7.1-7.6 (spec realtime-chat-interface)
  */
 export function ChatInterface({
-  useLlm,
   useLlmJudge,
   onAnalysisStarted,
   activeRoundId,
@@ -52,8 +60,50 @@ export function ChatInterface({
   const [isAwaitingResponse, setIsAwaitingResponse] = useState(false);
   const streamingMessageIdRef = useRef<string | null>(null);
   const pendingQuestionRef = useRef<string>('');
-  const summarizedRoundIdRef = useRef<string | null>(null);
+  const answerMessageIdRef = useRef<Map<string, string>>(new Map());
+  const finalizedRoundIdRef = useRef<Set<string>>(new Set());
+  const revealTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Limpa qualquer revelação em andamento ao desmontar (defensivo — hoje
+  // ChatInterface nunca desmonta de fato, as duas abas ficam sempre
+  // montadas e só trocam `display`, mas evita timers órfãos se isso mudar).
+  useEffect(() => {
+    return () => {
+      revealTimersRef.current.forEach(clearInterval);
+      revealTimersRef.current.clear();
+    };
+  }, []);
+
+  const startReveal = useCallback(
+    (roundId: string, messageId: string, fullText: string, winner: WinnerArchitecture) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, content: '', isStreaming: true, kind: 'architecture_answer', architecture: winner ?? undefined }
+            : m,
+        ),
+      );
+
+      let revealed = 0;
+      const timer = setInterval(() => {
+        revealed = Math.min(revealed + REVEAL_CHUNK_SIZE, fullText.length);
+        const slice = fullText.slice(0, revealed);
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, content: slice } : m)),
+        );
+        if (revealed >= fullText.length) {
+          clearInterval(timer);
+          revealTimersRef.current.delete(roundId);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === messageId ? { ...m, isStreaming: false } : m)),
+          );
+        }
+      }, REVEAL_INTERVAL_MS);
+      revealTimersRef.current.set(roundId, timer);
+    },
+    [],
+  );
 
   // Mensagem de boas-vindas com o intervalo de anos realmente disponível
   // (best-effort — se o endpoint falhar, mantém o texto genérico).
@@ -117,25 +167,54 @@ export function ChatInterface({
     },
   });
 
-  // Assim que a rodada ativa terminar (deixa de carregar), acrescenta uma
-  // bolha de resumo — cada analysisId só gera um resumo (guard via ref).
+  // Assim que uma rodada começa, acrescenta uma bolha de resposta (como
+  // uma mensagem normal do chat, não um card separado abaixo dele) —
+  // primeiro um placeholder "Analisando…", depois substituída pelo texto
+  // completo da arquitetura vencedora assim que a rodada termina. Cada
+  // analysisId tem no máximo uma bolha de resposta, atualizada in place
+  // (guard via refs — nunca duplicada, nunca re-finalizada).
   useEffect(() => {
     if (!activeRoundId || !activeRoundWs) return;
+    if (finalizedRoundIdRef.current.has(activeRoundId)) return;
+
+    let messageId = answerMessageIdRef.current.get(activeRoundId);
+    if (!messageId) {
+      messageId = nextId();
+      answerMessageIdRef.current.set(activeRoundId, messageId);
+      appendMessage({
+        id: messageId,
+        role: 'system',
+        content: 'Analisando os dados…',
+        timestamp: new Date().toISOString(),
+        isStreaming: true,
+      });
+    }
+
     const isLoading =
       activeRoundWs.starLoading ||
       activeRoundWs.hierLoading ||
       activeRoundWs.comparativeLoading;
     if (isLoading) return;
-    if (summarizedRoundIdRef.current === activeRoundId) return;
 
-    summarizedRoundIdRef.current = activeRoundId;
-    appendMessage({
-      id: nextId(),
-      role: 'system',
-      content: formatRoundSummary(activeRoundWs, pendingQuestionRef.current),
-      timestamp: new Date().toISOString(),
-    });
-  }, [activeRoundId, activeRoundWs, appendMessage]);
+    finalizedRoundIdRef.current.add(activeRoundId);
+    const winner = parseWinner(activeRoundWs.comparativeReport);
+
+    if (winner) {
+      const fullText = winner === 'star' ? activeRoundWs.starText : activeRoundWs.hierText;
+      startReveal(activeRoundId, messageId, fullText, winner);
+      return;
+    }
+
+    // Sem vencedor (ambas falharam) — mensagem curta de fallback, sem
+    // revelação progressiva (não é "a resposta", é um aviso de erro).
+    const finalMessageId = messageId;
+    const content = formatRoundSummary(activeRoundWs, pendingQuestionRef.current);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === finalMessageId ? { ...m, content, isStreaming: false, kind: 'text' } : m,
+      ),
+    );
+  }, [activeRoundId, activeRoundWs, appendMessage, startReveal]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -165,8 +244,8 @@ export function ChatInterface({
 
     setIsAwaitingResponse(true);
     setInputText('');
-    chat.sendMessage(text, useLlm, useLlmJudge);
-  }, [inputText, isAwaitingResponse, useLlm, useLlmJudge, chat, appendMessage]);
+    chat.sendMessage(text, useLlmJudge);
+  }, [inputText, isAwaitingResponse, useLlmJudge, chat, appendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {

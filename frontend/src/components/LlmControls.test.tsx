@@ -1,6 +1,7 @@
 /**
  * Tests for LlmControls component.
- * Validates toggle behavior and LLM Judge dependency on LLM toggle.
+ * O uso de LLM em si é sempre ativo (não é mais um toggle) — só o LLM
+ * Judge continua controlável pelo usuário.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -8,44 +9,36 @@ import { LlmControls } from './LlmControls';
 
 describe('LlmControls', () => {
   const defaultProps = {
-    useLlm: false,
     useLlmJudge: false,
     disabled: false,
-    onUseLlmChange: vi.fn(),
     onUseLlmJudgeChange: vi.fn(),
   };
 
-  it('renders LLM and LLM Judge toggles', () => {
+  it('renders only the LLM Judge toggle', () => {
     render(<LlmControls {...defaultProps} />);
-    expect(screen.getByTestId('llm-toggle-input')).toBeInTheDocument();
     expect(screen.getByTestId('llm-judge-toggle-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('llm-toggle-input')).not.toBeInTheDocument();
   });
 
-  it('LLM Judge is disabled when useLlm is false', () => {
-    render(<LlmControls {...defaultProps} useLlm={false} />);
+  it('LLM Judge toggle is disabled when disabled prop is true', () => {
+    render(<LlmControls {...defaultProps} disabled={true} />);
     expect(screen.getByTestId('llm-judge-toggle-input')).toBeDisabled();
   });
 
-  it('LLM Judge is enabled when useLlm is true', () => {
-    render(<LlmControls {...defaultProps} useLlm={true} />);
+  it('LLM Judge toggle is enabled when disabled prop is false', () => {
+    render(<LlmControls {...defaultProps} disabled={false} />);
     expect(screen.getByTestId('llm-judge-toggle-input')).not.toBeDisabled();
   });
 
-  it('both toggles disabled when disabled prop is true', () => {
-    render(<LlmControls {...defaultProps} disabled={true} />);
-    expect(screen.getByTestId('llm-toggle-input')).toBeDisabled();
-    expect(screen.getByTestId('llm-judge-toggle-input')).toBeDisabled();
+  it('calls onUseLlmJudgeChange when toggle clicked', () => {
+    const onUseLlmJudgeChange = vi.fn();
+    render(<LlmControls {...defaultProps} onUseLlmJudgeChange={onUseLlmJudgeChange} />);
+    fireEvent.click(screen.getByTestId('llm-judge-toggle-input'));
+    expect(onUseLlmJudgeChange).toHaveBeenCalledWith(true);
   });
 
-  it('calls onUseLlmChange when LLM toggle clicked', () => {
-    const onUseLlmChange = vi.fn();
-    render(<LlmControls {...defaultProps} onUseLlmChange={onUseLlmChange} />);
-    fireEvent.click(screen.getByTestId('llm-toggle-input'));
-    expect(onUseLlmChange).toHaveBeenCalledWith(true);
-  });
-
-  it('LLM Judge checkbox unchecked when useLlm is false even if useLlmJudge is true', () => {
-    render(<LlmControls {...defaultProps} useLlm={false} useLlmJudge={true} />);
-    expect(screen.getByTestId('llm-judge-toggle-input')).not.toBeChecked();
+  it('reflects the checked state from useLlmJudge prop', () => {
+    render(<LlmControls {...defaultProps} useLlmJudge={true} />);
+    expect(screen.getByTestId('llm-judge-toggle-input')).toBeChecked();
   });
 });

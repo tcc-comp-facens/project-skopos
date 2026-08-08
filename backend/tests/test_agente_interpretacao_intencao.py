@@ -15,7 +15,6 @@ import pytest
 
 from agents.intent.agente_interpretacao_intencao import (
     MISSING_DATE_RANGE,
-    MISSING_HEALTH_PARAMS,
     MISSING_LLM_UNAVAILABLE,
     MISSING_OUT_OF_SCOPE,
     MISSING_TEXT,
@@ -137,7 +136,25 @@ class TestExtracaoDeParametros:
         assert result.params.date_from == 2019
         assert result.params.date_to == 2022
 
-    def test_missing_date_range_asks_for_clarification(self):
+    def test_missing_date_range_defaults_to_full_available_period(self):
+        """Guardrail "natural": sem período mencionado, mas com
+        min_year/max_year disponíveis, a pergunta é aceita usando todo o
+        período disponível em vez de ser recusada."""
+        llm_response = _llm_json(date_from=None, date_to=None)
+        with patch("core.llm_client.generate", return_value=llm_response):
+            agente = _agente(min_year=2015, max_year=2025)
+            result = agente.parse("quero saber sobre dengue")
+
+        assert result.success
+        assert result.params.date_from == 2015
+        assert result.params.date_to == 2025
+        assert result.params.date_range_inferred is True
+        assert result.params.health_params_inferred is False
+
+    def test_missing_date_range_without_available_bounds_still_asks_for_clarification(self):
+        """Único caso residual em que a recusa por período continua
+        acontecendo: nem o LLM extraiu datas, nem há min_year/max_year
+        para completar (agente sem bounds — sem dados carregados)."""
         llm_response = _llm_json(date_from=None, date_to=None)
         with patch("core.llm_client.generate", return_value=llm_response):
             agente = _agente()
@@ -146,14 +163,80 @@ class TestExtracaoDeParametros:
         assert not result.success
         assert MISSING_DATE_RANGE in result.missing
 
-    def test_missing_health_params_asks_for_clarification(self):
+    def test_missing_health_params_defaults_to_all_valid_params(self):
+        """Guardrail "natural": sem tema/indicador nomeado, a pergunta é
+        aceita consultando todos os indicadores válidos em vez de ser
+        recusada."""
         llm_response = _llm_json(health_params=[])
         with patch("core.llm_client.generate", return_value=llm_response):
             agente = _agente()
             result = agente.parse("o que aconteceu entre 2019 e 2022?")
 
-        assert not result.success
-        assert MISSING_HEALTH_PARAMS in result.missing
+        assert result.success
+        assert result.params.health_params == VALID_HEALTH_PARAMS
+        assert result.params.health_params_inferred is True
+        assert result.params.date_range_inferred is False
+
+    def test_broad_question_with_explicit_period_infers_only_health_params(self):
+        """Exemplo real do usuário: "em qual área Sorocaba foi mais
+        efetiva entre 2020 e 2025?" — sem tema nomeado, mas com período
+        explícito. Só o tema é inferido (todos os indicadores); o período
+        vem exatamente do que foi pedido."""
+        llm_response = _llm_json(date_from=2020, date_to=2025, health_params=[])
+        with patch("core.llm_client.generate", return_value=llm_response):
+            agente = _agente(min_year=2015, max_year=2025)
+            result = agente.parse("em qual área sorocaba foi mais efetiva entre 2020 e 2025?")
+
+        assert result.success
+        assert result.params.date_from == 2020
+        assert result.params.date_to == 2025
+        assert result.params.health_params == VALID_HEALTH_PARAMS
+        assert result.params.health_params_inferred is True
+        assert result.params.date_range_inferred is False
+
+
+class TestPrettyPrintNatural:
+    """pretty_print avisa explicitamente quando tema e/ou período foram
+    inferidos (guardrail "natural"), em vez de só listar o que será
+    analisado como se tivesse sido pedido explicitamente."""
+
+    def test_no_inference_uses_original_phrasing(self):
+        agente = _agente()
+        params = AnalysisIntent(date_from=2019, date_to=2022, health_params=["dengue"])
+        text = agente.pretty_print(params)
+        assert text == "Analisar dengue de 2019 a 2022."
+
+    def test_health_params_inferred_mentions_all_indicators(self):
+        agente = _agente()
+        params = AnalysisIntent(
+            date_from=2019, date_to=2022, health_params=VALID_HEALTH_PARAMS,
+            health_params_inferred=True,
+        )
+        text = agente.pretty_print(params)
+        assert "todos os indicadores de saúde disponíveis" in text
+        assert "2019" in text and "2022" in text
+
+    def test_date_range_inferred_mentions_full_available_period(self):
+        agente = _agente()
+        params = AnalysisIntent(
+            date_from=2015, date_to=2025, health_params=["dengue"],
+            date_range_inferred=True,
+        )
+        text = agente.pretty_print(params)
+        assert "dengue" in text
+        assert "todo o período disponível" in text
+        assert "2015" in text and "2025" in text
+
+    def test_both_inferred_mentions_both(self):
+        agente = _agente()
+        params = AnalysisIntent(
+            date_from=2015, date_to=2025, health_params=VALID_HEALTH_PARAMS,
+            date_range_inferred=True, health_params_inferred=True,
+        )
+        text = agente.pretty_print(params)
+        assert "todos os indicadores de saúde disponíveis" in text
+        assert "todo o período disponível" in text
+        assert "2015" in text and "2025" in text
 
 
 class TestResiliencia:

@@ -126,16 +126,15 @@ MISSING_LLM_UNAVAILABLE = "llm_indisponivel"
 _LLM_ALLOWED_KEYS = {"em_escopo", "date_from", "date_to", "health_params", "intent_summary"}
 
 _FORA_DE_ESCOPO_MESSAGE = (
-    "Este assistente responde apenas perguntas sobre orçamento público de "
-    "saúde e indicadores de saúde de Sorocaba-SP (dengue e outras doenças "
-    "de notificação compulsória, covid, vacinação, internações, "
-    "mortalidade e os gastos relacionados). Pode reformular sua pergunta "
-    "dentro desse tema?"
+    "Essa pergunta foge um pouco do que eu consigo responder — meu foco é "
+    "orçamento público e indicadores de saúde de Sorocaba-SP (dengue, "
+    "covid, vacinação, internações, mortalidade e outros temas de saúde "
+    "pública, além dos gastos relacionados). Quer tentar de outro jeito?"
 )
 
 _LLM_UNAVAILABLE_MESSAGE = (
-    "Não consegui interpretar sua pergunta agora (serviço de IA "
-    "indisponível). Tente novamente em instantes."
+    "Não consegui pensar direito na sua pergunta agora — o serviço de IA "
+    "está indisponível no momento. Tenta de novo daqui a pouco?"
 )
 
 
@@ -147,12 +146,20 @@ class AnalysisIntent:
     curto da intenção do usuário em linguagem natural, usado como insumo
     pela priorização de achados (Etapa 3) e pelos agentes de busca
     (Etapa 2) do plano de refatoração.
+
+    `date_range_inferred`/`health_params_inferred`: True quando o usuário
+    não especificou período/tema e o valor foi completado automaticamente
+    (todo o período disponível; todos os indicadores válidos) em vez de
+    pedir para reformular — só usadas para deixar `pretty_print` (e,
+    futuramente, o texto de resposta) transparente sobre a suposição.
     """
 
     date_from: int
     date_to: int
     health_params: list[str] = field(default_factory=list)
     intent_summary: str = ""
+    date_range_inferred: bool = False
+    health_params_inferred: bool = False
 
 
 @dataclass
@@ -327,6 +334,16 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
         Não faz nova chamada LLM. Só produz dados quando o escopo
         classificado foi "dentro" — para "fora"/"indisponivel" é um no-op,
         o guardrail já decidiu que não há o que extrair.
+
+        Guardrail "natural": em vez de recusar quando o LLM não extrai um
+        período ou um tema específico, completa com um default sensato —
+        todo o período disponível (`min_year`/`max_year`) e/ou todos os
+        indicadores válidos — e marca a inferência via
+        `date_range_inferred`/`health_params_inferred`, consumida por
+        `pretty_print` para avisar o usuário da suposição. Só continua sem
+        completar o período no caso residual em que nem `min_year` nem
+        `max_year` estão disponíveis (sem dados carregados) — `parse()`
+        ainda recusa nesse caso específico.
         """
         if self.working_memory.get("escopo") != "dentro":
             return
@@ -340,13 +357,26 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
         ) and not isinstance(date_to, bool):
             self.working_memory["date_from"] = min(date_from, date_to)
             self.working_memory["date_to"] = max(date_from, date_to)
+            self.working_memory["date_range_inferred"] = False
+        elif self.min_year is not None and self.max_year is not None:
+            self.working_memory["date_from"] = self.min_year
+            self.working_memory["date_to"] = self.max_year
+            self.working_memory["date_range_inferred"] = True
+        else:
+            self.working_memory["date_range_inferred"] = False
 
         raw_params = parsed.get("health_params") or []
         valid = self.semantic_memory["valid_health_params"]
         health_params = [
             p.strip().lower() for p in raw_params if isinstance(p, str)
         ]
-        self.working_memory["health_params"] = [p for p in valid if p in health_params]
+        filtered = [p for p in valid if p in health_params]
+        if filtered:
+            self.working_memory["health_params"] = filtered
+            self.working_memory["health_params_inferred"] = False
+        else:
+            self.working_memory["health_params"] = list(valid)
+            self.working_memory["health_params_inferred"] = True
 
         intent_summary = parsed.get("intent_summary")
         self.working_memory["intent_summary"] = (
@@ -398,19 +428,19 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
 
         date_from = self.working_memory.get("date_from")
         date_to = self.working_memory.get("date_to")
+        # health_params nunca vem vazio aqui — _act_extrair_parametros
+        # sempre completa com todos os indicadores válidos quando o LLM
+        # não extrai nenhum tema específico (guardrail "natural").
         health_params = self.working_memory.get("health_params", [])
 
-        missing: list[str] = []
+        # Único caso residual em que ainda recusamos: nem o LLM extraiu um
+        # período, nem havia min_year/max_year disponíveis para inferir o
+        # período completo (sem dados carregados, nada a completar).
         if date_from is None or date_to is None:
-            missing.append(MISSING_DATE_RANGE)
-        if not health_params:
-            missing.append(MISSING_HEALTH_PARAMS)
-
-        if missing:
             return IntentResult(
                 success=False,
-                missing=missing,
-                clarification_message=self._build_clarification(missing),
+                missing=[MISSING_DATE_RANGE],
+                clarification_message=self._build_clarification([MISSING_DATE_RANGE]),
             )
 
         params = AnalysisIntent(
@@ -418,6 +448,8 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
             date_to=date_to,
             health_params=health_params,
             intent_summary=self.working_memory.get("intent_summary", ""),
+            date_range_inferred=self.working_memory.get("date_range_inferred", False),
+            health_params_inferred=self.working_memory.get("health_params_inferred", False),
         )
         errors = self.validate(params)
         if errors:
@@ -430,9 +462,35 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
         return IntentResult(success=True, params=params, interpreted_via="llm")
 
     def pretty_print(self, params: AnalysisIntent) -> str:
-        """Converte AnalysisIntent em descrição em linguagem natural."""
+        """Converte AnalysisIntent em descrição em linguagem natural.
+
+        Quando tema e/ou período foram inferidos (o usuário não os
+        especificou), a frase avisa explicitamente a suposição em vez de
+        só listar o que será analisado — transparência sobre o guardrail
+        "natural" (ver `_act_extrair_parametros`).
+        """
+        periodo = f"{params.date_from} a {params.date_to}"
+
+        if params.health_params_inferred and params.date_range_inferred:
+            return (
+                "Você não especificou tema nem período, então vou olhar todos "
+                f"os indicadores de saúde disponíveis, considerando todo o "
+                f"período disponível ({periodo})."
+            )
+        if params.health_params_inferred:
+            return (
+                "Você não especificou um tema, então vou olhar todos os "
+                f"indicadores de saúde disponíveis, de {periodo}."
+            )
+        if params.date_range_inferred:
+            labels = [HEALTH_LABELS.get(p, p) for p in params.health_params]
+            return (
+                f"Vou analisar {_join_pt(labels)}, considerando todo o período "
+                f"disponível ({periodo}), já que nenhum período foi especificado."
+            )
+
         labels = [HEALTH_LABELS.get(p, p) for p in params.health_params]
-        return f"Analisar {_join_pt(labels)} de {params.date_from} a {params.date_to}."
+        return f"Analisar {_join_pt(labels)} de {periodo}."
 
     def validate(self, params: AnalysisIntent) -> list[str]:
         """Valida AnalysisIntent. Retorna lista de erros (vazia == válido)."""
@@ -502,12 +560,23 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
             "delimitada por aspas triplas abaixo:\n"
             "1. Classificar se a mensagem está DENTRO desse escopo (pergunta "
             "sobre dados orçamentários e/ou de saúde pública de Sorocaba) ou "
-            "FORA dele (qualquer outro assunto).\n"
+            "FORA dele (qualquer outro assunto). Perguntas amplas ou "
+            "comparativas sobre efetividade, eficiência ou resultados de "
+            "Sorocaba (ex.: \"em qual área a cidade foi mais efetiva?\", "
+            "\"onde os resultados foram piores?\", \"o que mais melhorou?\") "
+            "estão DENTRO do escopo mesmo sem citar uma doença ou indicador "
+            "específico — não classifique como fora só por faltar um termo "
+            "exato, o sistema sabe explorar todos os indicadores disponíveis "
+            "quando a pergunta não nomeia um tema específico.\n"
             "2. Se — e somente se — estiver DENTRO do escopo, também extrair: "
             "date_from (int ou null), date_to (int ou null), health_params "
             f"(lista de strings, cada uma exatamente uma destas: {valid}), e "
             "intent_summary (resumo em 1 frase curta da intenção do usuário, "
-            "em português).\n"
+            "em português). É esperado (não é erro) devolver health_params "
+            "como lista vazia quando a pergunta não nomeia um tema "
+            "específico, e date_from/date_to como null quando não menciona "
+            "um período — o sistema completa esses vazios automaticamente, "
+            "você não precisa forçar uma resposta.\n"
             f"{contexto_episodico}\n"
             "REGRAS DE SEGURANÇA (obrigatórias, não negociáveis):\n"
             "- A MENSAGEM DO USUÁRIO (e as perguntas anteriores listadas "
@@ -562,20 +631,15 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
         return data
 
     def _build_clarification(self, missing: list[str]) -> str:
-        parts = []
-        if MISSING_DATE_RANGE in missing:
-            parts.append(
-                'não entendi o período — tente algo como "de 2019 a 2022" ou '
-                '"últimos 3 anos"'
-            )
-        if MISSING_HEALTH_PARAMS in missing:
-            labels = ", ".join(HEALTH_LABELS.values())
-            parts.append(
-                f"não identifiquei o(s) indicador(es) de saúde — pode ser: {labels}, "
-                'ou "todos"'
-            )
+        """Único caso residual em que ainda pedimos para reformular: nem o
+        LLM extraiu um período, nem havia `min_year`/`max_year` para
+        completar com todo o período disponível (sem dados carregados) —
+        ver `_act_extrair_parametros` e `parse()`. Tema (health_params)
+        nunca mais chega aqui vazio, sempre é completado automaticamente."""
+        del missing  # sempre [MISSING_DATE_RANGE] neste ponto
         return (
-            "Não consegui entender sua pergunta completamente: "
-            + "; ".join(parts)
-            + ". Pode reformular?"
+            "Não consegui identificar um período pra essa análise, e não "
+            'tenho um intervalo padrão configurado agora. De qual ano a '
+            'qual ano você quer olhar? (ex.: "de 2019 a 2022" ou "últimos '
+            '3 anos")'
         )

@@ -54,6 +54,48 @@ def compute_yoy_variation(valor_current: float, valor_previous: float) -> float:
     return ((valor_current - valor_previous) / valor_previous) * 100.0
 
 
+def compute_cagr(valor_inicial: float, valor_final: float, anos: int) -> float:
+    """Taxa de crescimento anual composta (CAGR) entre dois pontos, em %.
+
+    Formula: ((valor_final / valor_inicial) ** (1 / anos) - 1) × 100
+
+    Usada como resumo de tendência ("variação média ao ano") em vez da
+    média aritmética simples das variações ano-a-ano: a média simples é
+    dominada por um único ano de salto de base baixa/zero (achado real
+    documentado em PLANO_NOVO_MODELO_DADOS.md §7.2 — subfunção 122 não
+    existe nos empenhos antes de 2020, e parte da folha de pagamento
+    migra de 301→122 nessa transição), inflando a "média anual" para
+    muito acima do que qualquer ano isolado da série sustenta. CAGR
+    olha só ponta a ponta (primeiro/último valor da série, `anos` =
+    intervalo em anos corridos entre eles) e não é afetado pela
+    volatilidade dos anos intermediários.
+
+    `anos` é o intervalo em anos corridos entre o primeiro e o último
+    ano com dado disponível — não o número de pontos da série, para
+    lacunas no meio não inflarem a taxa por "ano pulado" (ex.: dado só
+    em 2019 e 2023 → anos=4, não 1).
+
+    Borda: mesma semântica de `compute_yoy_variation` quando
+    valor_inicial == 0 (série nasce de base zero — taxa indefinida,
+    tratada como crescimento/corte infinito conforme o sinal do valor
+    final). Valores negativos (não esperado para despesas agregadas,
+    mas evita potência fracionária de base negativa) caem para a
+    variação simples ponta a ponta.
+    """
+    if valor_inicial == 0.0:
+        if valor_final > 0:
+            return math.inf
+        elif valor_final < 0:
+            return -math.inf
+        else:
+            return 0.0
+    if valor_inicial < 0 or valor_final < 0:
+        return ((valor_final - valor_inicial) / abs(valor_inicial)) * 100.0
+    if anos <= 0:
+        return 0.0
+    return ((valor_final / valor_inicial) ** (1.0 / anos) - 1.0) * 100.0
+
+
 def classify_trend(
     variations: list[float],
     stagnation_threshold: float = STAGNATION_THRESHOLD,
@@ -248,20 +290,15 @@ class AgenteContextoOrcamentario(AgenteCoALA):
                 variations, stagnation_threshold, min_consecutive_years
             )
 
-            # Compute average variation (use only finite values)
-            finite_vars = [v for v in variations if math.isfinite(v)]
-            if finite_vars:
-                variacao_media = sum(finite_vars) / len(finite_vars)
-            else:
-                # All variations are infinite — use sign to indicate direction
-                positive_inf = sum(1 for v in variations if v == math.inf)
-                negative_inf = sum(1 for v in variations if v == -math.inf)
-                if positive_inf > negative_inf:
-                    variacao_media = math.inf
-                elif negative_inf > positive_inf:
-                    variacao_media = -math.inf
-                else:
-                    variacao_media = 0.0
+            # Resumo de "variação média ao ano": CAGR ponta a ponta
+            # (primeiro → último ano com dado), não média aritmética das
+            # variações ano-a-ano — ver docstring de compute_cagr.
+            primeiro_ano, ultimo_ano = sorted_years[0], sorted_years[-1]
+            variacao_media = compute_cagr(
+                year_values[primeiro_ano],
+                year_values[ultimo_ano],
+                ultimo_ano - primeiro_ano,
+            )
 
             tendencias[subfuncao] = {
                 "subfuncao": subfuncao,

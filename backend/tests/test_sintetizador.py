@@ -94,3 +94,48 @@ class TestGenerateStream:
         with patch("core.llm_client.generate_stream", return_value=iter(["Hello", " ", "world"])):
             tokens = list(synth.generate_stream(sample_correlacoes, sample_anomalias, sample_contexto))
         assert tokens == ["Hello", " ", "world"]
+
+
+class TestPeriodoAnalisado:
+    """O texto final (LLM ou fallback) sempre declara o período analisado
+    quando date_from/date_to são informados — inclusive quando o período
+    foi inferido pelo guardrail de intenção, não só quando explicitado
+    pelo usuário (AgenteInterpretacaoIntencao)."""
+
+    def test_fallback_mentions_period_when_given(self, synth):
+        text = synth.generate_fallback([], [], {}, date_from=2020, date_to=2025)
+        assert "2020" in text
+        assert "2025" in text
+        assert "Período analisado" in text
+
+    def test_fallback_omits_period_line_when_not_given(self, synth):
+        text = synth.generate_fallback([], [], {})
+        assert "Período analisado" not in text
+
+    def test_llm_prompt_includes_period_instruction_when_given(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(
+            sample_correlacoes, sample_anomalias, sample_contexto,
+            date_from=2020, date_to=2025,
+        )
+        assert "PERÍODO ANALISADO: 2020 a 2025" in prompt
+
+    def test_llm_prompt_omits_period_instruction_when_not_given(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "PERÍODO ANALISADO" not in prompt
+
+    def test_generate_without_llm_passes_period_through_to_fallback(self, synth):
+        text = synth.generate(
+            [], [], {}, use_llm=False, date_from=2015, date_to=2025,
+        )
+        assert "Período analisado: 2015 a 2025" in text
+
+    def test_old_call_sites_without_period_still_work(self, synth):
+        """Chamadas antigas (sem date_from/date_to) continuam funcionando
+        sem erro — os novos parâmetros são opcionais."""
+        text = synth.generate([], [], {}, use_llm=False)
+        assert "Resumo Executivo" in text
+        assert "Período analisado" not in text

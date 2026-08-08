@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { WS_URL } from '../config';
-import type { WSEvent, BenchmarkMetrics, QualityMetrics, UseWebSocketState } from '../types';
+import type {
+  WSEvent,
+  BenchmarkMetrics,
+  AgentDataPayload,
+  QualityMetrics,
+  UseWebSocketState,
+} from '../types';
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 
@@ -20,6 +26,8 @@ export const INITIAL_STATE: UseWebSocketState = {
   qualityMetrics: null,
   llmJudgeText: '',
   llmJudgeLoading: false,
+  starAgentData: null,
+  hierAgentData: null,
 };
 
 export function useWebSocket(analysisId: string | null): UseWebSocketState {
@@ -63,6 +71,14 @@ export function useWebSocket(analysisId: string | null): UseWebSocketState {
             }
           }
           break;
+        case 'agent_data':
+          {
+            const data = event.payload as AgentDataPayload;
+            if (data && Array.isArray(data.agents)) {
+              setState((prev) => ({ ...prev, starAgentData: data.agents }));
+            }
+          }
+          break;
       }
     } else if (arch === 'hierarchical') {
       switch (event.type) {
@@ -91,6 +107,14 @@ export function useWebSocket(analysisId: string | null): UseWebSocketState {
                 ...prev,
                 hierBenchmarks: metrics,
               }));
+            }
+          }
+          break;
+        case 'agent_data':
+          {
+            const data = event.payload as AgentDataPayload;
+            if (data && Array.isArray(data.agents)) {
+              setState((prev) => ({ ...prev, hierAgentData: data.agents }));
             }
           }
           break;

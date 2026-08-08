@@ -13,8 +13,37 @@ export interface BenchmarkMetrics {
 export interface WSEvent {
   analysisId: string;
   architecture: 'star' | 'hierarchical' | 'both';
-  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'llm_judge' | 'llm_judge_done';
-  payload: string | BenchmarkMetrics | Record<string, unknown>;
+  type:
+    | 'chunk'
+    | 'done'
+    | 'error'
+    | 'metric'
+    | 'agent_data'
+    | 'quality_metrics'
+    | 'llm_judge'
+    | 'llm_judge_done';
+  payload: string | BenchmarkMetrics | AgentDataPayload | Record<string, unknown>;
+}
+
+// Query Cypher + dados brutos que um agente de domínio executou —
+// capturado em Neo4jClient.query_log (backend) e repassado via evento
+// `agent_data`, para a aba técnica exibir gráfico + query + linhas cruas.
+export interface AgentQueryEntry {
+  query: string;
+  params: Record<string, unknown>;
+  rowCount: number;
+  rows: Record<string, unknown>[];
+}
+
+export interface AgentDataEntry {
+  agentName: string;
+  agentLabel: string;
+  queries: AgentQueryEntry[];
+}
+
+export interface AgentDataPayload {
+  architecture: 'star' | 'hierarchical';
+  agents: AgentDataEntry[];
 }
 
 // Aba ativa
@@ -31,6 +60,15 @@ export interface ChatMessage {
   timestamp: string;
   isStreaming?: boolean;
   isError?: boolean;
+  // 'architecture_answer' marca a bolha que carrega o texto completo da
+  // arquitetura vencedora de uma rodada (ver ChatInterface); default é
+  // 'text' (mensagem comum). Continua renderizado como texto puro, nunca
+  // dangerouslySetInnerHTML.
+  kind?: 'text' | 'architecture_answer';
+  // Setado só na bolha de resposta quando há vencedor — MessageBubble usa
+  // isso para mostrar um badge de emoji no canto, em vez de mencionar o
+  // nome da arquitetura no texto.
+  architecture?: 'star' | 'hierarchical';
 }
 
 export interface ChatWSEvent {
@@ -62,6 +100,8 @@ export interface UseWebSocketState {
   qualityMetrics: QualityMetrics | null;
   llmJudgeText: string;
   llmJudgeLoading: boolean;
+  starAgentData: AgentDataEntry[] | null;
+  hierAgentData: AgentDataEntry[] | null;
 }
 
 // Uma "rodada" = uma pergunta do chat que disparou uma análise.

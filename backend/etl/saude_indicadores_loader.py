@@ -585,6 +585,28 @@ def _load_covid(session, imported_at: str) -> int:
     return len(rows)
 
 
+# "Tipo Atendimento (SUS)" e "Rec.Fisicos-Leitos e Consult" não têm coluna
+# "Total" na planilha fonte — decisão do próprio DATASUS, não lacuna da
+# ETL — porque não existe uma soma válida das categorias em nenhum dos
+# dois casos:
+#   - Tipo Atendimento: colunas (Ambulatorio_SUS, Internacao_SUS,
+#     SADT_SUS, Urgencia_SUS, Farmacia_Cooperativa_SUS) contam
+#     ESTABELECIMENTOS, e um mesmo estabelecimento aparece em várias
+#     colunas ao mesmo tempo (ex.: um hospital que atende ambulatório E
+#     internação E urgência) — somar duplicaria contagem.
+#   - Leitos e Consultórios: mistura unidades físicas diferentes
+#     (leitos vs. consultórios) em categorias como
+#     Consultorios_ClinicaBasica_Ambul/Leitos_Repouso_Pediatrico_Hosp —
+#     somar produz um número sem significado (nem "total de leitos" nem
+#     "total de consultórios").
+# `_wide_to_rows` grava `valorTotal=None` para esses dois quando não há
+# coluna "Total" (ver `_read_wide_sheet`) — propositalmente, não por
+# omissão. `detect_data_gaps` (agents/data_crossing.py) filtra valores
+# None antes de contar cobertura, então esse gap real aparece no
+# relatório em vez de ser reportado como "100% completo". A quebra por
+# categoria (POR_TIPO_ATENDIMENTO/POR_TIPO_LEITO_CONSULTORIO) continua
+# disponível via consulta dimensional — só o agregado plano é que não
+# existe.
 _CNES_MENSAIS = [
     ("Equipes de Saude", "equipes_saude", "POR_TIPO_EQUIPE", "TipoEquipe"),
     ("Tipo Atendimento (SUS)", "tipo_atendimento", "POR_TIPO_ATENDIMENTO", "TipoAtendimento"),

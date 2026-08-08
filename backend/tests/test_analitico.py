@@ -210,6 +210,125 @@ class TestAnomaliasSinanIndicadoresNegativos:
         assert "alto_gasto_baixo_resultado" in anomaly_types
 
 
+# -- Leitura de polaridade (regressão: sintetizador recebia correlação
+# crua e tinha que adivinhar se positivo era bom ou ruim para cada
+# indicador — inverteu isso para mortalidade em produção) -------------------
+
+
+class TestCorrelacaoLeituraPolaridade:
+    def test_positive_correlation_with_negative_indicator_is_undesirable(self, agente):
+        """Gasto sobe, mortes também sobem (r>0) — indesejável, mortalidade
+        é indicador negativo (mais é pior)."""
+        data = _make_crossed(305, "mortalidade", [
+            (2019, 100.0, 10.0),
+            (2020, 200.0, 20.0),
+            (2021, 300.0, 30.0),
+        ])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert result[0]["spearman"] > 0
+        assert "INDESEJÁVEL" in result[0]["leitura"]
+
+    def test_negative_correlation_with_negative_indicator_is_desirable(self, agente):
+        """Gasto sobe, mortes caem (r<0) — desejável."""
+        data = _make_crossed(305, "mortalidade", [
+            (2019, 100.0, 50.0),
+            (2020, 200.0, 30.0),
+            (2021, 300.0, 10.0),
+        ])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert result[0]["spearman"] < 0
+        assert "DESEJÁVEL" in result[0]["leitura"]
+        assert "INDESEJÁVEL" not in result[0]["leitura"]
+
+    def test_positive_correlation_with_positive_indicator_is_desirable(self, agente):
+        """Gasto sobe, cobertura vacinal sobe (r>0) — desejável, cobertura
+        é indicador positivo (mais é melhor)."""
+        data = _make_crossed(301, "cobertura_vacinal", [
+            (2019, 100.0, 10.0),
+            (2020, 200.0, 20.0),
+            (2021, 300.0, 30.0),
+        ])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert result[0]["spearman"] > 0
+        assert "DESEJÁVEL" in result[0]["leitura"]
+        assert "INDESEJÁVEL" not in result[0]["leitura"]
+
+    def test_negative_correlation_with_positive_indicator_is_undesirable(self, agente):
+        data = _make_crossed(301, "cobertura_vacinal", [
+            (2019, 100.0, 50.0),
+            (2020, 200.0, 30.0),
+            (2021, 300.0, 10.0),
+        ])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert result[0]["spearman"] < 0
+        assert "INDESEJÁVEL" in result[0]["leitura"]
+
+    def test_single_point_has_no_leitura_field(self, agente):
+        """n<2: correlação não é calculada de verdade (spearman=0.0
+        artificial) — não deve carregar uma leitura de polaridade."""
+        data = _make_crossed(301, "cobertura_vacinal", [(2020, 100.0, 50.0)])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert "leitura" not in result[0]
+
+
+# -- Valores nulos (subtipos só quebrados por dimensão, ex.: CNES
+# "tipo_atendimento"/"leitos_consultorios" — regressão do bug em que
+# _median() comparava None < None e derrubava a ação inteira) ---------------
+
+
+class TestNullValorIndicador:
+    def test_all_none_pair_produces_no_anomaly_and_no_crash(self, agente):
+        """Par onde todo valor_indicador é None (caso real do CNES) não
+        deve derrubar a detecção de anomalias inteira — só é ignorado."""
+        data = _make_crossed(122, "tipo_atendimento", [
+            (2022, 100.0, None),
+            (2023, 200.0, None),
+            (2024, 300.0, None),
+            (2025, 400.0, None),
+        ])
+        result = agente.analisar(data)
+        assert result["anomalias"] == []
+        assert result["correlacoes"] == []
+
+    def test_all_none_pair_alongside_valid_pair_does_not_block_valid_pair(self, agente):
+        """O par quebrado não pode impedir que outros pares, com dados
+        válidos, sejam processados normalmente."""
+        data = (
+            _make_crossed(122, "tipo_atendimento", [
+                (2022, 100.0, None),
+                (2023, 200.0, None),
+            ])
+            + _make_crossed(302, "internacoes", [
+                (2019, 100.0, 10.0),
+                (2020, 200.0, 30.0),
+                (2021, 300.0, 50.0),
+            ])
+        )
+        result = agente.analisar(data)
+        assert len(result["correlacoes"]) == 1
+        assert result["correlacoes"][0]["subfuncao"] == 302
+        assert len(result["anomalias"]) >= 1
+
+    def test_partial_none_still_correlates_over_valid_points(self, agente):
+        """Um None isolado no meio da série não deve zerar a correlação
+        do par inteiro — só os pontos válidos entram no cálculo."""
+        data = _make_crossed(302, "internacoes", [
+            (2019, 100.0, 10.0),
+            (2020, 200.0, None),
+            (2021, 300.0, 30.0),
+            (2022, 400.0, 40.0),
+        ])
+        result = agente.analisar(data)["correlacoes"]
+        assert len(result) == 1
+        assert result[0]["n_pontos"] == 3
+        assert result[0]["spearman"] == pytest.approx(1.0, abs=0.01)
+
+
 # -- Consolidação: as duas ferramentas rodam juntas --------------------------
 
 

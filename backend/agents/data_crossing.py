@@ -293,15 +293,29 @@ def detect_data_gaps(
         all_tipos_set.add("mortalidade")
         all_tipos = sorted(all_tipos_set)
 
-    # Mapear dados disponíveis
+    # Mapear dados disponíveis — só conta como disponível quando o valor
+    # não é nulo. Alguns subtipos (ex.: CNES "tipo_atendimento",
+    # "leitos_consultorios") sempre retornam a linha (ano, tipo) do
+    # Neo4j mas com valor=None — a planilha fonte do DATASUS não tem
+    # coluna "Total" para eles porque não existe soma válida das
+    # categorias (tipo_atendimento: um mesmo estabelecimento conta em
+    # várias colunas ao mesmo tempo; leitos_consultorios: mistura leitos
+    # e consultórios, unidades diferentes — ver saude_indicadores_loader.py
+    # § CNES). Sem esse filtro, esses pares apareciam como "100%
+    # completos" no relatório de cobertura quando na verdade não têm
+    # nenhum valor numérico utilizável em ano nenhum.
     desp_available: dict[int, set[int]] = {}  # subfuncao → {anos}
     for d in despesas:
+        if d.get("valor") is None:
+            continue
         sf = d.get("subfuncao", 0)
         ano = d.get("ano", 0)
         desp_available.setdefault(sf, set()).add(ano)
 
     ind_available: dict[str, set[int]] = {}  # tipo → {anos}
     for i in indicadores:
+        if i.get("valor") is None:
+            continue
         tipo = i.get("tipo", "")
         ano = i.get("ano", 0)
         ind_available.setdefault(tipo, set()).add(ano)

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import type { BenchmarkMetrics } from '../types';
+import type { AgentDataEntry, BenchmarkMetrics } from '../types';
+import { AgentDataCard } from './AgentDataCard';
 
 export interface ArchitecturePanelProps {
   title: string;
@@ -7,6 +8,7 @@ export interface ArchitecturePanelProps {
   benchmarks: BenchmarkMetrics | null;
   isLoading: boolean;
   error: string | null;
+  agentData?: AgentDataEntry[] | null;
 }
 
 export function ArchitecturePanel({
@@ -15,6 +17,7 @@ export function ArchitecturePanel({
   benchmarks,
   isLoading,
   error,
+  agentData,
 }: ArchitecturePanelProps) {
   const textBoxRef = useRef<HTMLDivElement>(null);
   const isHier = title.toLowerCase().includes('hierárquica') || title.toLowerCase().includes('hierarquica');
@@ -46,16 +49,16 @@ export function ArchitecturePanel({
         data-testid="panel-text-box"
         aria-live="polite"
       >
-        {text || (!isLoading && !error && (
-          <span className="placeholder-text">Aguardando análise...</span>
-        ))}
-        {!text && isLoading && (
-          <div className="panel-loading-indicator">
+        {isLoading ? (
+          <div className="panel-loading-indicator" data-testid="panel-loading-indicator">
             <div className="spinner" />
             <span>Gerando análise...</span>
           </div>
+        ) : text ? (
+          text
+        ) : (
+          !error && <span className="placeholder-text">Aguardando análise...</span>
         )}
-        {text && isLoading && <span className="loading-cursor" data-testid="loading-indicator">▍</span>}
       </div>
 
       {benchmarks && (
@@ -81,6 +84,14 @@ export function ArchitecturePanel({
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {agentData && agentData.length > 0 && (
+        <div className="agent-data-section" data-testid="agent-data-section">
+          {agentData.map((agent) => (
+            <AgentDataCard key={agent.agentName} agent={agent} />
+          ))}
         </div>
       )}
     </div>

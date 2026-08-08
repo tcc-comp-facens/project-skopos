@@ -57,6 +57,40 @@ def _classify(r: float, limiar_alta: float = 0.7, limiar_media: float = 0.4) -> 
     return "baixa"
 
 
+def _interpretar_correlacao(tipo: str, r: float, indicadores_negativos: set[str]) -> str:
+    """Traduz o sinal da correlação em "desejável"/"indesejável" dado a
+    polaridade do indicador — sem isso, quem só recebe `tipo_indicador` +
+    `spearman` cru (o sintetizador via LLM, ver sintetizador._build_prompt)
+    tem que adivinhar sozinho se uma correlação positiva com, por ex.,
+    "mortalidade" é boa ou má notícia. Bug real observado em produção: o
+    LLM descreveu uma correlação positiva gasto×mortalidade (r=+0,77 —
+    mais gasto acompanhando mais mortes) como "mais investimento = menos
+    mortes", o oposto do dado real. Esta função não impede o LLM de
+    ignorar a leitura, mas remove a ambiguidade que o levou a inverter.
+
+    Sem sinal claro (correlação nula/indeterminada) não arrisca leitura.
+    """
+    if r == 0.0:
+        return "sem direção clara (correlação nula ou dados insuficientes)"
+    indicador_negativo = tipo in indicadores_negativos
+    positiva = r > 0
+    if indicador_negativo:
+        return (
+            "positiva — LEITURA INDESEJÁVEL: mais gasto acompanhou mais "
+            "casos/óbitos/internações neste indicador, não menos"
+            if positiva else
+            "negativa — LEITURA DESEJÁVEL: mais gasto acompanhou menos "
+            "casos/óbitos/internações neste indicador"
+        )
+    return (
+        "positiva — LEITURA DESEJÁVEL: mais gasto acompanhou melhora "
+        "neste indicador"
+        if positiva else
+        "negativa — LEITURA INDESEJÁVEL: mais gasto acompanhou piora "
+        "neste indicador"
+    )
+
+
 def _median(values: list[float]) -> float:
     """Calculate the median of a list of floats (média dos 2 centrais se par)."""
     sorted_vals = sorted(values)
@@ -78,12 +112,17 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 }
 
 # Indicadores onde valor alto = resultado RUIM (mais casos/óbitos/
-# internações = pior). Inclui os legados (dengue, covid, internacoes,
-# mortalidade) e os 8 subtipos SINAN adicionais cobertos por AgenteSINAN
-# (Fase 1) — dengue já está listado, não repetido.
+# internações = pior). Inclui os legados (dengue, internacoes,
+# mortalidade), os subtipos nativos do COVID (`casos`, `obitos` — não
+# mais o token legado "covid", que nunca aparece em `tipo_indicador`
+# desde que agente_covid.py parou de relabelar, mesma causa do bug
+# corrigido em data_crossing.SUBFUNCAO_INDICADOR_MAP) e os 8 subtipos
+# SINAN adicionais cobertos por AgenteSINAN (Fase 1) — dengue já está
+# listado, não repetido.
 INDICADORES_NEGATIVOS: set[str] = {
     "dengue",
-    "covid",
+    "casos",
+    "obitos",
     "internacoes",
     "mortalidade",
     "chikungunya",
@@ -96,8 +135,10 @@ INDICADORES_NEGATIVOS: set[str] = {
     "hanseniase",
 }
 
-# Indicadores onde valor alto = resultado BOM (mais cobertura vacinal = melhor)
-INDICADORES_POSITIVOS: set[str] = {"vacinacao"}
+# Indicadores onde valor alto = resultado BOM (mais cobertura/doses
+# aplicadas = melhor). Subtipos nativos do SI-PNI — não mais o token
+# legado "vacinacao", pela mesma razão do comentário acima.
+INDICADORES_POSITIVOS: set[str] = {"cobertura_vacinal", "doses_aplicadas"}
 
 
 class AgenteAnalitico(AgenteCoALA):
@@ -153,14 +194,27 @@ class AgenteAnalitico(AgenteCoALA):
             correlacoes: list[dict[str, Any]] = []
             limiar_alta = self.semantic_memory["limiar_alta"]
             limiar_media = self.semantic_memory["limiar_media"]
+            indicadores_negativos = self.semantic_memory["indicadores_negativos"]
 
             pairs: dict[tuple[int, str], list[dict]] = {}
             for item in crossed:
                 key = (item["subfuncao"], item["tipo_indicador"])
                 pairs.setdefault(key, []).append(item)
 
-            for (subfuncao, tipo), items in pairs.items():
+            for (subfuncao, tipo), raw_items in pairs.items():
+                # Mesmo motivo do filtro em _act_detectar_anomalia: pontos
+                # com valor_indicador nulo (subtipos só quebrados por
+                # dimensão) não entram no cálculo — sem isso, um único
+                # None no par faz stats.spearmanr levantar exceção e
+                # _safe_correlation devolver 0.0 mesmo havendo pontos
+                # válidos suficientes para uma correlação real.
+                items = [
+                    it for it in raw_items
+                    if it["valor_despesa"] is not None and it["valor_indicador"] is not None
+                ]
                 n = len(items)
+                if n == 0:
+                    continue
                 xs = [it["valor_despesa"] for it in items]
                 ys = [it["valor_indicador"] for it in items]
 
@@ -181,6 +235,9 @@ class AgenteAnalitico(AgenteCoALA):
                         "spearman": r_rounded,
                         "classificacao": _classify(r_rounded, limiar_alta, limiar_media),
                         "n_pontos": n,
+                        "leitura": _interpretar_correlacao(
+                            tipo, r_rounded, indicadores_negativos
+                        ),
                     })
 
             self.working_memory["correlacoes"] = correlacoes
@@ -205,7 +262,18 @@ class AgenteAnalitico(AgenteCoALA):
                 key = (item["subfuncao"], item["tipo_indicador"])
                 pairs.setdefault(key, []).append(item)
 
-            for (subfuncao, tipo), items in pairs.items():
+            for (subfuncao, tipo), raw_items in pairs.items():
+                # Alguns subtipos (ex.: CNES "tipo_atendimento",
+                # "leitos_consultorios") só existem quebrados por
+                # dimensão — sem quebra, o valor agregado vem nulo do
+                # Neo4j. `_median()` não compara None (TypeError,
+                # derrubando a ação inteira antes da correção), então
+                # esses pontos são descartados aqui, não silenciados
+                # lá dentro.
+                items = [
+                    it for it in raw_items
+                    if it["valor_despesa"] is not None and it["valor_indicador"] is not None
+                ]
                 if len(items) < 2:
                     continue
 

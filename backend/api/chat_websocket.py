@@ -10,8 +10,8 @@ não pode competir por ela.
 
 Protocolo:
   cliente → servidor:
-    {"type": "user_message", "payload": {"text": str, "useLlm": bool,
-     "useLlmJudge": bool}}
+    {"type": "user_message", "payload": {"text": str, "useLlmJudge": bool}}
+    (uso de LLM é sempre ativo no backend — toggle removido do frontend)
   servidor → cliente:
     {"type": "user_ack", "payload": ""}
     {"type": "system_chunk", "payload": str}      # texto em ~80 chars
@@ -100,7 +100,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
             payload = raw.get("payload") or {}
             text = str(payload.get("text", ""))
-            use_llm = bool(payload.get("useLlm", True))
+            use_llm = True  # toggle removido do frontend — LLM sempre ativo
             use_llm_judge = bool(payload.get("useLlmJudge", False))
             use_self_check = bool(payload.get("useSelfCheck", False))
 
