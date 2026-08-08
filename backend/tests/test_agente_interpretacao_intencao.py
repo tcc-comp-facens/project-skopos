@@ -9,7 +9,7 @@ inválido, e defesa contra prompt injection embutido na mensagem.
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -247,3 +247,58 @@ class TestFormatoCompartilhadoEntreArquiteturas:
         )
 
         assert params.intent_summary == "comparar dengue"
+
+
+class TestMemoriaEpisodicaReal:
+    """Fase 1 (PLANO_NOVO_MODELO_DADOS.md §6 item 4) — retrieval real de
+    análises anteriores via neo4j_client.get_past_analises, gravado em
+    episodic_memory (não só working_memory)."""
+
+    def test_sem_neo4j_client_nao_propoe_buscar_memoria(self):
+        """Comportamento inalterado quando neo4j_client não é fornecido
+        (ex.: testes/instâncias que não passam o client)."""
+        agente = _agente()
+        with patch("core.llm_client.generate", return_value=_llm_json()) as mock_generate:
+            agente.parse("compare dengue de 2019 a 2022")
+        acoes = {e["action"] for e in agente.episodic_memory}
+        assert "recuperar_analises_anteriores" not in acoes
+        # Só a chamada de classificar_escopo, nenhuma de memória episódica
+        mock_generate.assert_called_once()
+
+    def test_com_neo4j_client_grava_episodio_com_conteudo(self):
+        client = MagicMock()
+        client.get_past_analises.return_value = [
+            {"sourceQuestion": "e a dengue em 2020?", "createdAt": "2026-01-01T00:00:00Z"},
+        ]
+        agente = _agente(neo4j_client=client)
+        with patch("core.llm_client.generate", return_value=_llm_json()):
+            agente.parse("compare dengue de 2019 a 2022")
+
+        client.get_past_analises.assert_called_once()
+        episodios = [e for e in agente.episodic_memory if e["action"] == "recuperar_analises_anteriores"]
+        assert len(episodios) == 1
+        assert episodios[0]["detail"] == [
+            {"sourceQuestion": "e a dengue em 2020?", "createdAt": "2026-01-01T00:00:00Z"}
+        ]
+
+    def test_falha_na_busca_nao_quebra_o_pipeline(self):
+        client = MagicMock()
+        client.get_past_analises.side_effect = Exception("Neo4j indisponível")
+        agente = _agente(neo4j_client=client)
+        with patch("core.llm_client.generate", return_value=_llm_json()):
+            result = agente.parse("compare dengue de 2019 a 2022")
+
+        assert result.success
+        assert agente.working_memory.get("memoria_episodica") is None
+
+    def test_contexto_episodico_aparece_no_prompt(self):
+        client = MagicMock()
+        client.get_past_analises.return_value = [
+            {"sourceQuestion": "e a dengue em 2020?", "createdAt": "2026-01-01T00:00:00Z"},
+        ]
+        agente = _agente(neo4j_client=client)
+        with patch("core.llm_client.generate", return_value=_llm_json()) as mock_generate:
+            agente.parse("compare dengue de 2019 a 2022")
+
+        prompt_enviado = mock_generate.call_args[0][0]
+        assert "e a dengue em 2020?" in prompt_enviado

@@ -24,7 +24,7 @@ services:
       neo4j:
         condition: service_healthy
     env_file:
-      - backend/.env
+      - .env
     environment:
       - DADOS_DIR=/Dados
     volumes:
@@ -40,8 +40,8 @@ services:
     depends_on:
       - backend
     environment:
-      - VITE_API_URL=http://localhost:8000
-      - VITE_WS_URL=ws://localhost:8000
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+      - VITE_WS_URL=${VITE_WS_URL:-ws://localhost:8000}
 
 volumes:
   neo4j_data:

@@ -1,10 +1,23 @@
 """
 Coordenador geral da arquitetura hierárquica (Nível 0).
 
-Delega para 3 supervisores especializados de nível 1:
-- SupervisorDominio (4 agentes de domínio)
-- SupervisorAnalitico (3 agentes analíticos)
+Delega para 4 supervisores especializados de nível 1:
+- SupervisorOrcamento (agentes AgenteOrcamentoSubfuncao — 1 por
+  subfunção, 7 no total)
+- SupervisorSaude (5 agentes de saúde — SINAN, SIH, SIM, SI-PNI, COVID)
+- SupervisorAnalitico (agentes analíticos)
 - SupervisorContexto (1 agente de contexto orçamentário)
+
+SupervisorOrcamento e SupervisorSaude substituem o antigo
+SupervisorDominio (Fase 1 — PLANO_NOVO_MODELO_DADOS.md §5 e decisão
+tomada com o usuário: separar orçamento e saúde em dois supervisores
+distintos em vez de um único supervisor de domínio combinado). Desde a
+decomposição completa (Fase 2), nenhum agente de SupervisorSaude
+consulta despesas — só SupervisorOrcamento produz despesas — então a
+sobreposição estrutural que motivou `_act_combinar_despesas` não existe
+mais. A combinação/dedupe permanece como salvaguarda (custa pouco,
+protege contra qualquer regressão futura), não porque haja overlap real
+hoje.
 
 Implementa comunicação lateral entre supervisores (Reqs 10.5, 10.6),
 degradação graciosa em falha de supervisor (Req 10.9), e contagem
@@ -15,10 +28,11 @@ CoordenadorGeral executa de fato pelo ciclo CoALA — cada etapa de
 delegação e cada comunicação lateral entre supervisores é uma ação
 nomeada em `procedural_memory`, proposta em ordem fixa por
 `propose_actions()` (a ordem reflete as dependências de dados entre
-supervisores: domínio → comunicação lateral → contexto → comunicação
-lateral → analítico). `evaluate_and_select` colapsa num passthrough
-pelo mesmo motivo que no orquestrador estrela — não há candidatos
-concorrentes a arbitrar neste nível.
+supervisores: orçamento + saúde → combinar despesas → comunicação
+lateral → contexto → comunicação lateral → analítico).
+`evaluate_and_select` colapsa num passthrough pelo mesmo motivo que no
+orquestrador estrela — não há candidatos concorrentes a arbitrar neste
+nível (a deliberação real acontece dentro de AgenteSINAN, nível 2).
 
 Requisitos: 10.1, 10.5, 10.6, 10.8, 10.9, 11.1, 11.2
 """
@@ -32,8 +46,10 @@ from queue import Queue
 from typing import Any, TYPE_CHECKING
 
 from agents.base import ActionFailure, AgenteCoALA
+from agents.data_crossing import deduplicate_despesas
 from agents.hierarchical.supervisors import (
-    SupervisorDominio,
+    SupervisorOrcamento,
+    SupervisorSaude,
     SupervisorAnalitico,
     SupervisorContexto,
 )
@@ -46,13 +62,13 @@ logger = logging.getLogger(__name__)
 
 
 class CoordenadorGeral(AgenteCoALA):
-    """Nível 0 da topologia hierárquica com 3 supervisores (Req 10).
+    """Nível 0 da topologia hierárquica com 4 supervisores (Req 10).
 
-    Delega para SupervisorDominio, SupervisorAnalitico e
-    SupervisorContexto. Os supervisores trocam dados lateralmente
-    via ``receive_from_peer`` (Reqs 10.5, 10.6). Agrega resultados,
-    registra métricas por agente e supervisor (Req 10.8), e trata
-    falhas com degradação graciosa (Req 10.9).
+    Delega para SupervisorOrcamento, SupervisorSaude, SupervisorAnalitico
+    e SupervisorContexto. Os supervisores trocam dados lateralmente via
+    ``receive_from_peer`` (Reqs 10.5, 10.6). Agrega resultados, registra
+    métricas por agente e supervisor (Req 10.8), e trata falhas com
+    degradação graciosa (Req 10.9).
 
     Herda de AgenteCoALA e executa de fato pelo ciclo CoALA — cada etapa
     de delegação/comunicação lateral é uma ação registrada em
@@ -66,9 +82,11 @@ class CoordenadorGeral(AgenteCoALA):
         super().__init__(agent_id)
         self.neo4j_client = neo4j_client
         self.procedural_memory = {
-            "delegar_dominio": [self._act_delegar_dominio],
-            "comunicar_dominio_analitico": [self._act_comunicar_dominio_analitico],
-            "comunicar_dominio_contexto": [self._act_comunicar_dominio_contexto],
+            "delegar_orcamento": [self._act_delegar_orcamento],
+            "delegar_saude": [self._act_delegar_saude],
+            "combinar_despesas": [self._act_combinar_despesas],
+            "comunicar_saude_analitico": [self._act_comunicar_saude_analitico],
+            "comunicar_orcamento_contexto": [self._act_comunicar_orcamento_contexto],
             "delegar_contexto": [self._act_delegar_contexto],
             "comunicar_contexto_analitico": [self._act_comunicar_contexto_analitico],
             "delegar_analitico": [self._act_delegar_analitico],
@@ -90,16 +108,18 @@ class CoordenadorGeral(AgenteCoALA):
         """Propõe as macro-ações do pipeline hierárquico, em ordem de dependência.
 
         A ordem reflete as dependências de dados entre supervisores
-        (domínio → comunicação lateral → contexto → comunicação lateral →
-        analítico → persistência), não uma arbitragem entre candidatos
-        concorrentes.
+        (orçamento + saúde → combinar despesas → comunicação lateral →
+        contexto → comunicação lateral → analítico → persistência), não
+        uma arbitragem entre candidatos concorrentes.
         """
         if not self.working_memory.get("analysis_id"):
             return []
         return [
-            {"goal": "delegar_dominio"},
-            {"goal": "comunicar_dominio_analitico"},
-            {"goal": "comunicar_dominio_contexto"},
+            {"goal": "delegar_orcamento"},
+            {"goal": "delegar_saude"},
+            {"goal": "combinar_despesas"},
+            {"goal": "comunicar_saude_analitico"},
+            {"goal": "comunicar_orcamento_contexto"},
             {"goal": "delegar_contexto"},
             {"goal": "comunicar_contexto_analitico"},
             {"goal": "delegar_analitico"},
@@ -108,19 +128,19 @@ class CoordenadorGeral(AgenteCoALA):
 
     # -- Ações --------------------------------------------------------------
 
-    def _act_delegar_dominio(self, action: dict) -> None:
-        """Ação externa: delega para SupervisorDominio.run() (Req 10.1)."""
-        sup_dominio = self.working_memory["_sup_dominio"]
-        mc = MetricsCollector(sup_dominio.agent_id, "supervisor_dominio")
+    def _act_delegar_orcamento(self, action: dict) -> None:
+        """Ação externa: delega para SupervisorOrcamento.run() (Fase 1)."""
+        sup_orcamento = self.working_memory["_sup_orcamento"]
+        mc = MetricsCollector(sup_orcamento.agent_id, "supervisor_orcamento")
         mc.start()
         analysis_id = self.working_memory["analysis_id"]
         date_from = self.working_memory["date_from"]
         date_to = self.working_memory["date_to"]
         health_params = self.working_memory.get("health_params", [])
-        intent_summary = self.working_memory.get("intent_summary")
         use_llm = self.working_memory.get("use_llm", True)
+        intent_summary = self.working_memory.get("intent_summary")
         try:
-            dominio_data = sup_dominio.run(
+            orcamento_data = sup_orcamento.run(
                 analysis_id=analysis_id,
                 date_from=date_from,
                 date_to=date_to,
@@ -130,45 +150,109 @@ class CoordenadorGeral(AgenteCoALA):
             )
             mc.stop()
             logger.info(
-                "CoordenadorGeral %s: SupervisorDominio completed — %d despesas, %d indicadores",
-                self.agent_id,
-                len(dominio_data.get("despesas", [])),
-                len(dominio_data.get("indicadores", [])),
+                "CoordenadorGeral %s: SupervisorOrcamento completed — %d despesas",
+                self.agent_id, len(orcamento_data.get("despesas", [])),
             )
         except Exception as exc:
             mc.stop()
-            # Req 10.9: degradação graciosa — enviar erro e continuar
             logger.error(
-                "CoordenadorGeral %s: SupervisorDominio failed — %s", self.agent_id, exc
+                "CoordenadorGeral %s: SupervisorOrcamento failed — %s", self.agent_id, exc
             )
-            self._send_error(f"SupervisorDominio falhou: {exc}")
-            dominio_data = {"despesas": [], "indicadores": []}
+            self._send_error(f"SupervisorOrcamento falhou: {exc}")
+            orcamento_data = {"despesas": [], "tendencias": {}}
 
-        self.working_memory["_dominio_data"] = dominio_data
+        self.working_memory["_orcamento_data"] = orcamento_data
         self.working_memory["_metrics_collectors"].append(mc)
 
-    def _act_comunicar_dominio_analitico(self, action: dict) -> None:
-        """Comunicação lateral: SupervisorDominio → SupervisorAnalitico (Req 10.5).
+    def _act_delegar_saude(self, action: dict) -> None:
+        """Ação externa: delega para SupervisorSaude.run()."""
+        sup_saude = self.working_memory["_sup_saude"]
+        mc = MetricsCollector(sup_saude.agent_id, "supervisor_saude")
+        mc.start()
+        analysis_id = self.working_memory["analysis_id"]
+        date_from = self.working_memory["date_from"]
+        date_to = self.working_memory["date_to"]
+        health_params = self.working_memory.get("health_params", [])
+        intent_summary = self.working_memory.get("intent_summary")
+        use_llm = self.working_memory.get("use_llm", True)
+        try:
+            saude_data = sup_saude.run(
+                analysis_id=analysis_id,
+                date_from=date_from,
+                date_to=date_to,
+                health_params=health_params,
+                intent_summary=intent_summary,
+                use_llm=use_llm,
+            )
+            mc.stop()
+            logger.info(
+                "CoordenadorGeral %s: SupervisorSaude completed — %d despesas, %d indicadores",
+                self.agent_id,
+                len(saude_data.get("despesas", [])),
+                len(saude_data.get("indicadores", [])),
+            )
+        except Exception as exc:
+            mc.stop()
+            logger.error(
+                "CoordenadorGeral %s: SupervisorSaude failed — %s", self.agent_id, exc
+            )
+            self._send_error(f"SupervisorSaude falhou: {exc}")
+            saude_data = {"despesas": [], "indicadores": []}
 
-        Repassa despesas e indicadores para o pipeline analítico, acompanhados
-        do resumo textual gerado por SupervisorDominio (Etapa 5) — dá
-        conteúdo semântico à comunicação lateral, não só transporte de dados
-        brutos (D4 do PLANO_REFATORACAO.md).
+        self.working_memory["_saude_data"] = saude_data
+        self.working_memory["_metrics_collectors"].append(mc)
+
+    def _act_combinar_despesas(self, action: dict) -> None:
+        """Ação interna (reasoning): combina despesas de SupervisorOrcamento
+        e SupervisorSaude.
+
+        Desde a decomposição completa (Fase 2), SupervisorSaude nunca
+        retorna despesas — a combinação/dedupe por (subfuncao, ano)
+        permanece como salvaguarda estrutural, não porque haja overlap
+        real esperado.
+        """
+        try:
+            orcamento_data = self.working_memory.get("_orcamento_data", {})
+            saude_data = self.working_memory.get("_saude_data", {})
+            combinadas = deduplicate_despesas(
+                list(orcamento_data.get("despesas", [])) + list(saude_data.get("despesas", []))
+            )
+            self.working_memory["_despesas_combinadas"] = combinadas
+            logger.info(
+                "[%s] CoordenadorGeral: %d despesas combinadas (orcamento + saúde)",
+                self.agent_id, len(combinadas),
+            )
+        except Exception as exc:
+            raise ActionFailure(action, str(exc)) from exc
+
+    def _act_comunicar_saude_analitico(self, action: dict) -> None:
+        """Comunicação lateral: SupervisorOrcamento + SupervisorSaude →
+        SupervisorAnalitico (Req 10.5).
+
+        Repassa despesas combinadas e indicadores para o pipeline
+        analítico, acompanhados dos resumos textuais gerados por ambos
+        os supervisores de origem (Etapa 5) — dá conteúdo semântico à
+        comunicação lateral, não só transporte de dados brutos (D4 do
+        PLANO_REFATORACAO.md).
         """
         sup_analitico = self.working_memory["_sup_analitico"]
-        dominio_data = self.working_memory.get("_dominio_data", {})
-        resumo_dominio = dominio_data.get("resumo", "")
+        orcamento_data = self.working_memory.get("_orcamento_data", {})
+        saude_data = self.working_memory.get("_saude_data", {})
+        despesas = self.working_memory.get("_despesas_combinadas", [])
+        resumo_orcamento = orcamento_data.get("resumo", "")
+        resumo_saude = saude_data.get("resumo", "")
+        resumo_dominio = " ".join(p for p in (resumo_orcamento, resumo_saude) if p)
         logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Dominio -> Analitico "
+            "[%s] CoordenadorGeral: comunicação lateral Orcamento+Saude -> Analitico "
             "(%d despesas, %d indicadores, resumo=%r)",
             self.agent_id,
-            len(dominio_data.get("despesas", [])),
-            len(dominio_data.get("indicadores", [])),
+            len(despesas),
+            len(saude_data.get("indicadores", [])),
             resumo_dominio,
         )
         sup_analitico.receive_from_peer({
-            "despesas": dominio_data.get("despesas", []),
-            "indicadores": dominio_data.get("indicadores", []),
+            "despesas": despesas,
+            "indicadores": saude_data.get("indicadores", []),
             "date_from": self.working_memory["date_from"],
             "date_to": self.working_memory["date_to"],
             "health_params": self.working_memory.get("health_params", []),
@@ -176,18 +260,20 @@ class CoordenadorGeral(AgenteCoALA):
             "resumo_dominio": resumo_dominio,
         })
 
-    def _act_comunicar_dominio_contexto(self, action: dict) -> None:
-        """Comunicação lateral: SupervisorDominio → SupervisorContexto (Req 10.5).
+    def _act_comunicar_orcamento_contexto(self, action: dict) -> None:
+        """Comunicação lateral: despesas combinadas → SupervisorContexto (Req 10.5).
 
-        Repassa despesas para análise de tendências orçamentárias.
+        Repassa despesas (orçamento + saúde combinadas) para análise de
+        tendências orçamentárias — cobre todas as subfunções presentes,
+        não só as que SupervisorOrcamento já instancia nesta fase.
         """
         sup_contexto = self.working_memory["_sup_contexto"]
-        dominio_data = self.working_memory.get("_dominio_data", {})
+        despesas = self.working_memory.get("_despesas_combinadas", [])
         logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Dominio -> Contexto (%d despesas)",
-            self.agent_id, len(dominio_data.get("despesas", [])),
+            "[%s] CoordenadorGeral: comunicação lateral Orcamento+Saude -> Contexto (%d despesas)",
+            self.agent_id, len(despesas),
         )
-        sup_contexto.receive_from_peer({"despesas": dominio_data.get("despesas", [])})
+        sup_contexto.receive_from_peer({"despesas": despesas})
 
     def _act_delegar_contexto(self, action: dict) -> None:
         """Ação externa: delega para SupervisorContexto.run() (Req 10.4)."""
@@ -216,7 +302,7 @@ class CoordenadorGeral(AgenteCoALA):
 
         Repassa contexto orçamentário para enriquecer a síntese textual,
         acompanhado do resumo textual gerado por SupervisorContexto
-        (Etapa 5) — ver docstring de `_act_comunicar_dominio_analitico`.
+        (Etapa 5) — ver docstring de `_act_comunicar_saude_analitico`.
         """
         sup_analitico = self.working_memory["_sup_analitico"]
         contexto_data = self.working_memory.get("_contexto_data", {})
@@ -275,7 +361,8 @@ class CoordenadorGeral(AgenteCoALA):
         self.working_memory["_metrics_collectors"].append(mc)
 
     def _act_persistir_metricas(self, action: dict) -> None:
-        """Persiste métricas de 8 agentes + 3 supervisores e emite evento `metric` (Req 10.8, 11.2).
+        """Persiste métricas dos agentes + 4 supervisores e emite evento
+        `metric` (Req 10.8, 11.2).
 
         Overhead = wall_clock - soma dos agentes FOLHA (nível 2).
         Supervisores NÃO entram em workers_time porque seu tempo já
@@ -287,7 +374,8 @@ class CoordenadorGeral(AgenteCoALA):
         metrics_collectors: list[MetricsCollector] = self.working_memory.get(
             "_metrics_collectors", []
         )
-        sup_dominio = self.working_memory["_sup_dominio"]
+        sup_orcamento = self.working_memory["_sup_orcamento"]
+        sup_saude = self.working_memory["_sup_saude"]
         sup_analitico = self.working_memory["_sup_analitico"]
         sup_contexto = self.working_memory["_sup_contexto"]
 
@@ -303,7 +391,7 @@ class CoordenadorGeral(AgenteCoALA):
                 )
 
         # Persiste métricas dos agentes subordinados de cada supervisor
-        for supervisor in (sup_dominio, sup_analitico, sup_contexto):
+        for supervisor in (sup_orcamento, sup_saude, sup_analitico, sup_contexto):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     agent_mc.persist(self.neo4j_client, analysis_id, "hierarchical")
@@ -330,7 +418,7 @@ class CoordenadorGeral(AgenteCoALA):
                 pass
 
         # Subordinate agent metrics (agentes folha — somados em workers)
-        for supervisor in (sup_dominio, sup_analitico, sup_contexto):
+        for supervisor in (sup_orcamento, sup_saude, sup_analitico, sup_contexto):
             for agent_mc in getattr(supervisor, "_collectors", []):
                 try:
                     m = agent_mc.collect()
@@ -423,7 +511,7 @@ class CoordenadorGeral(AgenteCoALA):
     ) -> dict[str, Any]:
         """Executa o pipeline completo da arquitetura hierárquica.
 
-        Instancia os 3 supervisores com IDs únicos (Req 10.1), configura
+        Instancia os 4 supervisores com IDs únicos (Req 10.1), configura
         a working memory e delega ao ciclo CoALA (`run_coala_cycle`), que
         percorre as macro-ações registradas em `procedural_memory` na
         ordem proposta por `propose_actions`.
@@ -436,7 +524,8 @@ class CoordenadorGeral(AgenteCoALA):
         Returns:
             Dicionário com resultado completo da análise (possivelmente parcial).
         """
-        sup_dominio_id = f"hier-sup-dominio-{uuid.uuid4().hex[:8]}"
+        sup_orcamento_id = f"hier-sup-orcamento-{uuid.uuid4().hex[:8]}"
+        sup_saude_id = f"hier-sup-saude-{uuid.uuid4().hex[:8]}"
         sup_analitico_id = f"hier-sup-analitico-{uuid.uuid4().hex[:8]}"
         sup_contexto_id = f"hier-sup-contexto-{uuid.uuid4().hex[:8]}"
 
@@ -449,7 +538,8 @@ class CoordenadorGeral(AgenteCoALA):
             "use_self_check": params.get("use_self_check", False),
             "intent_summary": params.get("intent_summary"),
             "_ws_queue": ws_queue,
-            "_sup_dominio": SupervisorDominio(sup_dominio_id, self.neo4j_client),
+            "_sup_orcamento": SupervisorOrcamento(sup_orcamento_id, self.neo4j_client),
+            "_sup_saude": SupervisorSaude(sup_saude_id, self.neo4j_client),
             "_sup_analitico": SupervisorAnalitico(sup_analitico_id),
             "_sup_contexto": SupervisorContexto(sup_contexto_id),
             "_metrics_collectors": [],
@@ -458,7 +548,8 @@ class CoordenadorGeral(AgenteCoALA):
 
         self.run_coala_cycle()
 
-        dominio_data = self.working_memory.get("_dominio_data", {})
+        orcamento_data = self.working_memory.get("_orcamento_data", {})
+        saude_data = self.working_memory.get("_saude_data", {})
         contexto_data = self.working_memory.get("_contexto_data", {})
         analitico_data = self.working_memory.get("_analitico_data", {})
 
@@ -466,8 +557,10 @@ class CoordenadorGeral(AgenteCoALA):
         result.setdefault("correlacoes", [])
         result.setdefault("anomalias", [])
         result.setdefault("texto_analise", "")
-        result["despesas"] = dominio_data.get("despesas", [])
-        result["indicadores"] = dominio_data.get("indicadores", [])
+        result["despesas"] = self.working_memory.get(
+            "_despesas_combinadas", saude_data.get("despesas", [])
+        )
+        result["indicadores"] = saude_data.get("indicadores", [])
         result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
 
         self.working_memory["result"] = result

@@ -42,7 +42,7 @@ from agents.intent.agente_interpretacao_intencao import (
 )
 from api.chat_runner import run_chat_analysis
 from api.dispatch import get_available_year_range
-from api.state import active_chat_sessions
+from api.state import active_chat_sessions, get_neo4j_client
 from core import guardrail_stats
 from core.llm_client import TokenBucket
 
@@ -80,10 +80,15 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
 
     year_range = get_available_year_range()
     min_year, max_year = year_range if year_range else (None, None)
+    # Cliente dedicado à sessão de chat inteira (não por mensagem) — usado
+    # só para memória episódica (get_past_analises), leitura leve e
+    # infrequente; fechado no finally ao encerrar a conexão.
+    intent_neo4j_client = get_neo4j_client()
     interpreter = AgenteInterpretacaoIntencao(
         agent_id=f"intent-{uuid.uuid4().hex[:8]}",
         min_year=min_year,
         max_year=max_year,
+        neo4j_client=intent_neo4j_client,
     )
 
     try:
@@ -175,3 +180,7 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
         logger.info("Chat WS %s: cliente desconectado", session_id[:8])
     finally:
         active_chat_sessions.pop(session_id, None)
+        try:
+            intent_neo4j_client.close()
+        except Exception:
+            pass

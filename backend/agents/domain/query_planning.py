@@ -22,9 +22,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import unicodedata
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _sem_acentos(texto: str) -> str:
+    """Remove acentos para comparação de substring tolerante (ex.: 'faixa
+    etária' bate com 'faixa etaria') — usado pelo score determinístico de
+    dimensão, não em nenhum caminho que toca o banco."""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c)
+    )
 
 # Cache de planos de consulta já resolvidos via LLM — process-wide,
 # limpo apenas via reset_cache() (usado nos testes).
@@ -193,3 +203,151 @@ def _parse_plan(raw: str | None) -> dict[str, Any]:
         raise ValueError("campo 'tipos_indicador' inválido")
 
     return {"subfuncoes": subfuncoes, "tipos_indicador": tipos}
+
+
+# ---------------------------------------------------------------------------
+# Deliberação real de dimensão (Fase 1 — reforço de rigor CoALA)
+#
+# Diferente de `plan_query` acima (single-shot, fast-path por padrão), isto
+# implementa o ciclo CoALA propose_actions -> evaluate_and_select de verdade
+# para a decisão "por qual dimensão quebrar esta consulta de indicadores?" —
+# mesmo padrão de dois estágios de agents/analytical/priorizacao.py: score
+# determinístico + arbitragem LLM opcional, com fallback ao maior score em
+# caso de falha/desligamento do LLM. É chamado pelos agentes de domínio de
+# saúde dentro do próprio propose_actions/evaluate_and_select (ver
+# agents/domain/agente_sinan.py) — não substitui o ciclo do agente, é o
+# insumo dos candidatos que ele delibera.
+# ---------------------------------------------------------------------------
+
+
+def propose_dimensao_candidatos(dimensoes_validas: list[str]) -> list[dict[str, Any]]:
+    """Propõe um candidato por dimensão válida + o candidato "sem quebra".
+
+    Args:
+        dimensoes_validas: Dimensões válidas para o sistema do agente
+            (retrieval de `semantic_memory`, ver `db.query_builder.dimensoes_validas`).
+
+    Returns:
+        Lista de candidatos `{"dimensao": str | None, "descricao": str}`.
+    """
+    candidatos: list[dict[str, Any]] = [
+        {"dimensao": None, "descricao": "sem quebra dimensional (total por ano)"}
+    ]
+    for dim in dimensoes_validas:
+        legivel = dim.replace("POR_", "").replace("_", " ").lower()
+        candidatos.append({"dimensao": dim, "descricao": f"quebra por {legivel}"})
+    return candidatos
+
+
+def score_dimensao_candidato(candidate: dict[str, Any], intent_summary: str | None) -> float:
+    """Score determinístico: a dimensão foi mencionada (por nome legível)
+    na intenção do usuário? "Sem quebra" recebe um score base baixo mas
+    não-zero — garante que sempre há um candidato vencedor mesmo quando
+    nenhuma dimensão é mencionada."""
+    if candidate.get("dimensao") is None:
+        return 0.5
+    if not intent_summary:
+        return 0.0
+    legivel = candidate["dimensao"].replace("POR_", "").replace("_", " ").lower()
+    return 1.0 if legivel in _sem_acentos(intent_summary.lower()) else 0.0
+
+
+def arbitrar_dimensao(
+    *,
+    agent_id: str,
+    candidatos: list[dict[str, Any]],
+    intent_summary: str | None,
+    use_llm: bool,
+) -> tuple[dict[str, Any], str]:
+    """Arbitra entre candidatos de dimensão já propostos (`evaluate_and_select`
+    do ciclo CoALA do agente chamador — ver `agents/domain/agente_sinan.py`).
+
+    Recebe os candidatos já construídos (tipicamente via
+    `propose_dimensao_candidatos`, chamado antes em `propose_actions`) em
+    vez de reconstruí-los, para não duplicar a etapa "propose" do ciclo.
+    Pontua cada um deterministicamente (`score_dimensao_candidato`). Se
+    `use_llm=False`, decide direto pelo maior score. Caso contrário, um
+    LLM arbitra entre os candidatos — qualquer falha (exceção, resposta
+    vazia/inválida, dimensão não reconhecida) cai no maior score, nunca
+    quebra o pipeline.
+
+    Returns:
+        Tupla (candidato_escolhido, origem) — origem é uma de "score",
+        "llm", "llm_failed_fallback".
+    """
+    if len(candidatos) == 1:
+        return candidatos[0], "score"
+
+    scored = [(c, score_dimensao_candidato(c, intent_summary)) for c in candidatos]
+
+    if not use_llm:
+        melhor, _ = max(scored, key=lambda item: item[1])
+        return melhor, "score"
+
+    try:
+        import core.llm_client as llm_client
+
+        prompt = _build_dimensao_prompt(scored, intent_summary)
+        raw = llm_client.generate(prompt, caller=f"{agent_id}:arbitrar_dimensao")
+        escolha = _parse_dimensao_escolha(raw, candidatos)
+        if escolha is not None:
+            logger.info("Agent %s: dimensão escolhida via LLM: %s", agent_id, escolha["dimensao"])
+            return escolha, "llm"
+    except Exception as exc:
+        logger.warning(
+            "Agent %s: escolha de dimensão via LLM falhou (%s) — usando maior score",
+            agent_id, exc,
+        )
+
+    melhor, melhor_score = max(scored, key=lambda item: item[1])
+    logger.info(
+        "Agent %s: dimensão escolhida via score determinístico: %s (score=%.1f)",
+        agent_id, melhor["dimensao"], melhor_score,
+    )
+    return melhor, "llm_failed_fallback"
+
+
+def _build_dimensao_prompt(
+    scored: list[tuple[dict[str, Any], float]], intent_summary: str | None
+) -> str:
+    linhas = [
+        f'- dimensao={c["dimensao"]!r}: {c["descricao"]} (score determinístico: {score:.1f})'
+        for c, score in scored
+    ]
+    return (
+        "Você ajuda a decidir se uma consulta de indicadores de saúde de "
+        "Sorocaba-SP deve ser quebrada por alguma dimensão (ex.: faixa "
+        "etária, sexo) ou trazer só o total por ano.\n\n"
+        f"Intenção do usuário nesta análise: {intent_summary or '(não informada)'}\n\n"
+        "Candidatos (com um score determinístico de apoio, baseado em "
+        "menção explícita da dimensão na intenção do usuário — você não "
+        "deve contestar esse score, só usá-lo como referência):\n"
+        + "\n".join(linhas)
+        + "\n\n"
+        "Escolha o candidato mais adequado à intenção do usuário. Responda "
+        "SOMENTE com um objeto JSON, sem texto antes ou depois, sem "
+        'markdown: {"dimensao": <string exatamente como aparece acima, ou null>}'
+    )
+
+
+def _parse_dimensao_escolha(
+    raw: str | None, candidatos: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if "\n" in cleaned:
+            cleaned = cleaned.split("\n", 1)[1]
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    dimensao = data.get("dimensao")
+    for c in candidatos:
+        if c["dimensao"] == dimensao:
+            return c
+    return None

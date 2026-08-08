@@ -38,39 +38,50 @@ from core.quality_metrics import (
 logger = logging.getLogger(__name__)
 
 ALL_HEALTH_PARAMS = ["dengue", "covid", "internacoes", "vacinacao", "mortalidade"]
-SUBFUNCOES = [301, 302, 303, 305]
-TIPOS_INDICADOR = ["dengue", "covid", "internacoes", "vacinacao"]
+# Fase 2 (PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — nenhum
+# agente de saúde consulta despesas, só AgenteOrcamentoSubfuncao. Com
+# ALL_HEALTH_PARAMS, 5 subfunções são ativadas: 301 (vacinacao->sipni),
+# 302 (internacoes->sih), 303/304 (dengue->sinan, "qualquer agravo
+# ativa"), 305 (dengue/covid->sinan+covid) — ver _SUBFUNCAO_TOKENS em
+# agents/star/orchestrator.py.
+SUBFUNCOES = [301, 302, 303, 304, 305]
+
+# ALL_HEALTH_PARAMS ativa 5 agentes de saúde (covid, sih, sipni, sim,
+# sinan) — cada um consulta um nº fixo de subtipos por ano. sinan
+# consulta os 9 subtipos SINAN de uma vez, covid os 2 (casos+obitos),
+# sipni os 2 (cobertura_vacinal+doses_aplicadas) — nenhum é filtrável
+# por health_params nesta fase (ver agents/domain/agente_*.py).
+INDICADORES_POR_ANO = 1 + 2 + 2 + 1 + 9  # sih+covid+sipni+sim(mortalidade)+9 SINAN
 
 
 def _synthetic_neo4j_client(n_years: int) -> MagicMock:
     """Gera um cliente Neo4j mockado com despesas/indicadores sintéticos
     escalando linearmente com n_years — usado para simular o crescimento
-    da base de dados mencionado como motivação da Etapa 2."""
+    da base de dados mencionado como motivação da Etapa 2.
+
+    `get_despesas_por_subfuncao`/`get_indicadores_por_sistema` (schema
+    novo, Fase 1) ecoam de volta exatamente o que foi pedido (códigos de
+    subfunção / subtipos), 1 linha por ano — suficiente para o harness
+    estrutural, sem tentar replicar o filtro real de período."""
     anos = list(range(2010, 2010 + n_years))
 
-    despesas = [
-        {"subfuncao": sf, "subfuncaoNome": f"Subfuncao {sf}", "ano": ano, "valor": 1000.0 * (i + 1)}
-        for i, sf in enumerate(SUBFUNCOES)
-        for ano in anos
-    ]
-    indicadores = [
-        {"tipo": tipo, "ano": ano, "valor": 10.0 + i}
-        for i, tipo in enumerate(TIPOS_INDICADOR)
-        for ano in anos
-    ]
+    def _despesas_por_subfuncao(subfuncao_codigos, date_from, date_to, dimensao=None):
+        return [
+            {"subfuncao": sf, "subfuncaoNome": f"Subfuncao {sf}", "ano": ano, "valor": 1000.0 * (i + 1)}
+            for i, sf in enumerate(subfuncao_codigos)
+            for ano in anos
+        ]
 
-    def _filtered_indicadores(analysis_id, date_from, date_to, tipos_indicador):
-        # get_despesas não filtra por subfuncao no Neo4j real (o filtro é
-        # feito em memória por cada agente de domínio — ver
-        # agents/domain/atencao_primaria.py) mas get_indicadores filtra
-        # por tipo — replicar aqui para não inflar artificialmente a
-        # contagem de indicadores quando múltiplos agentes de domínio
-        # consultam tipos diferentes na mesma análise.
-        return [i for i in indicadores if i["tipo"] in tipos_indicador]
+    def _indicadores_por_sistema(sistema, subtipos, date_from, date_to, dimensao=None):
+        return [
+            {"tipo": subtipo, "ano": ano, "valor": 10.0 + i}
+            for i, subtipo in enumerate(subtipos)
+            for ano in anos
+        ]
 
     client = MagicMock()
-    client.get_despesas.return_value = despesas
-    client.get_indicadores.side_effect = _filtered_indicadores
+    client.get_despesas_por_subfuncao.side_effect = _despesas_por_subfuncao
+    client.get_indicadores_por_sistema.side_effect = _indicadores_por_sistema
     client.save_metrica = MagicMock()
     return client
 
@@ -170,11 +181,11 @@ class TestScalabilityBenchmark:
         """Invariante estrutural: nenhum dado é descartado silenciosamente
         conforme N cresce — despesas/indicadores no resultado escalam
         exatamente com o volume sintético gerado (4 subfunções x N anos,
-        4 tipos x N anos)."""
+        13 subtipos de indicador x N anos — Fase 1)."""
         for n_years in (N_SMALL, N_LARGE):
             ponto = _benchmark_point(n_years)
             expected_despesas = len(SUBFUNCOES) * n_years
-            expected_indicadores = len(TIPOS_INDICADOR) * n_years
+            expected_indicadores = INDICADORES_POR_ANO * n_years
             assert len(ponto["star"]["result"]["despesas"]) == expected_despesas
             assert len(ponto["star"]["result"]["indicadores"]) == expected_indicadores
             assert len(ponto["hierarchical"]["result"]["despesas"]) == expected_despesas

@@ -1,10 +1,11 @@
 """
-Disparo de análise — lógica compartilhada entre POST /api/analysis e o
-WebSocket de chat (/ws/chat/{session_id}).
+Disparo de análise — lógica usada pelo WebSocket de chat (/ws/chat/{session_id}).
 
-Extraído de api/routes.py para que ambos os caminhos de entrada (formulário
-REST legado e chat) usem exatamente a mesma persistência Neo4j e o mesmo
-disparo de threads, evitando divergência entre os dois fluxos.
+Extraído de api/routes.py originalmente para compartilhar entre o
+formulário REST legado (POST /api/analysis, removido — a entrada por
+botão-por-categoria foi substituída pelo chat) e o chat. Mantido como
+módulo próprio por continuar sendo a persistência Neo4j + disparo de
+threads compartilhado por api/chat_runner.py.
 
 Requisitos: 9.1, 10.4, 6.1, 6.5 (spec realtime-chat-interface)
 """
@@ -47,10 +48,9 @@ def dispatch_analysis(
 ) -> str:
     """Persiste a análise no Neo4j e dispara as threads star + hierarchical.
 
-    Reaproveitado por routes.py::create_analysis (formulário REST) e por
-    api/chat_runner.py (chat). `source_question`/`interpreted_via` são
-    opcionais e só preenchidos quando a análise vem do chat — permitem
-    auditar depois a qualidade da interpretação de intenção.
+    Chamado por api/chat_runner.py (chat) — único caminho de entrada hoje.
+    `source_question`/`interpreted_via` são opcionais e permitem auditar
+    depois a qualidade da interpretação de intenção.
 
     `intent_summary` (opcional, só vem do chat) é o resumo de intenção
     produzido pelo AgenteInterpretacaoIntencao (Etapa 1 do plano de
@@ -90,30 +90,6 @@ def dispatch_analysis(
             "sourceQuestion": source_question,
             "interpretedVia": interpreted_via,
         })
-
-        with neo4j_client._driver.session() as session:
-            session.run(
-                """
-                MATCH (a:Analise {id: $id}), (d:DespesaSIOPS)
-                WHERE d.ano >= $dateFrom AND d.ano <= $dateTo
-                MERGE (a)-[:POSSUI_DESPESA]->(d)
-                """,
-                id=analysis_id,
-                dateFrom=date_from,
-                dateTo=date_to,
-            )
-            session.run(
-                """
-                MATCH (a:Analise {id: $id}), (i:IndicadorDataSUS)
-                WHERE i.ano >= $dateFrom AND i.ano <= $dateTo
-                  AND i.tipo IN $healthParams
-                MERGE (a)-[:POSSUI_INDICADOR]->(i)
-                """,
-                id=analysis_id,
-                dateFrom=date_from,
-                dateTo=date_to,
-                healthParams=health_params,
-            )
     finally:
         neo4j_client.close()
 

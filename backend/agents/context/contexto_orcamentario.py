@@ -8,6 +8,13 @@ como crescimento, corte, estagnação ou dados insuficientes.
 Opera sobre dados em memória (DespesaRecord dicts) — sem dependência
 de Neo4j ou outros serviços externos. A classificação de tendência é
 raciocínio simbólico/determinístico — não depende de LLM (Req 8.1-8.5).
+
+`compute_yoy_variation`/`classify_trend` (funções-módulo, sem estado)
+são reaproveitadas por `etl/orcamento_loader.py` para calcular
+`VARIACAO_ANUAL` — o relacionamento entre `DespesaAnual` de anos
+consecutivos, pré-computado uma vez no ETL (PLANO_NOVO_MODELO_DADOS.md
+§3.1), usando exatamente a mesma fórmula/limiares deste módulo, para
+não haver duas lógicas de classificação divergentes no sistema.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ STAGNATION_THRESHOLD = 5.0  # |variation| < 5% → estagnação
 MIN_CONSECUTIVE_YEARS = 2
 
 
-def _compute_yoy_variation(valor_current: float, valor_previous: float) -> float:
+def compute_yoy_variation(valor_current: float, valor_previous: float) -> float:
     """Compute year-over-year percentage variation (Req 8.1).
 
     Formula: ((valor_n - valor_n-1) / valor_n-1) × 100
@@ -47,7 +54,7 @@ def _compute_yoy_variation(valor_current: float, valor_previous: float) -> float
     return ((valor_current - valor_previous) / valor_previous) * 100.0
 
 
-def _classify_trend(
+def classify_trend(
     variations: list[float],
     stagnation_threshold: float = STAGNATION_THRESHOLD,
     min_consecutive_years: int = MIN_CONSECUTIVE_YEARS,
@@ -231,13 +238,13 @@ class AgenteContextoOrcamentario(AgenteCoALA):
             for i in range(1, len(sorted_years)):
                 prev_year = sorted_years[i - 1]
                 curr_year = sorted_years[i]
-                variation = _compute_yoy_variation(
+                variation = compute_yoy_variation(
                     year_values[curr_year], year_values[prev_year]
                 )
                 variations.append(variation)
 
             # Req 8.2: Classify trend
-            tendencia = _classify_trend(
+            tendencia = classify_trend(
                 variations, stagnation_threshold, min_consecutive_years
             )
 

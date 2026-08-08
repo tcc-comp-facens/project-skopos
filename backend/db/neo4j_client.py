@@ -1,10 +1,17 @@
 """
 Cliente Neo4j para o sistema de comparação de arquiteturas multiagente.
 
-Gerencia conexão com o banco de dados Neo4j e expõe queries Cypher
-para os nós DespesaSIOPS, IndicadorDataSUS, Analise e MetricaExecucao.
+Gerencia conexão com o banco de dados Neo4j e expõe queries Cypher para o
+modelo de dados novo (Empenho/DespesaAnual, IndicadorSaude + nós de
+dimensão — ver PLANO_NOVO_MODELO_DADOS.md e DOCUMENTACAO_ETL_MODELO_DADOS.md)
+e para os nós Analise/MetricaExecucao.
+
+Diferente do schema antigo, Empenho/DespesaAnual/IndicadorSaude não têm
+relação com Analise (sem POSSUI_DESPESA/POSSUI_INDICADOR) — são fatos
+globais no grafo, filtrados por ano/subfunção/sistema.
 """
 
+import logging
 import os
 import json
 from datetime import datetime, timezone
@@ -13,7 +20,11 @@ from typing import Optional
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
+from db.query_builder import DimensaoInvalida, build_despesa_cypher, build_indicador_cypher
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class Neo4jClient:
@@ -50,80 +61,180 @@ class Neo4jClient:
     # Consultas de leitura
     # ------------------------------------------------------------------
 
-    def get_despesas(
-        self, analysis_id: str, date_from: int, date_to: int
-    ) -> list[dict]:
-        """
-        Retorna despesas SIOPS vinculadas a uma análise, filtradas por período.
-
-        Requisitos: 3.1, 12.1
-        """
-        query = """
-        MATCH (a:Analise {id: $analysisId})-[:POSSUI_DESPESA]->(d:DespesaSIOPS)
-        WHERE d.ano >= $dateFrom AND d.ano <= $dateTo
-        RETURN d.subfuncao AS subfuncao, d.subfuncaoNome AS subfuncaoNome,
-               d.ano AS ano, d.valor AS valor
-        ORDER BY d.ano, d.subfuncao
-        """
-        with self._driver.session() as session:
-            result = session.run(
-                query,
-                analysisId=analysis_id,
-                dateFrom=date_from,
-                dateTo=date_to,
-            )
-            return [dict(record) for record in result]
-
-    def get_indicadores(
+    def get_despesas_por_subfuncao(
         self,
-        analysis_id: str,
+        subfuncao_codigos: list[int],
         date_from: int,
         date_to: int,
-        health_params: list[str],
+        dimensao: str | None = None,
     ) -> list[dict]:
         """
-        Retorna indicadores DataSUS vinculados a uma análise, filtrados por
-        período e tipos de indicador.
+        Retorna despesas anuais agregadas (`DespesaAnual`) para as
+        subfunções e período dados.
 
-        Requisitos: 3.1, 3.3, 12.2
+        Usa `valorProcessado` como valor "oficial" — é o campo que a
+        própria validação do ETL confirma como soma exata do breakdown
+        por `tipoRecurso` (DOCUMENTACAO_ETL_MODELO_DADOS.md), e o que a
+        query de correlação-exemplo do projeto usa.
+
+        `dimensao` (opcional, Fase 3) é o nome de um relacionamento
+        dimensional (`POR_NATUREZA` | `POR_APLICACAO`) — decidido pelo
+        agente de domínio via deliberação CoALA
+        (`agents/domain/query_planning.py`) e montado de forma segura por
+        `db.query_builder.build_despesa_cypher`. Uma dimensão inválida
+        nunca propaga como erro: cai automaticamente para a consulta sem
+        quebra dimensional.
+
+        Shape de retorno compatível com o schema antigo (`subfuncao`,
+        `subfuncaoNome`, `ano`, `valor`) para não exigir mudanças em
+        `agents/data_crossing.py` nem nos agentes analíticos nesta fase.
+        Quando `dimensao` está presente, cada linha ganha também
+        `dimensao_valor`.
+        """
+        try:
+            query, params = build_despesa_cypher(
+                subfuncao_codigos, date_from, date_to, dimensao
+            )
+        except DimensaoInvalida as exc:
+            logger.warning(
+                "get_despesas_por_subfuncao: %s — consultando sem quebra dimensional", exc
+            )
+            query, params = build_despesa_cypher(
+                subfuncao_codigos, date_from, date_to, None
+            )
+
+        with self._driver.session() as session:
+            result = session.run(query, **params)
+            return [dict(record) for record in result]
+
+    def get_variacao_anual(
+        self, subfuncao_codigos: list[int], date_from: int, date_to: int
+    ) -> list[dict]:
+        """
+        Retorna a variação percentual ano-a-ano pré-computada no ETL
+        (`VARIACAO_ANUAL`, PLANO_NOVO_MODELO_DADOS.md §3.1) para as
+        subfunções e período dados.
+
+        Diferente de `POR_NATUREZA`/`POR_APLICACAO`, não é uma dimensão
+        escolhida dinamicamente por deliberação CoALA — é um único
+        reltype fixo, sempre a mesma consulta, sem `db.query_builder`
+        envolvido (não há nome de reltype variável a validar).
+
+        `ano` no filtro de período se refere a `anoAtual` (o ano cuja
+        variação está sendo descrita, em relação ao ano imediatamente
+        anterior com dado disponível para a mesma subfunção — não
+        necessariamente o ano civil anterior, se houver lacuna).
+
+        Returns:
+            Lista de dicts com `subfuncao`, `ano_atual`, `ano_anterior`,
+            `percentual`, `classificacao`. Lista vazia se não houver
+            dados (subfunção nova, só 1 ano de dados, etc.).
         """
         query = """
-        MATCH (a:Analise {id: $analysisId})-[:POSSUI_INDICADOR]->(i:IndicadorDataSUS)
-        WHERE i.ano >= $dateFrom AND i.ano <= $dateTo
-          AND i.tipo IN $healthParams
-        RETURN i.tipo AS tipo, i.ano AS ano, i.valor AS valor
-        ORDER BY i.ano, i.tipo
+        MATCH (atual:DespesaAnual)-[v:VARIACAO_ANUAL]->(anterior:DespesaAnual)
+        WHERE atual.subfuncaoCodigo IN $subfuncaoCodigos
+          AND atual.ano >= $dateFrom AND atual.ano <= $dateTo
+        RETURN atual.subfuncaoCodigo AS subfuncao, atual.ano AS ano_atual,
+               anterior.ano AS ano_anterior, v.percentual AS percentual,
+               v.classificacao AS classificacao
+        ORDER BY atual.ano, atual.subfuncaoCodigo
         """
         with self._driver.session() as session:
             result = session.run(
                 query,
-                analysisId=analysis_id,
+                subfuncaoCodigos=subfuncao_codigos,
                 dateFrom=date_from,
                 dateTo=date_to,
-                healthParams=health_params,
             )
             return [dict(record) for record in result]
 
-    def get_correlacoes(self, date_from: int, date_to: int) -> list[dict]:
+    def get_indicadores_por_sistema(
+        self,
+        sistema: str,
+        subtipos: list[str],
+        date_from: int,
+        date_to: int,
+        dimensao: str | None = None,
+    ) -> list[dict]:
         """
-        Retorna correlações entre despesas e indicadores para um período.
+        Retorna indicadores de saúde (`IndicadorSaude`) para o sistema e
+        subtipos dados, filtrados por período.
 
-        Requisitos: 4.1, 12.1, 12.2
+        `dimensao` (opcional) é o nome de um relacionamento dimensional
+        (ex.: "POR_FAIXA_ETARIA") — decidido pelo agente de domínio via
+        deliberação CoALA (`agents/domain/query_planning.py`) e montado
+        de forma segura por `db.query_builder.build_indicador_cypher`. Uma
+        dimensão inválida para o sistema nunca propaga como erro: cai
+        automaticamente para a consulta sem quebra dimensional.
+
+        Shape de retorno compatível com o schema antigo (`tipo`, `ano`,
+        `valor`) — `tipo` = subtipo do sistema. Quando `dimensao` está
+        presente, cada linha ganha também `dimensao_valor`.
         """
-        query = """
-        MATCH (d:DespesaSIOPS)-[:CORRELACIONA_COM]->(i:IndicadorDataSUS)
-        WHERE d.ano >= $dateFrom AND d.ano <= $dateTo
-          AND d.ano = i.ano
-        RETURN d.subfuncao AS subfuncao, d.valor AS despesa,
-               i.tipo AS tipo, i.valor AS indicador, d.ano AS ano
-        ORDER BY d.ano
+        try:
+            query, params = build_indicador_cypher(
+                sistema, subtipos, date_from, date_to, dimensao
+            )
+        except DimensaoInvalida as exc:
+            logger.warning(
+                "get_indicadores_por_sistema: %s — consultando sem quebra dimensional", exc
+            )
+            query, params = build_indicador_cypher(
+                sistema, subtipos, date_from, date_to, None
+            )
+
+        with self._driver.session() as session:
+            result = session.run(query, **params)
+            return [dict(record) for record in result]
+
+    def get_past_analises(
+        self,
+        health_params: list[str] | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """
+        Retorna as análises anteriores mais recentes (nó `Analise`) —
+        memória episódica real (retrieval), usada por
+        `AgenteInterpretacaoIntencao` para informar o `intent_summary`
+        com o que já foi perguntado antes.
+
+        Filtro por `health_params` é aproximado (substring sobre o JSON
+        armazenado em `healthParams`) — relevância fina fica a cargo de
+        quem consome o resultado (o LLM), não do banco. Filtro por
+        `date_from`/`date_to` exige sobreposição de período quando ambos
+        são informados.
+        """
+        conditions = ["a.sourceQuestion IS NOT NULL"]
+        params: dict = {"limit": limit}
+
+        if health_params:
+            or_clauses = []
+            for i, token in enumerate(health_params):
+                key = f"hp{i}"
+                or_clauses.append(f"a.healthParams CONTAINS ${key}")
+                params[key] = token
+            conditions.append("(" + " OR ".join(or_clauses) + ")")
+
+        if date_from is not None and date_to is not None:
+            conditions.append("a.dateTo >= $dateFrom AND a.dateFrom <= $dateTo")
+            params["dateFrom"] = date_from
+            params["dateTo"] = date_to
+
+        where_clause = " AND ".join(conditions)
+        query = f"""
+        MATCH (a:Analise)
+        WHERE {where_clause}
+        RETURN a.id AS id, a.sourceQuestion AS sourceQuestion,
+               a.healthParams AS healthParams, a.dateFrom AS dateFrom,
+               a.dateTo AS dateTo, a.starTextAnalysis AS starTextAnalysis,
+               a.hierTextAnalysis AS hierTextAnalysis, a.createdAt AS createdAt
+        ORDER BY a.createdAt DESC
+        LIMIT $limit
         """
         with self._driver.session() as session:
-            result = session.run(
-                query,
-                dateFrom=date_from,
-                dateTo=date_to,
-            )
+            result = session.run(query, **params)
             return [dict(record) for record in result]
 
     def get_benchmarks(self, analysis_id: str) -> list[dict]:
@@ -200,8 +311,8 @@ class Neo4jClient:
 
     def get_year_range(self) -> tuple[int, int] | None:
         """
-        Retorna (ano_min, ano_max) entre os anos de DespesaSIOPS e
-        IndicadorDataSUS carregados no banco, ou None se não houver dados.
+        Retorna (ano_min, ano_max) entre os anos de Empenho e IndicadorSaude
+        carregados no banco, ou None se não houver dados.
 
         Usado para validar períodos solicitados via chat contra os dados
         realmente disponíveis, em vez de disparar análises que retornam
@@ -211,7 +322,7 @@ class Neo4jClient:
         """
         query = """
         MATCH (n)
-        WHERE n:DespesaSIOPS OR n:IndicadorDataSUS
+        WHERE n:Empenho OR n:IndicadorSaude
         RETURN min(n.ano) AS anoMin, max(n.ano) AS anoMax
         """
         with self._driver.session() as session:
@@ -257,79 +368,3 @@ class Neo4jClient:
                 recordedAt=recorded_at,
                 analysisId=analysis_id,
             )
-
-    # ------------------------------------------------------------------
-    # Helpers de escrita usados pelo ETL
-    # ------------------------------------------------------------------
-
-    def save_despesa(self, despesa: dict, analysis_id: Optional[str] = None) -> None:
-        """
-        Persiste um nó DespesaSIOPS via MERGE e, opcionalmente, vincula a
-        uma Analise via POSSUI_DESPESA.
-
-        Requisitos: 12.1
-        """
-        query = """
-        MERGE (d:DespesaSIOPS {id: $id})
-        SET d.subfuncao     = $subfuncao,
-            d.subfuncaoNome = $subfuncaoNome,
-            d.ano           = $ano,
-            d.valor         = $valor,
-            d.fonte         = $fonte
-        """
-        params = {
-            "id": despesa["id"],
-            "subfuncao": despesa.get("subfuncao"),
-            "subfuncaoNome": despesa.get("subfuncaoNome"),
-            "ano": despesa.get("ano"),
-            "valor": despesa.get("valor"),
-            "fonte": despesa.get("fonte", "siops"),
-        }
-
-        if analysis_id:
-            query += """
-        WITH d
-        MATCH (a:Analise {id: $analysisId})
-        MERGE (a)-[:POSSUI_DESPESA]->(d)
-            """
-            params["analysisId"] = analysis_id
-
-        with self._driver.session() as session:
-            session.run(query, **params)
-
-    def save_indicador(
-        self, indicador: dict, analysis_id: Optional[str] = None
-    ) -> None:
-        """
-        Persiste um nó IndicadorDataSUS via MERGE e, opcionalmente, vincula
-        a uma Analise via POSSUI_INDICADOR.
-
-        Requisitos: 12.2
-        """
-        query = """
-        MERGE (i:IndicadorDataSUS {id: $id})
-        SET i.sistema = $sistema,
-            i.tipo    = $tipo,
-            i.ano     = $ano,
-            i.valor   = $valor,
-            i.fonte   = $fonte
-        """
-        params = {
-            "id": indicador["id"],
-            "sistema": indicador.get("sistema"),
-            "tipo": indicador.get("tipo"),
-            "ano": indicador.get("ano"),
-            "valor": indicador.get("valor"),
-            "fonte": indicador.get("fonte", "datasus"),
-        }
-
-        if analysis_id:
-            query += """
-        WITH i
-        MATCH (a:Analise {id: $analysisId})
-        MERGE (a)-[:POSSUI_INDICADOR]->(i)
-            """
-            params["analysisId"] = analysis_id
-
-        with self._driver.session() as session:
-            session.run(query, **params)

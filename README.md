@@ -9,9 +9,10 @@ Sistema de comparação de duas arquiteturas multiagente CoALA (Cognitive Archit
 ## Início rápido
 
 ```bash
-# 1. Configurar variáveis de ambiente
-cp backend/.env.example backend/.env
-# Edite backend/.env com suas credenciais Neo4j e (opcionalmente) DeepSeek
+# 1. Configurar variáveis de ambiente (arquivo único na raiz do repo,
+#    compartilhado por backend, frontend e docker-compose)
+cp .env.example .env
+# Edite .env com suas credenciais Neo4j e (opcionalmente) DeepSeek
 
 # 2. Subir todos os serviços
 docker compose up --build
@@ -61,11 +62,12 @@ project-skopos/
 ### Execução local
 
 ```bash
+# .env fica na raiz do repo, não em backend/ — ver "Início rápido" acima.
+# Rodando fora do Docker, sobrescreva NEO4J_URI para bolt://localhost:7687
+# (o valor default no .env é o hostname interno do Docker Compose).
 cd backend
 pip install -r requirements.txt
-cp .env.example .env          # edite com credenciais Neo4j
 
-python -m etl.seed_data       # popular dados COVID (requer Neo4j rodando)
 uvicorn main:app --reload --port 8000
 ```
 
@@ -79,6 +81,11 @@ uvicorn main:app --reload --port 8000
 | `DEEPSEEK_API_KEY` | Chave DeepSeek (API compatível OpenAI) | `sk-...` |
 | `CORS_ORIGINS` | Origens CORS | `*` |
 | `LOG_LEVEL` | Nível de log (`INFO` mostra estágios/timing/preview de prompts; `DEBUG` mostra prompts completos enviados ao LLM) | `INFO` |
+| `USE_LLM_QUERY_PLANNING` | Liga planejamento de consulta via LLM nos agentes de domínio (desnecessário hoje — mapeamento trivial) | `false` |
+| `VITE_API_URL` | URL base do backend REST, lida pelo frontend (Vite) | `http://localhost:8000` |
+| `VITE_WS_URL` | URL base do WebSocket do backend, lida pelo frontend (Vite) | `ws://localhost:8000` |
+
+Todas vivem num único `.env` na raiz do repo (`cp .env.example .env`) — não há mais `backend/.env`/`frontend/.env` separados.
 
 ### Endpoints
 

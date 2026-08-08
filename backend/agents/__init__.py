@@ -3,7 +3,7 @@
 Organização:
 - agents.base: Classe base AgenteCoALA (framework CoALA)
 - agents.intent: Agente de interpretação de intenção (chat, sem regex)
-- agents.domain: Agentes de domínio (Req 14.1)
+- agents.domain: Agentes de domínio de saúde e orçamento (Req 14.1)
 - agents.analytical: Agentes analíticos (Req 14.2) + TextSynthesizer
 - agents.context: Agente de contexto (Req 14.3)
 - agents.star: Topologia estrela (Req 14.4)
@@ -18,16 +18,20 @@ from agents.intent import AgenteInterpretacaoIntencao, AnalysisIntent, IntentRes
 
 # Domain agents (Req 14.1)
 from agents.domain import (
-    AgenteVigilanciaEpidemiologica,
-    AgenteSaudeHospitalar,
-    AgenteAtencaoPrimaria,
-    AgenteMortalidade,
+    AgenteCOVID,
+    AgenteSIH,
+    AgenteSIM,
+    AgenteSIPNI,
+    AgenteSINASC,
+    AgenteSIA,
+    AgenteCNES,
+    AgenteSINAN,
+    AgenteOrcamentoSubfuncao,
 )
 
 # Analytical agents (Req 14.2)
 from agents.analytical import (
-    AgenteCorrelacao,
-    AgenteAnomalias,
+    AgenteAnalitico,
     TextSynthesizer,
 )
 
@@ -49,13 +53,17 @@ __all__ = [
     "AnalysisIntent",
     "IntentResult",
     # Domain
-    "AgenteVigilanciaEpidemiologica",
-    "AgenteSaudeHospitalar",
-    "AgenteAtencaoPrimaria",
-    "AgenteMortalidade",
+    "AgenteCOVID",
+    "AgenteSIH",
+    "AgenteSIM",
+    "AgenteSIPNI",
+    "AgenteSINASC",
+    "AgenteSIA",
+    "AgenteCNES",
+    "AgenteSINAN",
+    "AgenteOrcamentoSubfuncao",
     # Analytical
-    "AgenteCorrelacao",
-    "AgenteAnomalias",
+    "AgenteAnalitico",
     "TextSynthesizer",
     # Context
     "AgenteContextoOrcamentario",

@@ -1,20 +1,28 @@
-"""Tests for OrquestradorEstrela.run() with mocked agents."""
+"""Tests for OrquestradorEstrela.run() with mocked agents.
+
+Fase 2 (PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — os 5
+agentes de saúde (SINAN, SIH, SIM, SI-PNI, COVID) nunca consultam
+despesas, só indicadores; despesas vêm exclusivamente de
+AgenteOrcamentoSubfuncao (1 por subfunção, até 7), cada uma ativada
+condicionalmente pelos tokens do seu domínio correspondente (ver
+_SUBFUNCAO_TOKENS em agents/star/orchestrator.py).
+"""
 
 import pytest
 from queue import Queue
 from unittest.mock import MagicMock, patch
 
-from agents.star.orchestrator import OrquestradorEstrela
+from agents.star.orchestrator import OrquestradorEstrela, _SUBFUNCAO_TOKENS
 
 
 @pytest.fixture
 def neo4j_client():
     client = MagicMock()
-    client.get_despesas.return_value = [
+    client.get_despesas_por_subfuncao.return_value = [
         {"subfuncao": 305, "subfuncaoNome": "Vigilância", "ano": 2020, "valor": 100.0},
         {"subfuncao": 301, "subfuncaoNome": "AB", "ano": 2020, "valor": 200.0},
     ]
-    client.get_indicadores.return_value = [
+    client.get_indicadores_por_sistema.return_value = [
         {"tipo": "dengue", "ano": 2020, "valor": 30.0},
         {"tipo": "vacinacao", "ano": 2020, "valor": 80.0},
     ]
@@ -41,9 +49,13 @@ class TestAllAgentsCalled:
             "use_llm": False,
         }
         result = orchestrator.run("analysis-1", params, ws_queue)
-        # All 4 domain agents should have been called
-        # get_despesas called once per domain agent
-        assert neo4j_client.get_despesas.call_count == 4
+        # 5 agentes de saúde ativados (covid, sih, sipni, sim, sinan) —
+        # nenhum deles consulta despesas. Despesas vêm só dos agentes
+        # orçamentários ativados: 301 (vacinacao->sipni), 302
+        # (internacoes->sih), 303/304/305 (dengue->sinan, mais 305 também
+        # via covid) = 5 subfunções ativadas = 5 chamadas a
+        # get_despesas_por_subfuncao.
+        assert neo4j_client.get_despesas_por_subfuncao.call_count == 5
 
 
 class TestSubsetAgents:
@@ -55,18 +67,61 @@ class TestSubsetAgents:
             "use_llm": False,
         }
         result = orchestrator.run("analysis-2", params, ws_queue)
-        # Only vigilancia_epidemiologica should be called (1 agent)
-        assert neo4j_client.get_despesas.call_count == 1
+        # AgenteSINAN (indicadores) + 3 agentes orçamentários ativados por
+        # qualquer agravo do SINAN (303 Suporte Profilático, 304
+        # Vigilância Sanitária, 305 Vigilância Epidemiológica) —
+        # AgenteSINAN não consulta despesas.
+        assert neo4j_client.get_despesas_por_subfuncao.call_count == 3
+
+
+class TestSubfuncao304GatingRefinado:
+    """Regressão: 304 (Vigilância Sanitária) só ativa com um subtipo do
+    CNES ("estabelecimentos_vigilancia_epidemiologica" — único com par
+    temático real), não com qualquer subtipo do CNES como 122/306
+    (decisão explícita tomada com o usuário)."""
+
+    def test_304_only_activates_with_vigilancia_epidemiologica_cnes_subtipo(self):
+        assert _SUBFUNCAO_TOKENS[304] & {"leitos", "profissionais", "ocupacoes"} == set()
+        assert "estabelecimentos_vigilancia_epidemiologica" in _SUBFUNCAO_TOKENS[304]
+
+    def test_122_e_306_still_activate_with_any_cnes_subtipo(self):
+        assert "leitos" in _SUBFUNCAO_TOKENS[122]
+        assert "leitos" in _SUBFUNCAO_TOKENS[306]
+
+
+class TestOrcamentoIntentSummaryWiring:
+    """Regressão (Fase 3): intent_summary/use_llm da análise inteira
+    precisam chegar em AgenteOrcamentoSubfuncao.query() — sem isso, a
+    deliberação de dimensão (POR_NATUREZA/POR_APLICACAO) nunca escolhe
+    algo diferente de "sem quebra" em produção, mesmo quando o usuário
+    pede explicitamente."""
+
+    def test_intent_summary_reaches_orcamento_dimensao_deliberation(
+        self, orchestrator, neo4j_client, ws_queue
+    ):
+        params = {
+            "date_from": 2019,
+            "date_to": 2021,
+            "health_params": ["dengue"],
+            "intent_summary": "quero saber por natureza",
+            "use_llm": False,
+        }
+        orchestrator.run("analysis-intent-orc", params, ws_queue)
+
+        dimensoes_pedidas = {
+            call.args[3] if len(call.args) > 3 else call.kwargs.get("dimensao")
+            for call in neo4j_client.get_despesas_por_subfuncao.call_args_list
+        }
+        assert "POR_NATUREZA" in dimensoes_pedidas
 
 
 class TestGracefulDegradation:
     def test_pipeline_continues_when_agent_fails(self, neo4j_client, ws_queue):
-        # Make get_despesas fail on first call, succeed on second
-        neo4j_client.get_despesas.side_effect = [
+        neo4j_client.get_despesas_por_subfuncao.side_effect = [
             Exception("Neo4j timeout"),
             [{"subfuncao": 301, "subfuncaoNome": "AB", "ano": 2020, "valor": 200.0}],
         ]
-        neo4j_client.get_indicadores.side_effect = [
+        neo4j_client.get_indicadores_por_sistema.side_effect = [
             Exception("Neo4j timeout"),
             [{"tipo": "vacinacao", "ano": 2020, "valor": 80.0}],
         ]
@@ -109,12 +164,12 @@ class TestErrorEventsOnFailure:
         params = {
             "date_from": 2019,
             "date_to": 2021,
-            "health_params": ["dengue"],
+            "health_params": ["covid"],
             "use_llm": False,
         }
         # Patch the domain agent's query method to raise at orchestrator level
         with patch(
-            "agents.star.orchestrator.AgenteVigilanciaEpidemiologica"
+            "agents.star.orchestrator.AgenteCOVID"
         ) as MockAgent:
             instance = MockAgent.return_value
             instance.query.side_effect = Exception("Agent crashed")
@@ -135,7 +190,7 @@ class TestSelfCheckWiring:
     def test_disabled_by_default_no_call(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": False,
+            "health_params": ["covid"], "use_llm": False,
         }
         with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
             result = orchestrator.run("analysis-sc-1", params, ws_queue)
@@ -145,7 +200,7 @@ class TestSelfCheckWiring:
     def test_skipped_when_use_llm_false_even_if_flag_on(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": False, "use_self_check": True,
+            "health_params": ["covid"], "use_llm": False, "use_self_check": True,
         }
         with patch("agents.star.orchestrator.claim_verifier.self_check") as mock_self_check:
             orchestrator.run("analysis-sc-2", params, ws_queue)
@@ -154,7 +209,7 @@ class TestSelfCheckWiring:
     def test_runs_and_revises_text_when_enabled(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+            "health_params": ["covid"], "use_llm": True, "use_self_check": True,
         }
         with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
             instance = MockSynth.return_value
@@ -175,7 +230,7 @@ class TestSelfCheckWiring:
     def test_no_correction_keeps_synthesized_text(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+            "health_params": ["covid"], "use_llm": True, "use_self_check": True,
         }
         with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
             instance = MockSynth.return_value
@@ -192,7 +247,7 @@ class TestSelfCheckWiring:
     def test_verificacao_excluded_from_agent_metrics(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+            "health_params": ["covid"], "use_llm": True, "use_self_check": True,
         }
         with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
             instance = MockSynth.return_value
@@ -215,7 +270,7 @@ class TestSelfCheckWiring:
     def test_self_check_failure_does_not_break_pipeline(self, orchestrator, neo4j_client, ws_queue):
         params = {
             "date_from": 2019, "date_to": 2021,
-            "health_params": ["dengue"], "use_llm": True, "use_self_check": True,
+            "health_params": ["covid"], "use_llm": True, "use_self_check": True,
         }
         with patch("agents.star.orchestrator.TextSynthesizer") as MockSynth:
             instance = MockSynth.return_value

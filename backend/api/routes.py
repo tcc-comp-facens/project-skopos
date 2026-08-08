@@ -1,14 +1,18 @@
 """
 REST API endpoints.
 
+O disparo de análise (antigo POST /api/analysis, formulário com um botão
+por categoria de indicador) foi removido — o único caminho de entrada
+hoje é o chat (/ws/chat/{session_id}, ver api/chat_websocket.py), que
+usa api.dispatch.dispatch_analysis diretamente.
+
 Endpoints:
-  POST /api/analysis       — Start a new analysis
   GET  /api/analysis/{id}  — Retrieve analysis result
   GET  /api/analysis/{id}/quality — Quality metrics
   GET  /api/analysis/{id}/report  — Comparative report
   GET  /api/benchmarks     — All benchmark metrics
 
-Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 10.4
+Requirements: 9.2, 9.3, 10.4
 """
 
 from __future__ import annotations
@@ -17,48 +21,15 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from api.models import (
-    AnalysisRequest,
-    AnalysisResponse,
-    health_params_to_list,
-    validate_analysis_params,
-)
 from agents.domain.query_planning import compute_cache_hit_rate
-from api.dispatch import dispatch_analysis, get_available_year_range
-from api.state import active_results
+from api.dispatch import get_available_year_range
+from api.state import active_results, get_neo4j_client
 from core.guardrail_stats import compute_guardrail_rejection_rate
 from core.quality_metrics import compute_all_quality_metrics, generate_comparative_report
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-@router.post("/api/analysis", response_model=AnalysisResponse)
-async def create_analysis(req: AnalysisRequest):
-    """Start a new analysis — validates params, creates record, launches threads.
-
-    Req 9.1: POST /api/analysis
-    Req 9.4, 9.5: Validate params, return 400 on invalid
-    Req 10.4: Dispatch both architectures in parallel
-    """
-    errors = validate_analysis_params(req)
-    if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
-
-    health_list = health_params_to_list(req.healthParams)
-
-    analysis_id = dispatch_analysis(
-        date_from=req.dateFrom,
-        date_to=req.dateTo,
-        health_params=health_list,
-        use_llm=req.useLlm,
-        use_llm_judge=req.useLlmJudge,
-        use_self_check=req.useSelfCheck,
-        interpreted_via="form",
-    )
-
-    return AnalysisResponse(analysisId=analysis_id)
 
 
 @router.get("/api/data-range")

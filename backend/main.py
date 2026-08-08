@@ -21,13 +21,6 @@ from api.chat_websocket import router as chat_ws_router
 # Re-export shared state and models so existing imports from "main" still work.
 # This keeps backward compatibility with tests that do `from main import ...`.
 from api.state import active_queues, active_threads, active_results  # noqa: F401
-from api.models import (  # noqa: F401
-    AnalysisRequest,
-    AnalysisResponse,
-    HealthParams,
-    health_params_to_list as _health_params_to_list,
-    validate_analysis_params as _validate_analysis_params,
-)
 from api.state import get_neo4j_client as _get_neo4j_client  # noqa: F401
 
 load_dotenv()

@@ -1,19 +1,24 @@
 """
 Orquestrador central da arquitetura estrela.
 
-Hub central que instancia e coordena 8 agentes especializados:
-4 de domínio, 3 analíticos e 1 de contexto. Intermedia toda
-comunicação entre agentes — nenhum agente periférico chama outro
-diretamente.
+Hub central que instancia e coordena os agentes especializados: 5
+agentes de saúde (SINAN, SIH, SIM, SI-PNI, COVID — 1 por Sistema de
+Informação, todos com o mesmo padrão de deliberação real de dimensão,
+exceto COVID que não tem dimensões válidas), agentes orçamentários
+(AgenteOrcamentoSubfuncao — 1 por subfunção, 7 no total), analíticos e
+de contexto. Intermedia toda comunicação entre agentes — nenhum agente
+periférico chama outro diretamente.
 
 Pipeline (cada etapa é uma ação nomeada em `procedural_memory`,
 executada pelo ciclo CoALA da classe base):
-  1. Fase de Domínio: até 4 agentes consultam Neo4j em sequência
+  1. Fase de Saúde: até 5 agentes consultam Neo4j em sequência
      (ativação condicional conforme health_params)
-  2. Cruzamento de dados: despesas × indicadores por subfunção
-  3. Detecção de lacunas de dados
-  4. Fase Analítica: contexto orçamentário, correlação, anomalias, síntese
-  5. Persistência de métricas
+  2. Fase de Orçamento: agentes AgenteOrcamentoSubfuncao (até 7,
+     ativação condicional conforme health_params — ver _SUBFUNCAO_TOKENS)
+  3. Cruzamento de dados: despesas × indicadores por subfunção
+  4. Detecção de lacunas de dados
+  5. Fase Analítica: contexto orçamentário, correlação, anomalias, síntese
+  6. Persistência de métricas
 
 Nota arquitetural (CoALA): diferente dos agentes-folha (domínio,
 analíticos, contexto), aqui `propose_actions()` não arbitra entre
@@ -42,12 +47,16 @@ from typing import Any, TYPE_CHECKING
 
 from agents.base import ActionFailure, AgenteCoALA
 from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
-from agents.domain.vigilancia_epidemiologica import AgenteVigilanciaEpidemiologica
-from agents.domain.saude_hospitalar import AgenteSaudeHospitalar
-from agents.domain.atencao_primaria import AgenteAtencaoPrimaria
-from agents.domain.mortalidade import AgenteMortalidade
-from agents.analytical.correlacao import AgenteCorrelacao
-from agents.analytical.anomalias import AgenteAnomalias
+from agents.domain.agente_covid import AgenteCOVID
+from agents.domain.agente_sih import AgenteSIH
+from agents.domain.agente_sim import AgenteSIM
+from agents.domain.agente_sipni import AgenteSIPNI
+from agents.domain.agente_sinasc import AgenteSINASC
+from agents.domain.agente_sia import AgenteSIA
+from agents.domain.agente_cnes import AgenteCNES
+from agents.domain.agente_sinan import AgenteSINAN
+from agents.domain.agente_orcamento import AgenteOrcamentoSubfuncao
+from agents.analytical.analitico import AgenteAnalitico
 from agents.analytical.priorizacao import AgentePriorizacaoAnalitica
 from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
@@ -60,33 +69,144 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Mapeamento: tipo de indicador → agente de domínio responsável
+# Mapeamento: tipo de indicador → agente de saúde responsável. Os 9
+# subtipos SINAN roteiam para "sinan" (AgenteSINAN). "covid" roteia para
+# o AgenteCOVID dedicado (Fase 2 — cobre casos e óbitos, substitui a
+# metade "covid" do antigo AgenteVigilanciaEpidemiologica, que só
+# consultava casos). "internacoes"/"vacinacao"/"mortalidade" preservam os
+# tokens legados de vocabulário (vocabulário novo por sistema é Fase 2,
+# item 5), mas agora roteiam para os agentes decompostos SIH/SIPNI/SIM.
 # Usado para ativar apenas os agentes relevantes aos health_params do usuário
 INDICADOR_TO_AGENT: dict[str, str] = {
-    "dengue": "vigilancia_epidemiologica",
-    "covid": "vigilancia_epidemiologica",
-    "internacoes": "saude_hospitalar",
-    "vacinacao": "atencao_primaria",
-    "mortalidade": "mortalidade",
+    "dengue": "sinan",
+    "chikungunya": "sinan",
+    "sifilis_adquirida": "sinan",
+    "sifilis_gestante": "sinan",
+    "sifilis_congenita": "sinan",
+    "coqueluche": "sinan",
+    "hepatites_virais": "sinan",
+    "tuberculose": "sinan",
+    "hanseniase": "sinan",
+    "covid": "covid",
+    "internacoes": "sih",
+    "vacinacao": "sipni",
+    "mortalidade": "sim",
+    "nascidos_vivos": "sinasc",
+    "producao_ambulatorial": "sia",
+    "leitos": "cnes",
+    "profissionais": "cnes",
+    "estabelecimentos_por_tipo": "cnes",
+    "ocupacoes": "cnes",
+    "equipes_saude": "cnes",
+    "tipo_atendimento": "cnes",
+    "leitos_consultorios": "cnes",
+    "equipamentos": "cnes",
+    "estabelecimentos_nivel_atencao": "cnes",
+    "estabelecimentos_servico_classificacao": "cnes",
+    "estabelecimentos_habilitacao": "cnes",
+    "estabelecimentos_vigilancia_epidemiologica": "cnes",
 }
 
-# Ordem fixa de avaliação dos agentes de domínio (preserva a sequência
-# histórica Vigilância → Hospitalar → Primária → Mortalidade)
-_DOMAIN_AGENT_KEY_ORDER: list[str] = ["vigilancia", "hospitalar", "primaria", "mortalidade"]
+# Ordem fixa de avaliação dos agentes de saúde (preserva a sequência
+# histórica Vigilância → Hospitalar → Primária → Mortalidade, com SINAN
+# ao final; SINASC/SIA/CNES — cobertura nova sem legado — vêm por último)
+_SAUDE_AGENT_KEY_ORDER: list[str] = [
+    "covid", "sih", "sipni", "sim", "sinan", "sinasc", "sia", "cnes",
+]
 
 # Apenas strings (usadas para filtrar por health_params em propose_actions) —
-# a resolução para classe real acontece em _act_consultar_dominio, lendo o
+# a resolução para classe real acontece em _act_consultar_saude, lendo o
 # nome global no momento da chamada (permite mock/patch em testes).
 _AGENT_KEY_TO_TYPE: dict[str, str] = {
-    "vigilancia": "vigilancia_epidemiologica",
-    "hospitalar": "saude_hospitalar",
-    "primaria": "atencao_primaria",
-    "mortalidade": "mortalidade",
+    "covid": "covid",
+    "sih": "sih",
+    "sipni": "sipni",
+    "sim": "sim",
+    "sinan": "sinan",
+    "sinasc": "sinasc",
+    "sia": "sia",
+    "cnes": "cnes",
 }
+
+
+def _tokens_for_agent(agent_key: str) -> set[str]:
+    """Tokens de indicador que roteiam para um dado agente de saúde
+    (retrieval sobre INDICADOR_TO_AGENT) — usado para derivar o gatilho
+    de ativação das subfunções orçamentárias sem duplicar a lista de
+    tokens à mão."""
+    return {tipo for tipo, agente in INDICADOR_TO_AGENT.items() if agente == agent_key}
+
+
+# Correspondência subfunção orçamentária → tokens de indicador que a
+# tornam relevante (decisão tomada com o usuário na sessão da Fase 2):
+#   301 Atenção Básica            -> SI-PNI (vacinação)
+#   302 Assist. Hospitalar/Ambul. -> SIH (internações)
+#   303 Suporte Profilático/Terap.-> SINAN (qualquer agravo — "qualquer
+#                                    tratamento ou prevenção de doença
+#                                    se encaixa")
+#   304 Vigilância Sanitária      -> SINAN + só o subtipo CNES
+#                                    "estabelecimentos_vigilancia_epidemiologica"
+#                                    (único subtipo do CNES com par temático
+#                                    real — refinamento decidido com o usuário;
+#                                    os outros 11 subtipos do CNES não ativam
+#                                    304, só 122/306)
+#   305 Vigilância Epidemiológica -> SINAN + COVID
+#   122 Administração Geral       -> qualquer subtipo do CNES (sem candidato
+#                                    mais específico — decisão explícita de
+#                                    não refinar sem base real)
+#   306 Alimentação e Nutrição    -> qualquer subtipo do CNES (idem 122)
+_SUBFUNCAO_TOKENS: dict[int, set[str]] = {
+    122: _tokens_for_agent("cnes"),
+    301: _tokens_for_agent("sipni"),
+    302: _tokens_for_agent("sih"),
+    303: _tokens_for_agent("sinan"),
+    304: {"estabelecimentos_vigilancia_epidemiologica"} | _tokens_for_agent("sinan"),
+    305: _tokens_for_agent("sinan") | _tokens_for_agent("covid"),
+    306: _tokens_for_agent("cnes"),
+}
+
+# Mortalidade (SIM) é transversal para fins de cruzamento de dados
+# (data_crossing.MORTALIDADE_SUBFUNCOES) — o indicador de mortalidade
+# cruza com o gasto de várias subfunções ao mesmo tempo, não uma só.
+# Diferente da Fase 1 (onde o próprio AgenteMortalidade legado buscava
+# essas despesas), agora quem busca despesa é sempre
+# AgenteOrcamentoSubfuncao — então o token "mortalidade" precisa ativar
+# essas mesmas subfunções explicitamente, ou o cruzamento roda contra
+# uma lista de despesas vazia.
+_MORTALIDADE_SUBFUNCOES: set[int] = {301, 302, 303, 305}
+_MORTALIDADE_TOKENS: set[str] = _tokens_for_agent("sim")
+
+
+def _subfuncao_ativa(codigo: int, health_params: set[str]) -> bool:
+    """Decide se a subfunção orçamentária deve ser consultada nesta
+    análise, com base nos health_params selecionados pelo usuário."""
+    if _SUBFUNCAO_TOKENS.get(codigo, set()) & health_params:
+        return True
+    if codigo in _MORTALIDADE_SUBFUNCOES and _MORTALIDADE_TOKENS & health_params:
+        return True
+    return False
+
+
+# As 7 subfunções orçamentárias alvo de PLANO_NOVO_MODELO_DADOS.md §5 —
+# todas instanciadas via AgenteOrcamentoSubfuncao (classe parametrizada,
+# nenhum arquivo novo por subfunção).
+_ORCAMENTO_SUBFUNCOES: list[tuple[int, str]] = [
+    (122, "Administração Geral"),
+    (301, "Atenção Básica"),
+    (302, "Assistência Hospitalar e Ambulatorial"),
+    (303, "Suporte Profilático e Terapêutico"),
+    (304, "Vigilância Sanitária"),
+    (305, "Vigilância Epidemiológica"),
+    (306, "Alimentação e Nutrição"),
+]
 
 
 class OrquestradorEstrela(AgenteCoALA):
-    """Hub central da topologia estrela coordenando 8 agentes especializados (Req 9).
+    """Hub central da topologia estrela coordenando os agentes especializados (Req 9):
+    5 de saúde (SINAN, SIH, SIM, SI-PNI, COVID), até 7 orçamentários
+    (AgenteOrcamentoSubfuncao, 1 por subfunção), AgenteAnalitico
+    (correlação+anomalias consolidadas), AgenteContextoOrcamentario,
+    AgentePriorizacaoAnalitica e TextSynthesizer.
 
     Toda comunicação entre agentes periféricos passa por este
     orquestrador (Req 9.3). Distribui tarefas via chamadas de
@@ -107,12 +227,12 @@ class OrquestradorEstrela(AgenteCoALA):
         self.neo4j_client = neo4j_client
         self.semantic_memory = {"indicador_to_agent": INDICADOR_TO_AGENT}
         self.procedural_memory = {
-            "consultar_dominio": [self._act_consultar_dominio],
+            "consultar_saude": [self._act_consultar_saude],
+            "consultar_orcamento": [self._act_consultar_orcamento],
             "cruzar_dados": [self._act_cruzar_dados],
             "detectar_gaps": [self._act_detectar_gaps],
             "analisar_contexto": [self._act_analisar_contexto],
-            "calcular_correlacoes": [self._act_calcular_correlacoes],
-            "detectar_anomalias": [self._act_detectar_anomalias],
+            "analisar": [self._act_analisar],
             "capturar_wallclock": [self._act_capturar_wallclock],
             "priorizar_achados": [self._act_priorizar_achados],
             "sintetizar_texto": [self._act_sintetizar_texto],
@@ -134,9 +254,12 @@ class OrquestradorEstrela(AgenteCoALA):
     def propose_actions(self) -> list[dict]:
         """Propõe as macro-ações do pipeline, em ordem de dependência de dados.
 
-        A ativação dos agentes de domínio é condicional aos health_params
+        A ativação dos agentes de saúde é condicional aos health_params
         (retrieval de `semantic_memory["indicador_to_agent"]`) — só os
         agentes relevantes à seleção do usuário são propostos (Req 9.1).
+        A ativação dos agentes orçamentários segue o mesmo critério
+        (health_params vazio → nenhum agente ativado, mesmo comportamento
+        histórico da fase de saúde nesta topologia).
         """
         actions: list[dict] = []
         health_params = self.working_memory.get("health_params", [])
@@ -148,23 +271,30 @@ class OrquestradorEstrela(AgenteCoALA):
             if agent_type:
                 active_agent_types.add(agent_type)
 
-        for key in _DOMAIN_AGENT_KEY_ORDER:
+        for key in _SAUDE_AGENT_KEY_ORDER:
             if _AGENT_KEY_TO_TYPE[key] in active_agent_types:
-                actions.append({"goal": "consultar_dominio", "agent_key": key})
+                actions.append({"goal": "consultar_saude", "agent_key": key})
 
         logger.info(
-            "[%s] OrquestradorEstrela: activating %d/%d domain agents for health_params=%s",
+            "[%s] OrquestradorEstrela: activating %d/%d agentes de saúde for health_params=%s",
             self.agent_id,
             len(actions),
-            len(_DOMAIN_AGENT_KEY_ORDER),
+            len(_SAUDE_AGENT_KEY_ORDER),
             health_params,
         )
+
+        hp_set = set(health_params)
+        for codigo, nome in _ORCAMENTO_SUBFUNCOES:
+            if not _subfuncao_ativa(codigo, hp_set):
+                continue
+            actions.append({
+                "goal": "consultar_orcamento", "subfuncao_codigo": codigo, "subfuncao_nome": nome
+            })
 
         actions.append({"goal": "cruzar_dados"})
         actions.append({"goal": "detectar_gaps"})
         actions.append({"goal": "analisar_contexto"})
-        actions.append({"goal": "calcular_correlacoes"})
-        actions.append({"goal": "detectar_anomalias"})
+        actions.append({"goal": "analisar"})
         actions.append({"goal": "capturar_wallclock"})
         actions.append({"goal": "priorizar_achados"})
         actions.append({"goal": "sintetizar_texto"})
@@ -174,18 +304,22 @@ class OrquestradorEstrela(AgenteCoALA):
 
     # -- Ações (grounding/reasoning) -----------------------------------------
 
-    def _act_consultar_dominio(self, action: dict) -> None:
-        """Ação externa: consulta um agente de domínio (Req 9.2, 9.3).
+    def _act_consultar_saude(self, action: dict) -> None:
+        """Ação externa: consulta um agente de saúde (Req 9.2, 9.3).
 
         Resolve a classe do agente pelo nome global no momento da chamada
         (não via dict pré-construído), para que os testes possam
         substituir a classe (`unittest.mock.patch`) normalmente.
         """
         specs = {
-            "vigilancia": ("vigilancia_epidemiologica", AgenteVigilanciaEpidemiologica, "star-vigilancia"),
-            "hospitalar": ("saude_hospitalar", AgenteSaudeHospitalar, "star-hospitalar"),
-            "primaria": ("atencao_primaria", AgenteAtencaoPrimaria, "star-primaria"),
-            "mortalidade": ("mortalidade", AgenteMortalidade, "star-mortalidade"),
+            "covid": ("covid", AgenteCOVID, "star-covid"),
+            "sih": ("sih", AgenteSIH, "star-sih"),
+            "sipni": ("sipni", AgenteSIPNI, "star-sipni"),
+            "sim": ("sim", AgenteSIM, "star-sim"),
+            "sinan": ("sinan", AgenteSINAN, "star-sinan"),
+            "sinasc": ("sinasc", AgenteSINASC, "star-sinasc"),
+            "sia": ("sia", AgenteSIA, "star-sia"),
+            "cnes": ("cnes", AgenteCNES, "star-cnes"),
         }
         agent_type, agent_cls, id_prefix = specs[action["agent_key"]]
         agent_id_str = f"{id_prefix}-{uuid.uuid4().hex[:8]}"
@@ -197,6 +331,14 @@ class OrquestradorEstrela(AgenteCoALA):
         intent_summary = self.working_memory.get("intent_summary")
         health_params = self.working_memory.get("health_params")
 
+        # SINAN/SIH/SIM/SIPNI/SINASC/CNES deliberam dimensão via LLM
+        # (mesmo padrão de AgenteSINAN) — precisam de use_llm; COVID/SIA
+        # não têm dimensões válidas (SISTEMA_DIMENSOES[...] == []) e não
+        # aceitam esse kwarg.
+        query_kwargs: dict[str, Any] = dict(intent_summary=intent_summary, health_params=health_params)
+        if action["agent_key"] in ("sinan", "sih", "sim", "sipni", "sinasc", "cnes"):
+            query_kwargs["use_llm"] = self.working_memory.get("use_llm", True)
+
         logger.info(
             "[%s] OrquestradorEstrela: delegando a %s (agent_id=%s)",
             self.agent_id, agent_type, agent_id_str,
@@ -204,10 +346,7 @@ class OrquestradorEstrela(AgenteCoALA):
         mc = MetricsCollector(agent_id_str, agent_type)
         mc.start()
         try:
-            result = agent.query(
-                analysis_id, date_from, date_to,
-                intent_summary=intent_summary, health_params=health_params,
-            )
+            result = agent.query(analysis_id, date_from, date_to, **query_kwargs)
             mc.stop()
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))
@@ -228,6 +367,55 @@ class OrquestradorEstrela(AgenteCoALA):
             )
             self._send_error(f"Agente {agent_type} falhou: {exc}")
             self.working_memory.setdefault("_collectors", []).append((agent_id_str, agent_type, mc))
+            raise ActionFailure(action, str(exc)) from exc
+
+    def _act_consultar_orcamento(self, action: dict) -> None:
+        """Ação externa: consulta um agente orçamentário
+        (`AgenteOrcamentoSubfuncao`, Fase 1 — PLANO_NOVO_MODELO_DADOS.md §5)."""
+        codigo = action["subfuncao_codigo"]
+        nome = action["subfuncao_nome"]
+        agent_id_str = f"star-orcamento-{codigo}-{uuid.uuid4().hex[:8]}"
+        agent = AgenteOrcamentoSubfuncao(agent_id_str, self.neo4j_client, codigo, nome)
+
+        analysis_id = self.working_memory["analysis_id"]
+        date_from = self.working_memory["date_from"]
+        date_to = self.working_memory["date_to"]
+
+        logger.info(
+            "[%s] OrquestradorEstrela: delegando a orcamento_subfuncao(%s) (agent_id=%s)",
+            self.agent_id, codigo, agent_id_str,
+        )
+        mc = MetricsCollector(agent_id_str, "orcamento_subfuncao")
+        mc.start()
+        try:
+            result = agent.query(
+                analysis_id, date_from, date_to,
+                intent_summary=self.working_memory.get("intent_summary"),
+                use_llm=self.working_memory.get("use_llm", True),
+            )
+            mc.stop()
+            self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
+            self.working_memory.setdefault("tendencias", {})[codigo] = result.get("tendencia", {})
+            self.working_memory.setdefault("variacao_anual", {})[codigo] = result.get(
+                "variacao_anual", []
+            )
+            logger.info(
+                "[%s] OrquestradorEstrela: orcamento_subfuncao(%s) (agent_id=%s) returned %d despesas",
+                self.agent_id, codigo, agent_id_str, len(result.get("despesas", [])),
+            )
+            self.working_memory.setdefault("_collectors", []).append(
+                (agent_id_str, "orcamento_subfuncao", mc)
+            )
+        except Exception as exc:
+            mc.stop()
+            logger.error(
+                "[%s] OrquestradorEstrela: orcamento_subfuncao(%s) (agent_id=%s) failed — %s",
+                self.agent_id, codigo, agent_id_str, exc,
+            )
+            self._send_error(f"Agente orcamento_subfuncao({codigo}) falhou: {exc}")
+            self.working_memory.setdefault("_collectors", []).append(
+                (agent_id_str, "orcamento_subfuncao", mc)
+            )
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_cruzar_dados(self, action: dict) -> None:
@@ -298,54 +486,33 @@ class OrquestradorEstrela(AgenteCoALA):
             )
             raise ActionFailure(action, str(exc)) from exc
 
-    def _act_calcular_correlacoes(self, action: dict) -> None:
-        """Ação externa: delega a AgenteCorrelacao (Req 9.4)."""
-        corr_id = f"star-correlacao-{uuid.uuid4().hex[:8]}"
-        agente_correlacao = AgenteCorrelacao(corr_id)
+    def _act_analisar(self, action: dict) -> None:
+        """Ação externa: delega a AgenteAnalitico — correlação Spearman +
+        detecção de anomalias consolidadas num único agente
+        (PLANO_NOVO_MODELO_DADOS.md §7 item 6, Req 9.4, 9.5)."""
+        an_id = f"star-analitico-{uuid.uuid4().hex[:8]}"
+        agente_analitico = AgenteAnalitico(an_id)
         logger.info(
-            "[%s] OrquestradorEstrela: delegando a correlacao (agent_id=%s)", self.agent_id, corr_id
+            "[%s] OrquestradorEstrela: delegando a analitico (agent_id=%s)", self.agent_id, an_id
         )
-        mc = MetricsCollector(corr_id, "correlacao")
+        mc = MetricsCollector(an_id, "analitico")
         mc.start()
         try:
             dados_cruzados = self.working_memory.get("dados_cruzados", [])
-            correlacoes = agente_correlacao.compute(dados_cruzados)
+            resultado = agente_analitico.analisar(dados_cruzados)
             mc.stop()
-            self.working_memory["correlacoes"] = correlacoes
+            self.working_memory["correlacoes"] = resultado["correlacoes"]
+            self.working_memory["anomalias"] = resultado["anomalias"]
             logger.info(
-                "[%s] OrquestradorEstrela: computed %d correlações", self.agent_id, len(correlacoes)
+                "[%s] OrquestradorEstrela: analitico computed %d correlações, %d anomalias",
+                self.agent_id, len(resultado["correlacoes"]), len(resultado["anomalias"]),
             )
-            self.working_memory.setdefault("_collectors", []).append((corr_id, "correlacao", mc))
+            self.working_memory.setdefault("_collectors", []).append((an_id, "analitico", mc))
         except Exception as exc:
             mc.stop()
-            logger.error("[%s] OrquestradorEstrela: correlacao failed — %s", self.agent_id, exc)
-            self._send_error(f"Agente correlacao falhou: {exc}")
-            self.working_memory.setdefault("_collectors", []).append((corr_id, "correlacao", mc))
-            raise ActionFailure(action, str(exc)) from exc
-
-    def _act_detectar_anomalias(self, action: dict) -> None:
-        """Ação externa: delega a AgenteAnomalias (Req 9.5)."""
-        anom_id = f"star-anomalias-{uuid.uuid4().hex[:8]}"
-        agente_anomalias = AgenteAnomalias(anom_id)
-        logger.info(
-            "[%s] OrquestradorEstrela: delegando a anomalias (agent_id=%s)", self.agent_id, anom_id
-        )
-        mc = MetricsCollector(anom_id, "anomalias")
-        mc.start()
-        try:
-            dados_cruzados = self.working_memory.get("dados_cruzados", [])
-            anomalias = agente_anomalias.detect(dados_cruzados)
-            mc.stop()
-            self.working_memory["anomalias"] = anomalias
-            logger.info(
-                "[%s] OrquestradorEstrela: detected %d anomalias", self.agent_id, len(anomalias)
-            )
-            self.working_memory.setdefault("_collectors", []).append((anom_id, "anomalias", mc))
-        except Exception as exc:
-            mc.stop()
-            logger.error("[%s] OrquestradorEstrela: anomalias failed — %s", self.agent_id, exc)
-            self._send_error(f"Agente anomalias falhou: {exc}")
-            self.working_memory.setdefault("_collectors", []).append((anom_id, "anomalias", mc))
+            logger.error("[%s] OrquestradorEstrela: analitico failed — %s", self.agent_id, exc)
+            self._send_error(f"Agente analitico falhou: {exc}")
+            self.working_memory.setdefault("_collectors", []).append((an_id, "analitico", mc))
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_capturar_wallclock(self, action: dict) -> None:

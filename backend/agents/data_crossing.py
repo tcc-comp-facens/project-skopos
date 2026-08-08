@@ -1,14 +1,45 @@
 """
-Utilitário de cruzamento de dados — despesas SIOPS × indicadores DataSUS.
+Utilitário de cruzamento de dados — despesas × indicadores de saúde.
 
 Cruza despesas por subfunção com indicadores de saúde por tipo e ano,
 produzindo pontos de dados cruzados para os agentes analíticos.
 
-O mapeamento subfunção→indicador segue a tabela:
-  301 → vacinacao
-  302 → internacoes
-  305 → dengue, covid
-  mortalidade → transversal (cruza com todas as subfunções)
+O mapeamento subfunção→indicador (decisão tomada com o usuário na sessão
+da Fase 2, com os rótulos por SI/subtipo real — não os tokens legados de
+health_params usados só para gating de ativação em
+agents/star/orchestrator.py e agents/hierarchical/supervisors.py, ver
+nota abaixo) segue a tabela:
+  122 → CNES (qualquer subtipo — nenhum SI de saúde específico se
+        encaixa melhor em "Administração Geral")
+  301 → cobertura_vacinal + doses_aplicadas (SI-PNI) + nascidos_vivos
+        (SINASC — pré-natal/nascimento são acompanhamento de Atenção
+        Básica; escolha da Fase 3.5, sem par mais específico no
+        orçamento)
+  302 → internacoes (SIH) + producao_ambulatorial (SIA — "Assistência
+        Hospitalar e Ambulatorial" cobre as duas frentes)
+  303 → os 9 subtipos do SINAN ("qualquer tratamento ou prevenção de
+        doença se encaixa" em Suporte Profilático e Terapêutico)
+  304 → os 9 subtipos do SINAN + só o subtipo CNES
+        "estabelecimentos_vigilancia_epidemiologica" (único subtipo do CNES
+        com par temático real com Vigilância Sanitária — refinamento
+        decidido com o usuário; os outros 11 subtipos do CNES não cruzam
+        com 304, só com 122/306)
+  305 → casos + obitos (COVID) + os 9 subtipos do SINAN (Vigilância
+        Epidemiológica)
+  306 → CNES (Alimentação e Nutrição)
+  mortalidade → transversal (cruza com 301/302/303/305 — não estendido
+        a 122/304/306, decisão explícita mantida da Fase 1)
+
+Nota (bug corrigido na Fase 3.5): os agentes de domínio por SI
+(agente_sipni.py, agente_covid.py, etc.) não relabelam mais o `tipo`
+retornado pelo Neo4j para os tokens legados de health_params — cada
+`IndicadorSaude.tipo` é o subtipo nativo do sistema (ex.:
+"cobertura_vacinal", não "vacinacao"). Este módulo cruza por esse
+`tipo` real, então precisa listar os subtipos nativos, não os tokens
+de gating de agents/star/orchestrator.py::INDICADOR_TO_AGENT (que
+continuam usando "vacinacao"/"covid" só para decidir quais agentes
+ativar a partir dos health_params do usuário — vocabulário
+propositalmente diferente, não é bug).
 
 Requisitos: 9.4, 10.5
 """
@@ -20,22 +51,77 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Mapeamento subfunção → tipos de indicador
+# Os 9 subtipos do SINAN (AgenteSINAN) — reaproveitados em 3 subfunções
+# (303, 304, 305), não só uma: o mesmo agravo cruza contra o orçamento de
+# até 3 categorias de gasto diferentes, habilitando um espaço de
+# correlação maior que 1 par fixo por indicador.
+_SINAN_TIPOS: list[str] = [
+    "dengue",
+    "chikungunya",
+    "sifilis_adquirida",
+    "sifilis_gestante",
+    "sifilis_congenita",
+    "coqueluche",
+    "hepatites_virais",
+    "tuberculose",
+    "hanseniase",
+]
+
+# Os 12 subtipos do CNES (AgenteCNES) — reaproveitados em 3 subfunções
+# sem SI de saúde específico correspondente (122, 304, 306).
+_CNES_TIPOS: list[str] = [
+    "leitos",
+    "profissionais",
+    "estabelecimentos_por_tipo",
+    "ocupacoes",
+    "equipes_saude",
+    "tipo_atendimento",
+    "leitos_consultorios",
+    "equipamentos",
+    "estabelecimentos_nivel_atencao",
+    "estabelecimentos_servico_classificacao",
+    "estabelecimentos_habilitacao",
+    "estabelecimentos_vigilancia_epidemiologica",
+]
+
+# Mapeamento subfunção → tipos de indicador — ver docstring do módulo.
 SUBFUNCAO_INDICADOR_MAP: dict[int, list[str]] = {
-    301: ["vacinacao"],
-    302: ["internacoes"],
-    305: ["dengue", "covid"],
+    122: list(_CNES_TIPOS),
+    301: ["cobertura_vacinal", "doses_aplicadas", "nascidos_vivos"],
+    302: ["internacoes", "producao_ambulatorial"],
+    303: list(_SINAN_TIPOS),
+    304: ["estabelecimentos_vigilancia_epidemiologica"] + _SINAN_TIPOS,
+    305: ["casos", "obitos"] + _SINAN_TIPOS,
+    306: list(_CNES_TIPOS),
 }
 
-# Subfunções com as quais mortalidade cruza (transversal)
+# Subfunções com as quais mortalidade cruza (transversal) — mantido
+# igual à Fase 1 (301/302/303/305), não estendido às 3 subfunções novas
+# sem SI de saúde específico (122/304/306).
 MORTALIDADE_SUBFUNCOES: list[int] = [301, 302, 303, 305]
 
 SUBFUNCAO_NOMES: dict[int, str] = {
+    122: "Administração Geral",
     301: "Atenção Básica",
-    302: "Assistência Hospitalar",
-    303: "Suporte Profilático",
+    302: "Assistência Hospitalar e Ambulatorial",
+    303: "Suporte Profilático e Terapêutico",
+    304: "Vigilância Sanitária",
     305: "Vigilância Epidemiológica",
+    306: "Alimentação e Nutrição",
 }
+
+
+def _by_year_and_dimensao(rows: list[dict[str, Any]]) -> dict[tuple[int, Any], dict[str, Any]]:
+    """Indexa linhas por (ano, dimensao_valor) — não só por ano (Fase 3).
+
+    Quando uma dimensão está ativa (POR_NATUREZA/POR_APLICACAO do lado
+    despesa, ou qualquer dimensão do lado saúde), múltiplas linhas
+    compartilham o mesmo ano — uma por fatia. Indexar só por ano faria
+    um dict sobrescrever silenciosamente todas as fatias menos a
+    última. `dimensao_valor` ausente (`None`, o caso comum — nenhuma
+    dimensão ativa) preserva o comportamento anterior: uma linha por
+    ano, sem colisão."""
+    return {(r["ano"], r.get("dimensao_valor")): r for r in rows}
 
 
 def deduplicate_despesas(despesas: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -82,7 +168,8 @@ def cross_domain_data(
 
     Returns:
         Lista de CrossedDataPoint dicts com keys: subfuncao, subfuncao_nome,
-        tipo_indicador, ano, valor_despesa, valor_indicador.
+        tipo_indicador, ano, valor_despesa, valor_indicador, dimensao_valor
+        (None quando nenhum lado tem dimensão ativa).
     """
     if not despesas or not indicadores:
         return []
@@ -91,21 +178,19 @@ def cross_domain_data(
 
     # Phase 1: Standard mapping (301→vacinacao, 302→internacoes, 305→dengue/covid)
     for subfuncao, tipos in SUBFUNCAO_INDICADOR_MAP.items():
-        desp_by_year: dict[int, dict[str, Any]] = {}
-        for d in despesas:
-            if d.get("subfuncao") == subfuncao:
-                desp_by_year[d["ano"]] = d
+        desp_by_key = _by_year_and_dimensao(
+            [d for d in despesas if d.get("subfuncao") == subfuncao]
+        )
 
         for tipo in tipos:
-            ind_by_year: dict[int, dict[str, Any]] = {}
-            for i in indicadores:
-                if i.get("tipo") == tipo:
-                    ind_by_year[i["ano"]] = i
+            ind_by_key = _by_year_and_dimensao(
+                [i for i in indicadores if i.get("tipo") == tipo]
+            )
 
-            common_years = sorted(set(desp_by_year) & set(ind_by_year))
-            for year in common_years:
-                d = desp_by_year[year]
-                ind = ind_by_year[year]
+            common_keys = sorted(set(desp_by_key) & set(ind_by_key))
+            for ano, dimensao_valor in common_keys:
+                d = desp_by_key[(ano, dimensao_valor)]
+                ind = ind_by_key[(ano, dimensao_valor)]
                 crossed.append({
                     "subfuncao": subfuncao,
                     "subfuncao_nome": d.get(
@@ -113,28 +198,27 @@ def cross_domain_data(
                         SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao)),
                     ),
                     "tipo_indicador": tipo,
-                    "ano": year,
+                    "ano": ano,
                     "valor_despesa": d["valor"],
                     "valor_indicador": ind["valor"],
+                    "dimensao_valor": dimensao_valor,
                 })
 
     # Phase 2: Mortalidade — transversal, crosses with ALL subfunções
-    mort_by_year: dict[int, dict[str, Any]] = {}
-    for i in indicadores:
-        if i.get("tipo") == "mortalidade":
-            mort_by_year[i["ano"]] = i
+    mort_by_key = _by_year_and_dimensao(
+        [i for i in indicadores if i.get("tipo") == "mortalidade"]
+    )
 
-    if mort_by_year:
+    if mort_by_key:
         for subfuncao in MORTALIDADE_SUBFUNCOES:
-            desp_by_year = {}
-            for d in despesas:
-                if d.get("subfuncao") == subfuncao:
-                    desp_by_year[d["ano"]] = d
+            desp_by_key = _by_year_and_dimensao(
+                [d for d in despesas if d.get("subfuncao") == subfuncao]
+            )
 
-            common_years = sorted(set(desp_by_year) & set(mort_by_year))
-            for year in common_years:
-                d = desp_by_year[year]
-                ind = mort_by_year[year]
+            common_keys = sorted(set(desp_by_key) & set(mort_by_key))
+            for ano, dimensao_valor in common_keys:
+                d = desp_by_key[(ano, dimensao_valor)]
+                ind = mort_by_key[(ano, dimensao_valor)]
                 crossed.append({
                     "subfuncao": subfuncao,
                     "subfuncao_nome": d.get(
@@ -142,9 +226,10 @@ def cross_domain_data(
                         SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao)),
                     ),
                     "tipo_indicador": "mortalidade",
-                    "ano": year,
+                    "ano": ano,
                     "valor_despesa": d["valor"],
                     "valor_indicador": ind["valor"],
+                    "dimensao_valor": dimensao_valor,
                 })
 
     logger.info("Crossed %d data points from %d despesas and %d indicadores",
@@ -201,7 +286,7 @@ def detect_data_gaps(
         all_subfuncoes = sorted(relevant_subfuncoes)
         all_tipos = sorted(relevant_tipos)
     else:
-        all_subfuncoes = [301, 302, 303, 305]
+        all_subfuncoes = sorted(set(SUBFUNCAO_INDICADOR_MAP.keys()) | set(MORTALIDADE_SUBFUNCOES))
         all_tipos_set: set[str] = set()
         for tipos in SUBFUNCAO_INDICADOR_MAP.values():
             all_tipos_set.update(tipos)

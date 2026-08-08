@@ -1,9 +1,11 @@
 """Testes da comunicação lateral semântica (Etapa 5 do PLANO_REFATORACAO.md).
 
-Cobre SupervisorDominio/SupervisorContexto (geração do resumo, com fallback
-determinístico), SupervisorAnalitico (recebimento via peer_data e uso na
-priorização) e CoordenadorGeral (repasse dos resumos nas 2 comunicações
-laterais que chegam a SupervisorAnalitico).
+Cobre SupervisorSaude/SupervisorOrcamento/SupervisorContexto (geração do
+resumo, com fallback determinístico), SupervisorAnalitico (recebimento via
+peer_data e uso na priorização) e CoordenadorGeral (repasse dos resumos nas
+comunicações laterais que chegam a SupervisorAnalitico) — atualizado na
+Fase 1 (PLANO_NOVO_MODELO_DADOS.md §5) para o split
+SupervisorOrcamento/SupervisorSaude no lugar do antigo SupervisorDominio.
 """
 
 from __future__ import annotations
@@ -14,50 +16,67 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agents.hierarchical.coordinator import CoordenadorGeral
-from agents.hierarchical.supervisors import SupervisorAnalitico, SupervisorContexto, SupervisorDominio
+from agents.hierarchical.supervisors import (
+    SupervisorAnalitico,
+    SupervisorContexto,
+    SupervisorOrcamento,
+    SupervisorSaude,
+)
 
 
 def _neo4j_client(despesas=None, indicadores=None):
     client = MagicMock()
-    client.get_despesas.return_value = despesas or []
-    client.get_indicadores.return_value = indicadores or []
+    client.get_despesas_por_subfuncao.return_value = despesas or []
+    client.get_indicadores_por_sistema.return_value = indicadores or []
     return client
 
 
-class TestSupervisorDominioResumo:
+class TestSupervisorSaudeResumo:
     def test_resumo_gerado_via_llm(self):
+        """health_params=["mortalidade"] ativa AgenteSIM, que também
+        delibera dimensão via LLM (arbitrar_dimensao) — com use_llm=True
+        (default), core.llm_client.generate é chamado mais de uma vez.
+        Isola a chamada de resumir_para_par pelo `caller` para não
+        confundir as duas."""
         neo4j_client = _neo4j_client(
-            despesas=[{"subfuncao": 305, "ano": 2020, "valor": 100.0}],
-            indicadores=[{"tipo": "dengue", "ano": 2020, "valor": 30.0}],
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
+            indicadores=[{"tipo": "mortalidade", "ano": 2020, "valor": 30.0}],
         )
-        sup = SupervisorDominio("test-sup-dominio", neo4j_client)
-        with patch(
-            "core.llm_client.generate", return_value="Foram encontrados dados de dengue no período."
-        ) as mock_generate:
-            result = sup.run("analysis-1", 2019, 2021, health_params=["dengue"])
+        sup = SupervisorSaude("test-sup-saude", neo4j_client)
 
-        mock_generate.assert_called_once()
-        _, kwargs = mock_generate.call_args
-        assert kwargs["caller"] == "test-sup-dominio:resumir_para_par"
-        assert result["resumo"] == "Foram encontrados dados de dengue no período."
+        def _generate(prompt, caller):
+            if caller.endswith(":resumir_para_par"):
+                return "Foram encontrados dados de mortalidade no período."
+            return None  # deliberação de dimensão cai no score determinístico
+
+        with patch("core.llm_client.generate", side_effect=_generate) as mock_generate:
+            result = sup.run("analysis-1", 2019, 2021, health_params=["mortalidade"])
+
+        resumo_calls = [
+            c for c in mock_generate.call_args_list
+            if c.kwargs["caller"].endswith(":resumir_para_par")
+        ]
+        assert len(resumo_calls) == 1
+        assert resumo_calls[0].kwargs["caller"] == "test-sup-saude:resumir_para_par"
+        assert result["resumo"] == "Foram encontrados dados de mortalidade no período."
 
     def test_fallback_determinístico_quando_llm_indisponivel(self):
         neo4j_client = _neo4j_client(
-            despesas=[{"subfuncao": 305, "ano": 2020, "valor": 100.0}],
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
             indicadores=[],
         )
-        sup = SupervisorDominio("test-sup-dominio-2", neo4j_client)
+        sup = SupervisorSaude("test-sup-saude-2", neo4j_client)
         with patch("core.llm_client.generate", return_value=None):
-            result = sup.run("analysis-2", 2019, 2021, health_params=["dengue"])
+            result = sup.run("analysis-2", 2019, 2021, health_params=["mortalidade"])
 
         assert result["resumo"]
-        assert "dengue" in result["resumo"]
+        assert "mortalidade" in result["resumo"]
 
     def test_fallback_quando_llm_lanca_excecao(self):
         neo4j_client = _neo4j_client()
-        sup = SupervisorDominio("test-sup-dominio-3", neo4j_client)
+        sup = SupervisorSaude("test-sup-saude-3", neo4j_client)
         with patch("core.llm_client.generate", side_effect=Exception("LLM indisponível")):
-            result = sup.run("analysis-3", 2019, 2021, health_params=["dengue"])
+            result = sup.run("analysis-3", 2019, 2021, health_params=["mortalidade"])
 
         # Nunca deve propagar exceção — pipeline continua com resumo de fallback
         assert result["resumo"]
@@ -66,9 +85,9 @@ class TestSupervisorDominioResumo:
 
     def test_resumo_nunca_vazio_mesmo_sem_dados(self):
         neo4j_client = _neo4j_client()
-        sup = SupervisorDominio("test-sup-dominio-4", neo4j_client)
+        sup = SupervisorSaude("test-sup-saude-4", neo4j_client)
         with patch("core.llm_client.generate", return_value=""):
-            result = sup.run("analysis-4", 2019, 2021, health_params=["dengue"])
+            result = sup.run("analysis-4", 2019, 2021, health_params=["mortalidade"])
 
         assert result["resumo"]
 
@@ -77,15 +96,74 @@ class TestSupervisorDominioResumo:
         desta correção, resumir_para_par ignorava a flag use_llm=False da
         análise inteira e gastava tokens de qualquer forma."""
         neo4j_client = _neo4j_client(
-            despesas=[{"subfuncao": 305, "ano": 2020, "valor": 100.0}],
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
             indicadores=[],
         )
-        sup = SupervisorDominio("test-sup-dominio-5", neo4j_client)
+        sup = SupervisorSaude("test-sup-saude-5", neo4j_client)
         with patch("core.llm_client.generate") as mock_generate:
-            result = sup.run("analysis-5", 2019, 2021, health_params=["dengue"], use_llm=False)
+            result = sup.run("analysis-5", 2019, 2021, health_params=["mortalidade"], use_llm=False)
 
         mock_generate.assert_not_called()
         assert result["resumo"]
+
+
+class TestSupervisorOrcamentoResumo:
+    def test_resumo_gerado_via_llm(self):
+        """health_params=["dengue"] ativa subfunções cujo
+        AgenteOrcamentoSubfuncao também delibera dimensão via LLM
+        (arbitrar_dimensao) — com use_llm=True (default),
+        core.llm_client.generate é chamado mais de uma vez. Isola a
+        chamada de resumir_para_par pelo `caller`, mesmo padrão de
+        TestSupervisorSaudeResumo.test_resumo_gerado_via_llm."""
+        neo4j_client = _neo4j_client(
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
+        )
+        sup = SupervisorOrcamento("test-sup-orcamento", neo4j_client)
+
+        def _generate(prompt, caller):
+            if caller.endswith(":resumir_para_par"):
+                return "Foram encontradas despesas de vigilância no período."
+            return None  # deliberação de dimensão cai no score determinístico
+
+        with patch("core.llm_client.generate", side_effect=_generate) as mock_generate:
+            result = sup.run("analysis-1", 2019, 2021, health_params=["dengue"])
+
+        resumo_calls = [
+            c for c in mock_generate.call_args_list
+            if c.kwargs["caller"].endswith(":resumir_para_par")
+        ]
+        assert len(resumo_calls) == 1
+        assert resumo_calls[0].kwargs["caller"] == "test-sup-orcamento:resumir_para_par"
+        assert result["resumo"] == "Foram encontradas despesas de vigilância no período."
+
+    def test_fallback_quando_llm_lanca_excecao(self):
+        neo4j_client = _neo4j_client(
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
+        )
+        sup = SupervisorOrcamento("test-sup-orcamento-2", neo4j_client)
+        with patch("core.llm_client.generate", side_effect=Exception("LLM indisponível")):
+            result = sup.run("analysis-2", 2019, 2021, health_params=["dengue"])
+
+        assert result["resumo"]
+
+    def test_use_llm_false_pula_direto_para_fallback_sem_chamar_llm(self):
+        neo4j_client = _neo4j_client(
+            despesas=[{"subfuncao": 305, "subfuncaoNome": "x", "ano": 2020, "valor": 100.0}],
+        )
+        sup = SupervisorOrcamento("test-sup-orcamento-3", neo4j_client)
+        with patch("core.llm_client.generate") as mock_generate:
+            result = sup.run("analysis-3", 2019, 2021, health_params=["dengue"], use_llm=False)
+
+        mock_generate.assert_not_called()
+        assert result["resumo"]
+
+    def test_health_params_fora_do_dominio_305_nao_ativa_nada(self):
+        """health_params sem nenhum token do domínio SINAN/covid não deve
+        ativar a subfunção 305 nem propor resumir_para_par."""
+        neo4j_client = _neo4j_client()
+        sup = SupervisorOrcamento("test-sup-orcamento-4", neo4j_client)
+        result = sup.run("analysis-4", 2019, 2021, health_params=["vacinacao"])
+        assert result["despesas"] == []
 
 
 class TestSupervisorContextoResumo:
@@ -209,20 +287,23 @@ class TestSupervisorAnaliticoRecebeResumos:
 
 
 class TestCoordenadorGeralRepasseDeResumos:
-    def test_comunicar_dominio_analitico_repassa_resumo(self):
+    def test_comunicar_saude_analitico_repassa_resumo(self):
         coord = CoordenadorGeral("test-coord", MagicMock())
         sup_analitico = MagicMock()
         coord.working_memory.update({
             "_sup_analitico": sup_analitico,
-            "_dominio_data": {"despesas": [], "indicadores": [], "resumo": "resumo do domínio"},
-            "date_from": 2019, "date_to": 2021, "health_params": ["dengue"],
+            "_saude_data": {"despesas": [], "indicadores": [], "resumo": "resumo da saude"},
+            "_orcamento_data": {"despesas": [], "resumo": "resumo do orcamento"},
+            "_despesas_combinadas": [],
+            "date_from": 2019, "date_to": 2021, "health_params": ["mortalidade"],
             "intent_summary": "x",
         })
-        coord._act_comunicar_dominio_analitico({"goal": "comunicar_dominio_analitico"})
+        coord._act_comunicar_saude_analitico({"goal": "comunicar_saude_analitico"})
 
         sup_analitico.receive_from_peer.assert_called_once()
         payload = sup_analitico.receive_from_peer.call_args[0][0]
-        assert payload["resumo_dominio"] == "resumo do domínio"
+        assert "resumo da saude" in payload["resumo_dominio"]
+        assert "resumo do orcamento" in payload["resumo_dominio"]
 
     def test_comunicar_contexto_analitico_repassa_resumo(self):
         coord = CoordenadorGeral("test-coord-2", MagicMock())
@@ -238,38 +319,77 @@ class TestCoordenadorGeralRepasseDeResumos:
         assert payload["resumo_contexto"] == "resumo do contexto"
 
     def test_repasse_funciona_com_resumo_ausente(self):
-        """Degradação graciosa: se _dominio_data não tem 'resumo' (ex.: falha
-        upstream), o repasse não quebra — só manda string vazia."""
+        """Degradação graciosa: se _saude_data/_orcamento_data não têm
+        'resumo' (ex.: falha upstream), o repasse não quebra — só manda
+        string vazia."""
         coord = CoordenadorGeral("test-coord-3", MagicMock())
         sup_analitico = MagicMock()
         coord.working_memory.update({
             "_sup_analitico": sup_analitico,
-            "_dominio_data": {"despesas": [], "indicadores": []},
+            "_saude_data": {"despesas": [], "indicadores": []},
+            "_orcamento_data": {"despesas": []},
+            "_despesas_combinadas": [],
             "date_from": 2019, "date_to": 2021, "health_params": [],
             "intent_summary": None,
         })
-        coord._act_comunicar_dominio_analitico({"goal": "comunicar_dominio_analitico"})
+        coord._act_comunicar_saude_analitico({"goal": "comunicar_saude_analitico"})
 
         payload = sup_analitico.receive_from_peer.call_args[0][0]
         assert payload["resumo_dominio"] == ""
 
-    def test_delegar_dominio_repassa_use_llm(self):
+    def test_delegar_saude_repassa_use_llm(self):
         """Regressão: use_llm da análise inteira precisa chegar em
-        SupervisorDominio.run() para que resumir_para_par (Etapa 5)
+        SupervisorSaude.run() para que resumir_para_par (Etapa 5)
         respeite use_llm=False."""
         coord = CoordenadorGeral("test-coord-4", MagicMock())
-        sup_dominio = MagicMock()
-        sup_dominio.run.return_value = {"despesas": [], "indicadores": [], "resumo": ""}
+        sup_saude = MagicMock()
+        sup_saude.run.return_value = {"despesas": [], "indicadores": [], "resumo": ""}
         coord.working_memory.update({
-            "_sup_dominio": sup_dominio,
+            "_sup_saude": sup_saude,
             "_metrics_collectors": [],
             "analysis_id": "a1", "date_from": 2019, "date_to": 2021,
             "health_params": [], "intent_summary": None, "use_llm": False,
         })
-        coord._act_delegar_dominio({"goal": "delegar_dominio"})
+        coord._act_delegar_saude({"goal": "delegar_saude"})
 
-        sup_dominio.run.assert_called_once()
-        assert sup_dominio.run.call_args.kwargs["use_llm"] is False
+        sup_saude.run.assert_called_once()
+        assert sup_saude.run.call_args.kwargs["use_llm"] is False
+
+    def test_delegar_orcamento_repassa_use_llm(self):
+        coord = CoordenadorGeral("test-coord-4b", MagicMock())
+        sup_orcamento = MagicMock()
+        sup_orcamento.run.return_value = {"despesas": [], "tendencias": {}, "resumo": ""}
+        coord.working_memory.update({
+            "_sup_orcamento": sup_orcamento,
+            "_metrics_collectors": [],
+            "analysis_id": "a1", "date_from": 2019, "date_to": 2021,
+            "health_params": [], "use_llm": False,
+        })
+        coord._act_delegar_orcamento({"goal": "delegar_orcamento"})
+
+        sup_orcamento.run.assert_called_once()
+        assert sup_orcamento.run.call_args.kwargs["use_llm"] is False
+
+    def test_delegar_orcamento_repassa_intent_summary(self):
+        """Regressão (Fase 3): intent_summary da análise inteira precisa
+        chegar em SupervisorOrcamento.run() para que a deliberação de
+        dimensão (POR_NATUREZA/POR_APLICACAO) de cada
+        AgenteOrcamentoSubfuncao subordinado tenha insumo real — sem
+        isso, a deliberação nunca escolhe uma dimensão diferente de
+        "sem quebra" em produção."""
+        coord = CoordenadorGeral("test-coord-4c", MagicMock())
+        sup_orcamento = MagicMock()
+        sup_orcamento.run.return_value = {"despesas": [], "tendencias": {}, "resumo": ""}
+        coord.working_memory.update({
+            "_sup_orcamento": sup_orcamento,
+            "_metrics_collectors": [],
+            "analysis_id": "a1", "date_from": 2019, "date_to": 2021,
+            "health_params": [], "intent_summary": "quero saber por natureza", "use_llm": True,
+        })
+        coord._act_delegar_orcamento({"goal": "delegar_orcamento"})
+
+        sup_orcamento.run.assert_called_once()
+        assert sup_orcamento.run.call_args.kwargs["intent_summary"] == "quero saber por natureza"
 
     def test_delegar_contexto_repassa_use_llm(self):
         coord = CoordenadorGeral("test-coord-5", MagicMock())

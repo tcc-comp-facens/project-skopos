@@ -1,8 +1,9 @@
-"""Tests for api.dispatch — disparo de análise compartilhado por REST e chat.
+"""Tests for api.dispatch — disparo de análise usado pelo chat.
 
-Escrito antes/junto da refatoração de routes.py para travar a
-compatibilidade retroativa do comportamento de POST /api/analysis
-(Req 6.6 do spec realtime-chat-interface).
+O antigo POST /api/analysis (formulário com um botão por categoria de
+indicador) foi removido — dispatch_analysis hoje só é chamado pelo chat
+(api/chat_runner.py), mas continua genérico o suficiente para aceitar
+qualquer `interpreted_via`.
 """
 
 from __future__ import annotations
@@ -91,71 +92,6 @@ class TestGetAvailableYearRange:
         result = dispatch.get_available_year_range()
 
         assert result is None
-
-
-class TestCreateAnalysisEndpointBackwardCompat:
-    """Garante que POST /api/analysis mantém o contrato de antes da refatoração."""
-
-    def test_valid_request_returns_analysis_id(self):
-        from main import app
-
-        with patch(
-            "api.routes.dispatch_analysis", return_value="fixed-analysis-id"
-        ) as mock_dispatch:
-            with TestClient(app) as client:
-                response = client.post(
-                    "/api/analysis",
-                    json={
-                        "dateFrom": 2019,
-                        "dateTo": 2022,
-                        "healthParams": {"dengue": True},
-                        "useLlm": True,
-                        "useLlmJudge": False,
-                    },
-                )
-
-        assert response.status_code == 200
-        assert response.json() == {"analysisId": "fixed-analysis-id"}
-        mock_dispatch.assert_called_once()
-        _, kwargs = mock_dispatch.call_args
-        assert kwargs["date_from"] == 2019
-        assert kwargs["date_to"] == 2022
-        assert kwargs["health_params"] == ["dengue"]
-        assert kwargs["interpreted_via"] == "form"
-
-    def test_invalid_date_range_returns_400(self):
-        from main import app
-
-        with TestClient(app) as client:
-            response = client.post(
-                "/api/analysis",
-                json={
-                    "dateFrom": 2022,
-                    "dateTo": 2019,
-                    "healthParams": {"dengue": True},
-                    "useLlm": True,
-                    "useLlmJudge": False,
-                },
-            )
-
-        assert response.status_code == 400
-
-    def test_no_health_params_returns_400(self):
-        from main import app
-
-        with TestClient(app) as client:
-            response = client.post(
-                "/api/analysis",
-                json={
-                    "dateFrom": 2019,
-                    "dateTo": 2022,
-                    "healthParams": {},
-                    "useLlm": True,
-                    "useLlmJudge": False,
-                },
-            )
-
-        assert response.status_code == 400
 
 
 class TestDataRangeEndpoint:

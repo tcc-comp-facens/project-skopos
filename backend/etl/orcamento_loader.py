@@ -22,6 +22,7 @@ Uso:
 Variáveis de ambiente: NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 """
 
+import math
 import os
 import re
 import logging
@@ -169,6 +170,8 @@ _CONSTRAINTS = [
     "CREATE CONSTRAINT programa_governo_nome IF NOT EXISTS FOR (p:ProgramaGoverno) REQUIRE p.nome IS UNIQUE",
     "CREATE CONSTRAINT acao_codigo IF NOT EXISTS FOR (a:Acao) REQUIRE a.codigo IS UNIQUE",
     "CREATE CONSTRAINT unidade_orcamentaria_nome IF NOT EXISTS FOR (u:UnidadeOrcamentaria) REQUIRE u.nome IS UNIQUE",
+    "CREATE CONSTRAINT aplicacao_nome IF NOT EXISTS FOR (a:Aplicacao) REQUIRE a.nome IS UNIQUE",
+    "CREATE CONSTRAINT natureza_nome IF NOT EXISTS FOR (n:Natureza) REQUIRE n.nome IS UNIQUE",
     "CREATE CONSTRAINT empenho_id IF NOT EXISTS FOR (e:Empenho) REQUIRE e.id IS UNIQUE",
     # Índices compostos (não uniqueness constraint composto — evita depender de
     # recurso Enterprise-only; MERGE funciona normalmente, só perde a garantia
@@ -262,6 +265,7 @@ def _read_empenho_csv(path: Path, periodo_origem: str) -> list[dict]:
             "fonteRecursoNome": row["Fonte Recurso"],
             "tipoRecurso": tipo_recurso,
             "unidadeNome": row["Unidade Orçamentária"],
+            "aplicacaoNome": row["Aplicação"],
             "programaNome": row["Programa"],
             "acaoCodigo": acao_codigo or f"SEM_CODIGO:{acao_nome}",
             "acaoNome": acao_nome,
@@ -279,6 +283,7 @@ MERGE (s:Subfuncao {codigo: row.subfuncaoCodigo})
 MERGE (fr:FonteRecurso {nome: row.fonteRecursoNome})
   ON CREATE SET fr.tipoRecurso = row.tipoRecurso
 MERGE (u:UnidadeOrcamentaria {nome: row.unidadeNome})
+MERGE (ap:Aplicacao {nome: row.aplicacaoNome})
 MERGE (pg:ProgramaGoverno {nome: row.programaNome})
 MERGE (a:Acao {codigo: row.acaoCodigo})
   ON CREATE SET a.nome = row.acaoNome
@@ -308,6 +313,7 @@ MERGE (e)-[:CLASSIFICADO_EM]->(s)
 MERGE (e)-[:FINANCIADO_POR]->(fr)
 MERGE (e)-[:EXECUTA_ACAO]->(a)
 MERGE (e)-[:DA_UNIDADE]->(u)
+MERGE (e)-[:APLICADO_EM]->(ap)
 """
 
 
@@ -433,13 +439,135 @@ def _compute_despesa_anual(session) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Agregação — quebra dimensional de DespesaAnual (Fase 3)
+#
+# Roda depois de _compute_despesa_anual (mesma sessão) — MATCH, não MERGE,
+# nos nós DespesaAnual que acabaram de ser calculados. Espelha o padrão já
+# usado do lado saúde (IndicadorSaude-[:POR_X {valor}]->(dim)): o valor
+# numérico vive na relação, o nó de dimensão é genérico. `db/query_builder.py`
+# consome esses reltypes (POR_NATUREZA/POR_APLICACAO) via `dimensao`,
+# validado contra `DESPESA_DIMENSOES` antes de qualquer interpolação.
+#
+# POR_APLICACAO reaproveita o nó Aplicacao já criado por
+# _PERSIST_EMPENHO_QUERY (via APLICADO_EM) — MATCH, não MERGE, para nunca
+# divergir da instância já existente. POR_NATUREZA cria o único nó
+# genuinamente novo desta fase (Natureza não existia antes — natureza era
+# só uma propriedade string em Empenho, sem nó próprio).
+# ---------------------------------------------------------------------------
+
+_COMPUTE_DESPESA_POR_APLICACAO_QUERY = """
+MATCH (e:Empenho)-[:CLASSIFICADO_EM]->(s:Subfuncao)
+MATCH (e)-[:APLICADO_EM]->(ap:Aplicacao)
+WITH s.codigo AS subfuncaoCodigo, e.ano AS ano, ap AS aplicacao,
+     sum(e.valorProcessado) AS valor
+MATCH (d:DespesaAnual {subfuncaoCodigo: subfuncaoCodigo, ano: ano})
+MERGE (d)-[r:POR_APLICACAO]->(aplicacao)
+SET r.valor = valor
+RETURN count(r) AS total
+"""
+
+_COMPUTE_DESPESA_POR_NATUREZA_QUERY = """
+MATCH (e:Empenho)-[:CLASSIFICADO_EM]->(s:Subfuncao)
+WITH s.codigo AS subfuncaoCodigo, e.ano AS ano, e.natureza AS natureza,
+     sum(e.valorProcessado) AS valor
+MATCH (d:DespesaAnual {subfuncaoCodigo: subfuncaoCodigo, ano: ano})
+MERGE (n:Natureza {nome: natureza})
+MERGE (d)-[r:POR_NATUREZA]->(n)
+SET r.valor = valor
+RETURN count(r) AS total
+"""
+
+
+def _compute_despesa_por_aplicacao(session) -> int:
+    result = session.run(_COMPUTE_DESPESA_POR_APLICACAO_QUERY)
+    return result.single()["total"]
+
+
+def _compute_despesa_por_natureza(session) -> int:
+    result = session.run(_COMPUTE_DESPESA_POR_NATUREZA_QUERY)
+    return result.single()["total"]
+
+
+# ---------------------------------------------------------------------------
+# Agregação — VARIACAO_ANUAL (desenhada e aprovada em
+# PLANO_NOVO_MODELO_DADOS.md §3.1, implementada agora)
+#
+# (:DespesaAnual {subfuncaoCodigo, ano})-[:VARIACAO_ANUAL {percentual, classificacao}]->
+# (:DespesaAnual {subfuncaoCodigo, ano_anterior})
+#
+# Diferente das agregações acima (CASE-WHEN/GROUP BY puro em Cypher), a
+# variação ano-a-ano precisa da mesma fórmula/limiares que
+# `AgenteContextoOrcamentario` já usa em tempo de análise — para não ter
+# duas lógicas de classificação divergentes, o cálculo é feito em Python
+# reaproveitando `compute_yoy_variation`/`classify_trend` literalmente
+# (agents/context/contexto_orcamentario.py), não reescrito em Cypher.
+# "Anos consecutivos" aqui significa consecutivos na lista de anos que
+# de fato têm DespesaAnual para aquela subfunção (mesma semântica do
+# `_analyze_trends` do agente, que itera por índice na lista ordenada,
+# não por ano civil — uma subfunção sem despesa num ano específico não
+# quebra a cadeia, só pula esse ano).
+# ---------------------------------------------------------------------------
+
+_MERGE_VARIACAO_ANUAL_QUERY = """
+UNWIND $edges AS edge
+MATCH (atual:DespesaAnual {subfuncaoCodigo: edge.subfuncaoCodigo, ano: edge.anoAtual})
+MATCH (anterior:DespesaAnual {subfuncaoCodigo: edge.subfuncaoCodigo, ano: edge.anoAnterior})
+MERGE (atual)-[r:VARIACAO_ANUAL]->(anterior)
+SET r.percentual = edge.percentual, r.classificacao = edge.classificacao
+RETURN count(r) AS total
+"""
+
+
+def _compute_variacao_anual(session) -> int:
+    from agents.context.contexto_orcamentario import classify_trend, compute_yoy_variation
+
+    rows = session.run("""
+        MATCH (d:DespesaAnual)
+        RETURN d.subfuncaoCodigo AS subfuncaoCodigo, d.ano AS ano,
+               d.valorProcessado AS valor
+        ORDER BY d.subfuncaoCodigo, d.ano
+    """)
+
+    by_subfuncao: dict[int, list[tuple[int, float]]] = {}
+    for row in rows:
+        by_subfuncao.setdefault(row["subfuncaoCodigo"], []).append((row["ano"], row["valor"]))
+
+    edges = []
+    for codigo, pontos in by_subfuncao.items():
+        pontos.sort(key=lambda p: p[0])
+        for (ano_anterior, valor_anterior), (ano_atual, valor_atual) in zip(pontos, pontos[1:]):
+            percentual = compute_yoy_variation(valor_atual, valor_anterior)
+            classificacao = classify_trend([percentual])
+            edges.append({
+                "subfuncaoCodigo": codigo,
+                "anoAtual": ano_atual,
+                "anoAnterior": ano_anterior,
+                "percentual": percentual,
+                "classificacao": classificacao,
+            })
+
+    if not edges:
+        return 0
+
+    result = session.run(_MERGE_VARIACAO_ANUAL_QUERY, edges=edges)
+    return result.single()["total"]
+
+
+# ---------------------------------------------------------------------------
 # Ponto de entrada público
 # ---------------------------------------------------------------------------
 
 
 def load(neo4j_client) -> dict:
     """Lê todos os CSVs de orçamento em Dados/orcamento/ e persiste no Neo4j."""
-    counts = {"empenhos": 0, "orcamento_programa": 0, "despesa_anual": 0}
+    counts = {
+        "empenhos": 0,
+        "orcamento_programa": 0,
+        "despesa_anual": 0,
+        "despesa_por_aplicacao": 0,
+        "despesa_por_natureza": 0,
+        "variacao_anual": 0,
+    }
 
     with neo4j_client._driver.session() as session:
         _ensure_constraints(session)
@@ -472,6 +600,9 @@ def load(neo4j_client) -> dict:
 
     with neo4j_client._driver.session() as session:
         counts["despesa_anual"] = _compute_despesa_anual(session)
+        counts["despesa_por_aplicacao"] = _compute_despesa_por_aplicacao(session)
+        counts["despesa_por_natureza"] = _compute_despesa_por_natureza(session)
+        counts["variacao_anual"] = _compute_variacao_anual(session)
 
     logger.info("Orcamento ETL concluido: %s", counts)
     return counts

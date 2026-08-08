@@ -1,7 +1,8 @@
 """Agentes da arquitetura hierárquica."""
 
 from agents.hierarchical.supervisors import (
-    SupervisorDominio,
+    SupervisorOrcamento,
+    SupervisorSaude,
     SupervisorAnalitico,
     SupervisorContexto,
 )
@@ -9,7 +10,8 @@ from agents.hierarchical.coordinator import CoordenadorGeral
 
 __all__ = [
     "CoordenadorGeral",
-    "SupervisorDominio",
+    "SupervisorOrcamento",
+    "SupervisorSaude",
     "SupervisorAnalitico",
     "SupervisorContexto",
 ]

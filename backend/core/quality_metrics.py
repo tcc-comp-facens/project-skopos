@@ -30,23 +30,35 @@ logger = logging.getLogger(__name__)
 
 # Nomes das subfunções para verificação textual
 SUBFUNCAO_NOMES: dict[int, str] = {
+    122: "Administração Geral",
     301: "Atenção Básica",
-    302: "Assistência Hospitalar",
-    303: "Suporte Profilático",
+    302: "Assistência Hospitalar e Ambulatorial",
+    303: "Suporte Profilático e Terapêutico",
+    304: "Vigilância Sanitária",
     305: "Vigilância Epidemiológica",
+    306: "Alimentação e Nutrição",
 }
 
-# Tipos de agente por fase (para latency breakdown)
+# Tipos de agente por fase (para latency breakdown). Os 4 agentes de
+# saúde legados (Fase 1) foram decompostos e aposentados na Fase 2 — os
+# 7 agentes de saúde atuais (1 por Sistema de Informação) substituem a
+# lista antiga — ver PLANO_NOVO_MODELO_DADOS.md §5.
 FASE_DOMINIO = {
-    "vigilancia_epidemiologica",
-    "saude_hospitalar",
-    "atencao_primaria",
-    "mortalidade",
+    "sinan",
+    "sih",
+    "sim",
+    "sipni",
+    "covid",
+    "sinasc",
+    "sia",
+    "cnes",
+    "orcamento_subfuncao",
 }
-FASE_ANALITICO = {"correlacao", "anomalias", "priorizacao", "sintetizador", "verificacao"}
+FASE_ANALITICO = {"analitico", "priorizacao", "sintetizador", "verificacao"}
 FASE_CONTEXTO = {"contexto_orcamentario"}
 FASE_SUPERVISORES = {
-    "supervisor_dominio",
+    "supervisor_orcamento",
+    "supervisor_saude",
     "supervisor_analitico",
     "supervisor_contexto",
     "orquestrador_estrela",
