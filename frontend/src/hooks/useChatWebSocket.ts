@@ -95,6 +95,11 @@ export function useChatWebSocket(
     };
 
     ws.onclose = (closeEvent) => {
+      // Mesma proteção de useWebSocket.ts: ignora o close de uma conexão
+      // já substituída (o double-connect de dev do React StrictMode abre
+      // uma conexão "canário" cujo close assíncrono chegaria depois da
+      // conexão real já estar no ar).
+      if (wsRef.current !== ws) return;
       setConnectionStatus('disconnected');
       if (
         closeEvent.code !== 1000 &&

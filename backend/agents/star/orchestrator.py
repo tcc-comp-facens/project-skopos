@@ -600,6 +600,7 @@ class OrquestradorEstrela(AgenteCoALA):
             use_llm = self.working_memory.get("use_llm", True)
             date_from = self.working_memory.get("date_from")
             date_to = self.working_memory.get("date_to")
+            pergunta_usuario = self.working_memory.get("intent_summary")
 
             # Correlações/anomalias/ênfase priorizadas (Etapa 3), se disponíveis
             # — nunca substitui os dados brutos usados em Q1, só a ordem/ênfase
@@ -627,6 +628,7 @@ class OrquestradorEstrela(AgenteCoALA):
                         enfase=enfase,
                         date_from=date_from,
                         date_to=date_to,
+                        pergunta_usuario=pergunta_usuario,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:

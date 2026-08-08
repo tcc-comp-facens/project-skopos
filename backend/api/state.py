@@ -16,6 +16,18 @@ from db.neo4j_client import Neo4jClient
 # analysisId → shared Queue for WebSocket streaming
 active_queues: dict[str, Queue] = {}
 
+# analysisId → geração da conexão WS que tem permissão de consumir
+# active_queues[analysisId] agora. Incrementado a cada nova conexão
+# aceita para o mesmo analysisId — usado por api.websocket para uma
+# conexão mais antiga (ex.: a conexão "canário" do double-connect de
+# desenvolvimento do React StrictMode, mount->cleanup->mount) perceber
+# que foi substituída e parar de consumir, em vez de competir pelos
+# mesmos itens da fila com a conexão nova e descartar silenciosamente
+# os que ela "vencer" na corrida (o socket dela já pode estar fechado
+# do lado do cliente nesse ponto, então esses itens nunca chegariam a
+# lugar nenhum).
+active_ws_generation: dict[str, int] = {}
+
 # analysisId → [thread_star, thread_hierarchical]
 active_threads: dict[str, list[threading.Thread]] = {}
 

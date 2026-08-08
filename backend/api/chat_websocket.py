@@ -36,6 +36,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agents.intent import AgenteInterpretacaoIntencao
 from agents.intent.agente_interpretacao_intencao import (
+    MISSING_CHITCHAT,
     MISSING_LLM_UNAVAILABLE,
     MISSING_OUT_OF_SCOPE,
     MISSING_TEXT,
@@ -137,9 +138,16 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                 )
 
                 # Etapa 6 — registra a decisão do guardrail (dentro/fora de
-                # escopo), exceto quando não houve decisão real: mensagem
-                # vazia (nem chega ao LLM) ou falha técnica do LLM.
-                if MISSING_TEXT not in result.missing and MISSING_LLM_UNAVAILABLE not in result.missing:
+                # escopo), exceto quando não houve decisão real de escopo:
+                # mensagem vazia (nem chega ao LLM), falha técnica do LLM,
+                # ou conversa/meta (precisa_analise=false — está dentro do
+                # escopo, só não precisou de análise; contá-la como
+                # rejeição enviesaria a taxa de rejeição do guardrail).
+                if (
+                    MISSING_TEXT not in result.missing
+                    and MISSING_LLM_UNAVAILABLE not in result.missing
+                    and MISSING_CHITCHAT not in result.missing
+                ):
                     guardrail_stats.record_guardrail_decision(
                         out_of_scope=MISSING_OUT_OF_SCOPE in result.missing
                     )

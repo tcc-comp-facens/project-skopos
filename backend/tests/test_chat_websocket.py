@@ -127,6 +127,37 @@ class TestChatWebsocketProtocol:
             with client.websocket_connect("/ws/chat/not-a-uuid") as ws:
                 ws.receive_json()
 
+    def test_chitchat_reply_does_not_dispatch_analysis_nor_count_as_rejection(self):
+        """Saudação (precisa_analise=false) recebe a resposta direta da
+        LLM no chat, sem disparar análise, e não conta na taxa de
+        rejeição do guardrail (não é uma recusa de escopo)."""
+        session_id = _session_id()
+        llm_response = (
+            '{"em_escopo": true, "precisa_analise": false, '
+            '"resposta_direta": "Oi! Em que posso ajudar?", '
+            '"date_from": null, "date_to": null, "health_params": [], '
+            '"intent_summary": ""}'
+        )
+        with patch(
+            "api.chat_websocket.get_available_year_range", return_value=(2015, 2025)
+        ), patch(
+            "core.llm_client.generate", return_value=llm_response
+        ), patch(
+            "api.chat_websocket.guardrail_stats.record_guardrail_decision"
+        ) as mock_record, patch(
+            "api.chat_websocket.run_chat_analysis"
+        ) as mock_run:
+            with client.websocket_connect(f"/ws/chat/{session_id}") as ws:
+                ws.send_json({"type": "user_message", "payload": {"text": "Olá"}})
+
+                ack = ws.receive_json()
+                assert ack["type"] == "user_ack"
+
+                assert "".join(_drain_chunks(ws)) == "Oi! Em que posso ajudar?"
+
+        mock_run.assert_not_called()
+        mock_record.assert_not_called()
+
     def test_second_message_rejected_while_previous_in_progress(self):
         session_id = _session_id()
         try:

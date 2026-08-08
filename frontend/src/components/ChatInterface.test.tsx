@@ -74,57 +74,112 @@ describe('ChatInterface', () => {
     });
   });
 
-  it('shows a placeholder while the round is loading, then reveals the winning architecture text progressively (never the loser, never before the backend resolves it)', () => {
-    vi.useFakeTimers();
-    try {
-      const { rerender } = render(
-        <ChatInterface
-          {...defaultProps}
-          activeRoundId="analysis-1"
-          activeRoundWs={{ ...INITIAL_STATE, starLoading: true, hierLoading: true }}
-        />,
-      );
+  it('streams the first architecture to produce text live, chunk by chunk, in place', () => {
+    // Regressão do redesenho pra streaming real: nada de animação
+    // simulada no cliente nem espera pelas duas arquiteturas — a bolha
+    // reflete o próprio starText/hierText do WebSocket crescendo.
+    const { rerender } = render(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-1"
+        activeRoundWs={{ ...INITIAL_STATE, starLoading: true, hierLoading: true }}
+      />,
+    );
 
-      expect(screen.getByText('Analisando os dados…')).toBeInTheDocument();
+    expect(screen.getByText('Analisando os dados…')).toBeInTheDocument();
 
-      rerender(
-        <ChatInterface
-          {...defaultProps}
-          activeRoundId="analysis-1"
-          activeRoundWs={{
-            ...INITIAL_STATE,
-            starText: 'Resultado completo da arquitetura estrela.',
-            hierText: 'Resultado completo da arquitetura hierárquica.',
-            comparativeReport: '→ Arquitetura Estrela venceu com 5 pontos',
-          }}
-        />,
-      );
+    // Estrela começa a produzir chunks — a bolha já mostra o texto
+    // parcial, ainda com o indicador de "streaming" ligado.
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-1"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          starText: 'Resultado parcial',
+          starLoading: true,
+          hierLoading: true,
+        }}
+      />,
+    );
+    expect(screen.queryByText('Analisando os dados…')).not.toBeInTheDocument();
+    expect(screen.getByText('Resultado parcial')).toBeInTheDocument();
+    expect(screen.queryByTestId('message-bubble-winner-badge')).not.toBeInTheDocument();
 
-      // Nada do texto completo aparece de uma vez — a revelação começa
-      // vazia e a bolha é marcada com o badge do vencedor imediatamente.
-      expect(screen.queryByText('Analisando os dados…')).not.toBeInTheDocument();
-      expect(screen.queryByText('Resultado completo da arquitetura estrela.')).not.toBeInTheDocument();
-      expect(screen.getByTestId('message-bubble-winner-badge')).toHaveAttribute(
-        'aria-label',
-        'Arquitetura Estrela',
-      );
+    // Mais chunks chegam — o texto cresce em cima da mesma bolha (nunca
+    // duplica, nunca troca pra hierárquica mesmo que ela comece a
+    // produzir texto depois).
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-1"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          starText: 'Resultado parcial e agora mais completo',
+          starLoading: true,
+          hierText: 'Texto da hierárquica, que não deve aparecer',
+          hierLoading: true,
+        }}
+      />,
+    );
+    expect(screen.getByText('Resultado parcial e agora mais completo')).toBeInTheDocument();
+    expect(screen.queryByText('Texto da hierárquica, que não deve aparecer')).not.toBeInTheDocument();
 
-      // Depois de um "tick" da revelação, só uma fatia parcial do texto do
-      // VENCEDOR está visível (nunca o texto da arquitetura perdedora).
-      act(() => {
-        vi.advanceTimersByTime(20);
-      });
-      expect(screen.getByText('Result')).toBeInTheDocument();
-      expect(screen.queryByText('Resultado completo da arquitetura hierárquica.')).not.toBeInTheDocument();
+    // Estrela termina, com o comparativo já apontando ela como vencedora
+    // — finaliza com o badge, sem esperar a hierárquica.
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-1"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          starText: 'Resultado completo da arquitetura estrela.',
+          starLoading: false,
+          hierText: 'Texto da hierárquica, que não deve aparecer',
+          hierLoading: true,
+          comparativeReport: '→ Arquitetura Estrela venceu com 5 pontos',
+        }}
+      />,
+    );
+    expect(screen.getByText('Resultado completo da arquitetura estrela.')).toBeInTheDocument();
+    expect(screen.getByTestId('message-bubble-winner-badge')).toHaveAttribute(
+      'aria-label',
+      'Arquitetura Estrela',
+    );
+  });
 
-      // Ao final da revelação, o texto completo do vencedor está visível.
-      act(() => {
-        vi.runAllTimers();
-      });
-      expect(screen.getByText('Resultado completo da arquitetura estrela.')).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+  it('finalizes with the followed architecture text even when the comparative report is not ready yet (no winner badge, but no fallback either)', () => {
+    // Caso comum: a estrela termina bem antes da hierárquica, então o
+    // relatório comparativo (que só existe depois que as DUAS terminam)
+    // ainda não chegou quando a rodada finaliza — a resposta não deve
+    // ficar esperando por ele.
+    const { rerender } = render(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-4"
+        activeRoundWs={{ ...INITIAL_STATE, starLoading: true, hierLoading: true }}
+      />,
+    );
+
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-4"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          starText: 'Resposta válida da arquitetura estrela.',
+          starLoading: false,
+          hierLoading: true,
+          comparativeReport: '', // ainda não computado
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByText('Análise concluída, mas não foi possível determinar um resultado completo. Veja os detalhes técnicos na aba Agentes.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('message-bubble-winner-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Resposta válida da arquitetura estrela.')).toBeInTheDocument();
   });
 
   it('shows a fallback message instead of the placeholder when both architectures fail', () => {
@@ -149,42 +204,67 @@ describe('ChatInterface', () => {
   });
 
   it('never produces more than one answer bubble for the same round across re-renders', () => {
-    vi.useFakeTimers();
-    try {
-      const { rerender } = render(
-        <ChatInterface
-          {...defaultProps}
-          activeRoundId="analysis-3"
-          activeRoundWs={{ ...INITIAL_STATE, starLoading: true }}
-        />,
-      );
+    const { rerender } = render(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-3"
+        activeRoundWs={{ ...INITIAL_STATE, starLoading: true }}
+      />,
+    );
 
-      rerender(
-        <ChatInterface
-          {...defaultProps}
-          activeRoundId="analysis-3"
-          activeRoundWs={{ ...INITIAL_STATE, starLoading: true, hierLoading: true }}
-        />,
-      );
-      rerender(
-        <ChatInterface
-          {...defaultProps}
-          activeRoundId="analysis-3"
-          activeRoundWs={{
-            ...INITIAL_STATE,
-            hierText: 'Resultado completo da arquitetura hierárquica.',
-            comparativeReport: '→ Arquitetura Hierárquica venceu com 4 pontos',
-          }}
-        />,
-      );
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-3"
+        activeRoundWs={{ ...INITIAL_STATE, starLoading: true, hierLoading: true }}
+      />,
+    );
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-3"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          hierText: 'Resultado completo da arquitetura hierárquica.',
+          hierLoading: false,
+          comparativeReport: '→ Arquitetura Hierárquica venceu com 4 pontos',
+        }}
+      />,
+    );
 
-      act(() => {
-        vi.runAllTimers();
-      });
+    expect(screen.getAllByText('Resultado completo da arquitetura hierárquica.')).toHaveLength(1);
+  });
 
-      expect(screen.getAllByText('Resultado completo da arquitetura hierárquica.')).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('does not switch which architecture it follows once one has started producing text, even if it later errors out', () => {
+    // A estrela começa a transmitir primeiro; mesmo que ela erre depois
+    // (sem apagar o texto já acumulado), a bolha continua mostrando o
+    // texto real da estrela — não pula pra hierárquica no meio do
+    // caminho, o que produziria uma resposta com a voz trocada.
+    const { rerender } = render(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-5"
+        activeRoundWs={{ ...INITIAL_STATE, starText: 'Início da resposta estrela', starLoading: true, hierLoading: true }}
+      />,
+    );
+    expect(screen.getByText('Início da resposta estrela')).toBeInTheDocument();
+
+    rerender(
+      <ChatInterface
+        {...defaultProps}
+        activeRoundId="analysis-5"
+        activeRoundWs={{
+          ...INITIAL_STATE,
+          starText: 'Início da resposta estrela',
+          starLoading: false,
+          starError: 'falha tardia',
+          hierText: 'Resposta da hierárquica chegou depois',
+          hierLoading: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Início da resposta estrela')).toBeInTheDocument();
+    expect(screen.queryByText('Resposta da hierárquica chegou depois')).not.toBeInTheDocument();
   });
 });

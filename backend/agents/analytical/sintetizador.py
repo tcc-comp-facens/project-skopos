@@ -63,6 +63,7 @@ class TextSynthesizer:
         enfase: str | None = None,
         date_from: int | None = None,
         date_to: int | None = None,
+        pergunta_usuario: str | None = None,
     ) -> str:
         """Gera texto completo de análise (batch, sem streaming).
 
@@ -84,6 +85,11 @@ class TextSynthesizer:
                 `AgenteInterpretacaoIntencao`), não só quando explicitado
                 pelo usuário.
             date_to: Ano final do período analisado (idem).
+            pergunta_usuario: Resumo da pergunta original do usuário
+                (`intent_summary`, ver `AgenteInterpretacaoIntencao`) —
+                quando informado, o texto responde essa pergunta
+                diretamente antes de qualquer outra coisa, em vez de só
+                seguir um formato de relatório genérico.
 
         Returns:
             Texto completo da análise gerada.
@@ -98,7 +104,8 @@ class TextSynthesizer:
             import core.llm_client as llm_client
 
             prompt = self._build_prompt(
-                correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase, date_from, date_to
+                correlacoes, anomalias, contexto_orcamentario, data_coverage,
+                enfase, date_from, date_to, pergunta_usuario,
             )
             logger.info(
                 "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
@@ -132,6 +139,7 @@ class TextSynthesizer:
         enfase: str | None = None,
         date_from: int | None = None,
         date_to: int | None = None,
+        pergunta_usuario: str | None = None,
     ) -> Generator[str, None, None]:
         """Retorna generator de tokens para streaming via LLM.
 
@@ -149,6 +157,7 @@ class TextSynthesizer:
                 (opcional).
             date_from: Ano inicial do período analisado (ver `generate`).
             date_to: Ano final do período analisado (ver `generate`).
+            pergunta_usuario: Pergunta original do usuário (ver `generate`).
 
         Yields:
             Tokens individuais do LLM.
@@ -159,7 +168,8 @@ class TextSynthesizer:
         import core.llm_client as llm_client
 
         prompt = self._build_prompt(
-            correlacoes, anomalias, contexto_orcamentario, data_coverage, enfase, date_from, date_to
+            correlacoes, anomalias, contexto_orcamentario, data_coverage,
+            enfase, date_from, date_to, pergunta_usuario,
         )
         logger.info(
             "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
@@ -204,6 +214,7 @@ class TextSynthesizer:
         enfase: str | None = None,
         date_from: int | None = None,
         date_to: int | None = None,
+        pergunta_usuario: str | None = None,
     ) -> str:
         """Build the LLM prompt from analysis data (Req 7.4).
 
@@ -216,6 +227,13 @@ class TextSynthesizer:
         quando o período foi inferido pelo guardrail de intenção (o
         usuário não especificou datas), para o leitor sempre saber qual
         intervalo de anos embasa a análise.
+
+        `pergunta_usuario` (opcional — `intent_summary` do
+        `AgenteInterpretacaoIntencao`), quando informado, faz o texto
+        responder essa pergunta diretamente antes de qualquer outra
+        coisa — ver seção "COMO RESPONDER" abaixo, que também abandona a
+        estrutura fixa de relatório em favor de uma resposta natural,
+        adaptada ao que foi perguntado.
         """
         coverage = data_coverage or {}
         gaps = coverage.get("gaps", [])
@@ -236,6 +254,10 @@ class TextSynthesizer:
                 "Dê destaque especial a esse aspecto no texto (ex.: mencione-o "
                 "primeiro), sem deixar de cobrir os demais achados relevantes.\n"
             )
+
+        pergunta_section = ""
+        if pergunta_usuario:
+            pergunta_section = f'\nPERGUNTA DO USUÁRIO: "{pergunta_usuario}"\n'
 
         coverage_section = ""
         if gaps:
@@ -291,13 +313,33 @@ class TextSynthesizer:
             "Como os gastos evoluíram ao longo dos anos:\n"
             f"{contexto_orcamentario}\n\n"
             f"{coverage_section}\n"
-            "ESTRUTURA DO TEXTO (use títulos claros):\n"
-            "1. O que os dados mostram — explicar as relações entre investimento e resultados\n"
-            "2. Pontos de atenção — situações que merecem investigação (anomalias)\n"
-            "3. Evolução dos investimentos — como os gastos mudaram ao longo do tempo\n\n"
-            "IMPORTANTE: Não repita informações entre seções. Seja direto e específico "
-            "com os dados de Sorocaba. Se houver dados faltando, mencione de forma "
-            "transparente e explique como isso limita as conclusões."
+            f"{pergunta_section}"
+            "COMO RESPONDER:\n"
+            "- Responda como numa conversa direta, não como um relatório "
+            "formal — sem títulos de seção tipo \"Resumo Executivo\" ou "
+            "\"1. Análise das Correlações\", sem se sentir obrigado a cobrir "
+            "todos os dados acima em ordem fixa.\n"
+            "- Se há uma PERGUNTA DO USUÁRIO acima, responda ela "
+            "diretamente logo de cara — isso é o mais importante do texto, "
+            "não um parágrafo de abertura antes do \"relatório de verdade\". "
+            "Sem pergunta específica, comece pelo achado mais relevante "
+            "dos dados.\n"
+            "- O tamanho e a profundidade da resposta devem combinar com o "
+            "que foi perguntado: pergunta pontual → resposta curta e "
+            "direta; pergunta ampla (ex.: \"compare todos os indicadores\") "
+            "→ pode desenvolver mais, mas ainda em prosa natural, não uma "
+            "lista de seções obrigatórias.\n"
+            "- Só entre em detalhes/dados que realmente ajudam a responder "
+            "o que foi perguntado — não é preciso mencionar todas as "
+            "correlações e anomalias calculadas se a maioria não for "
+            "relevante para a pergunta.\n"
+            "- Ainda assim, nunca esconda uma lacuna de dados relevante "
+            "nem inverta o sinal de uma correlação — precisão continua "
+            "não-negociável, só a embalagem deixa de ser um formulário.\n"
+            "- Seja direto e específico com os dados de Sorocaba. Se "
+            "houver dados faltando que sejam relevantes pra resposta, "
+            "mencione de forma transparente e explique como isso limita "
+            "as conclusões."
         )
 
     def _generate_structured_text(

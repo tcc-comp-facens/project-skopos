@@ -20,15 +20,6 @@ function nextId(): string {
   return `msg-${Date.now()}-${messageCounter}`;
 }
 
-// Revelação progressiva simulada da resposta vencedora na aba Saúde — o
-// texto completo já chegou do backend antes de sabermos quem venceu (só
-// depois que as duas arquiteturas terminam), então "streaming" aqui é um
-// replay client-side do texto final, não os chunks reais do WebSocket
-// (esses viram visíveis só na aba Agentes, sem crescimento — ver
-// ArchitecturePanel).
-const REVEAL_CHUNK_SIZE = 6;
-const REVEAL_INTERVAL_MS = 20;
-
 const WELCOME_TEXT =
   'Olá! Pergunte sobre gastos públicos em saúde de Sorocaba-SP — por ' +
   'exemplo: "compare dengue e vacinação de 2019 a 2022".';
@@ -62,48 +53,12 @@ export function ChatInterface({
   const pendingQuestionRef = useRef<string>('');
   const answerMessageIdRef = useRef<Map<string, string>>(new Map());
   const finalizedRoundIdRef = useRef<Set<string>>(new Set());
-  const revealTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  // Qual arquitetura esta rodada está acompanhando ao vivo na bolha de
+  // resposta — decidida uma vez (a primeira que produzir texto) e nunca
+  // trocada depois, para o conteúdo exibido nunca "pular" de uma
+  // arquitetura pra outra no meio do streaming.
+  const streamingArchRef = useRef<Map<string, 'star' | 'hierarchical'>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Limpa qualquer revelação em andamento ao desmontar (defensivo — hoje
-  // ChatInterface nunca desmonta de fato, as duas abas ficam sempre
-  // montadas e só trocam `display`, mas evita timers órfãos se isso mudar).
-  useEffect(() => {
-    return () => {
-      revealTimersRef.current.forEach(clearInterval);
-      revealTimersRef.current.clear();
-    };
-  }, []);
-
-  const startReveal = useCallback(
-    (roundId: string, messageId: string, fullText: string, winner: WinnerArchitecture) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? { ...m, content: '', isStreaming: true, kind: 'architecture_answer', architecture: winner ?? undefined }
-            : m,
-        ),
-      );
-
-      let revealed = 0;
-      const timer = setInterval(() => {
-        revealed = Math.min(revealed + REVEAL_CHUNK_SIZE, fullText.length);
-        const slice = fullText.slice(0, revealed);
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, content: slice } : m)),
-        );
-        if (revealed >= fullText.length) {
-          clearInterval(timer);
-          revealTimersRef.current.delete(roundId);
-          setMessages((prev) =>
-            prev.map((m) => (m.id === messageId ? { ...m, isStreaming: false } : m)),
-          );
-        }
-      }, REVEAL_INTERVAL_MS);
-      revealTimersRef.current.set(roundId, timer);
-    },
-    [],
-  );
 
   // Mensagem de boas-vindas com o intervalo de anos realmente disponível
   // (best-effort — se o endpoint falhar, mantém o texto genérico).
@@ -169,8 +124,9 @@ export function ChatInterface({
 
   // Assim que uma rodada começa, acrescenta uma bolha de resposta (como
   // uma mensagem normal do chat, não um card separado abaixo dele) —
-  // primeiro um placeholder "Analisando…", depois substituída pelo texto
-  // completo da arquitetura vencedora assim que a rodada termina. Cada
+  // primeiro um placeholder "Analisando…", depois preenchida ao vivo,
+  // chunk a chunk, com o texto real de uma das arquiteturas assim que ela
+  // começa a chegar (ver decisão de `followedArch` abaixo). Cada
   // analysisId tem no máximo uma bolha de resposta, atualizada in place
   // (guard via refs — nunca duplicada, nunca re-finalizada).
   useEffect(() => {
@@ -190,31 +146,88 @@ export function ChatInterface({
       });
     }
 
-    const isLoading =
-      activeRoundWs.starLoading ||
-      activeRoundWs.hierLoading ||
-      activeRoundWs.comparativeLoading;
-    if (isLoading) return;
+    // Decide (uma única vez por rodada) qual arquitetura acompanhar ao
+    // vivo na bolha — a primeira que produzir algum texto. Diferente do
+    // comportamento anterior (esperar as duas terminarem + o relatório
+    // comparativo pra só então revelar o texto do "vencedor" com uma
+    // animação simulada no cliente), aqui o conteúdo da bolha É o próprio
+    // `starText`/`hierText` do WebSocket crescendo em tempo real — os
+    // mesmos chunks que já apareciam ao vivo na aba Agentes, sem
+    // replay/simulação. O preço dessa responsividade: como normalmente a
+    // estrela termina bem antes da hierárquica, a rodada costuma
+    // finalizar (abaixo) antes do relatório comparativo — que só fica
+    // pronto depois que as DUAS terminam — decidir quem "venceu"; nesse
+    // caso o badge de vencedor fica de fora (ver mais abaixo), mas a
+    // resposta não fica esperando por ele.
+    let followedArch = streamingArchRef.current.get(activeRoundId);
+    if (!followedArch) {
+      if (activeRoundWs.starText) {
+        followedArch = 'star';
+      } else if (activeRoundWs.hierText) {
+        followedArch = 'hierarchical';
+      }
+      if (followedArch) {
+        streamingArchRef.current.set(activeRoundId, followedArch);
+      }
+    }
 
-    finalizedRoundIdRef.current.add(activeRoundId);
-    const winner = parseWinner(activeRoundWs.comparativeReport);
+    if (!followedArch) {
+      // Nenhuma arquitetura produziu texto ainda. Enquanto pelo menos uma
+      // ainda estiver rodando, mantém "Analisando…" e espera o próximo
+      // chunk. Só cai no resumo de erro quando as duas já pararam sem
+      // nunca terem produzido texto.
+      const stillRunning =
+        activeRoundWs.starLoading || activeRoundWs.hierLoading || activeRoundWs.comparativeLoading;
+      if (stillRunning) return;
 
-    if (winner) {
-      const fullText = winner === 'star' ? activeRoundWs.starText : activeRoundWs.hierText;
-      startReveal(activeRoundId, messageId, fullText, winner);
+      finalizedRoundIdRef.current.add(activeRoundId);
+      const finalMessageId = messageId;
+      const content = formatRoundSummary(activeRoundWs, pendingQuestionRef.current);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === finalMessageId ? { ...m, content, isStreaming: false, kind: 'text' } : m)),
+      );
       return;
     }
 
-    // Sem vencedor (ambas falharam) — mensagem curta de fallback, sem
-    // revelação progressiva (não é "a resposta", é um aviso de erro).
+    const text = followedArch === 'star' ? activeRoundWs.starText : activeRoundWs.hierText;
+    const archLoading = followedArch === 'star' ? activeRoundWs.starLoading : activeRoundWs.hierLoading;
     const finalMessageId = messageId;
-    const content = formatRoundSummary(activeRoundWs, pendingQuestionRef.current);
+
+    if (archLoading) {
+      // Ainda transmitindo — atualiza a bolha com o texto real acumulado
+      // até agora, chunk a chunk, a cada render (o WebSocket já entrega
+      // um novo `starText`/`hierText` por chunk recebido).
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === finalMessageId ? { ...m, content: text, isStreaming: true, kind: 'architecture_answer' } : m,
+        ),
+      );
+      return;
+    }
+
+    // A arquitetura acompanhada terminou — finaliza a bolha com o texto
+    // final dela, sem esperar a outra arquitetura nem o relatório
+    // comparativo (esses continuam disponíveis na aba Agentes). Se o
+    // relatório comparativo já tiver chegado a tempo e apontar esta
+    // mesma arquitetura como vencedora, mostra o badge; caso contrário
+    // (o caso comum — a hierárquica ainda não terminou) fica sem badge,
+    // não sem resposta.
+    finalizedRoundIdRef.current.add(activeRoundId);
+    const winner: WinnerArchitecture = parseWinner(activeRoundWs.comparativeReport);
     setMessages((prev) =>
       prev.map((m) =>
-        m.id === finalMessageId ? { ...m, content, isStreaming: false, kind: 'text' } : m,
+        m.id === finalMessageId
+          ? {
+              ...m,
+              content: text,
+              isStreaming: false,
+              kind: 'architecture_answer',
+              architecture: winner === followedArch ? followedArch : undefined,
+            }
+          : m,
       ),
     );
-  }, [activeRoundId, activeRoundWs, appendMessage, startReveal]);
+  }, [activeRoundId, activeRoundWs, appendMessage]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -15,7 +15,7 @@ from queue import Empty
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from api.state import active_queues, active_results, active_threads
+from api.state import active_queues, active_results, active_threads, active_ws_generation
 from core.llm_client import TokenBucket
 from core.quality_metrics import compute_all_quality_metrics, generate_comparative_report
 
@@ -29,8 +29,12 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
     """Stream events from the shared ws_queue to the client.
 
     Events: chunk, done, error, metric.
-    Closes when both architectures have sent 'done'.
-    On client disconnect, cleans up queues and threads (Req 8.6).
+    Closes when both architectures have sent 'done'. Only then is the
+    per-analysis queue/thread bookkeeping discarded — a disconnect before
+    that point (client reload, brief network blip, React StrictMode's
+    dev-only double-connect) leaves the queue in place so a reconnect can
+    resume consuming it; the analysis threads run to completion
+    regardless of whether any client is currently connected.
     """
     await websocket.accept()
 
@@ -45,6 +49,14 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
         await websocket.close()
         return
 
+    # Assume a geração mais recente — qualquer conexão anterior ainda
+    # rodando para este analysis_id (ex.: a conexão "canário" do
+    # double-connect de desenvolvimento do React StrictMode) percebe isso
+    # no início da próxima iteração do laço abaixo e para de consumir, em
+    # vez de competir pelos mesmos itens da fila.
+    my_generation = active_ws_generation.get(analysis_id, 0) + 1
+    active_ws_generation[analysis_id] = my_generation
+
     done_count = 0
     loop = asyncio.get_event_loop()
     captured_agent_metrics: dict[str, list[dict]] = {"star": [], "hierarchical": []}
@@ -52,6 +64,14 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
 
     try:
         while done_count < 2:
+            if active_ws_generation.get(analysis_id) != my_generation:
+                logger.info(
+                    "WS %s: conexão substituída por uma mais nova, parando "
+                    "de consumir (done_count=%d)",
+                    analysis_id[:8], done_count,
+                )
+                return
+
             try:
                 event = await loop.run_in_executor(
                     None, lambda: ws_queue.get(timeout=1.0)
@@ -74,13 +94,45 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     captured_agent_metrics[arch] = payload.get("agentMetrics", [])
                     captured_wall_clock[arch] = payload.get("totalExecutionTimeMs", 0)
 
-            await websocket.send_json(event)
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                # O socket desta conexão já morreu (ex.: a conexão
+                # "canário" do double-connect de dev do React StrictMode,
+                # fechada do lado do cliente entre o get() acima e este
+                # send). Sem isso, o evento já retirado da fila (Queue.get
+                # é destrutivo) se perderia pra sempre — nem esta conexão
+                # consegue entregá-lo, nem uma futura reconexão o veria de
+                # novo. Devolve na FRENTE da fila (não no fim, pra não
+                # embaralhar a ordem dos chunks de texto) para quem quer
+                # que seja a próxima conexão a consumir. Acessa
+                # queue.queue/mutex/not_empty diretamente (não expostos
+                # como método público do stdlib, mas é o mesmo estado que
+                # Queue.put() mexeria, só com appendleft em vez de append).
+                with ws_queue.mutex:
+                    ws_queue.queue.appendleft(event)
+                    ws_queue.not_empty.notify()
+                raise
 
             if event_type == "done":
                 done_count += 1
                 logger.info(
                     "WS %s: done_count now %d", analysis_id[:8], done_count,
                 )
+
+        # Loop terminou normalmente (done_count==2, não por desconexão) —
+        # só agora é seguro descartar a fila. Popar isso em qualquer
+        # desconexão (bug corrigido: estava num `finally` que rodava mesmo
+        # em desconexões prematuras) derrubava uma reconexão legítima —
+        # ex.: o double-connect de desenvolvimento do React StrictMode
+        # (mount->cleanup->mount) fecha uma conexão "canário" que nunca
+        # devia contar como "a análise acabou"; a reconexão real caía em
+        # `ws_queue is None` (linha ~38) e recebia "No active analysis
+        # found" mesmo com as threads star/hierarchical ainda rodando e
+        # gerando resultado de verdade.
+        active_queues.pop(analysis_id, None)
+        active_threads.pop(analysis_id, None)
+        active_ws_generation.pop(analysis_id, None)
 
         # Both topologies done — compute quality metrics if results available
         results = active_results.get(analysis_id, {})
@@ -257,7 +309,10 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
 
     except WebSocketDisconnect:
         logger.info(
-            "WebSocket disconnected for analysis %s — cleaning up (done_count=%d)",
+            "WebSocket disconnected for analysis %s antes de done_count=2 "
+            "(done_count=%d) — fila mantida para uma possível reconexão "
+            "retomar o consumo; a análise em si continua rodando nas "
+            "threads star/hierarchical, independente da conexão.",
             analysis_id,
             done_count,
         )
@@ -268,6 +323,3 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
             exc,
             done_count,
         )
-    finally:
-        active_queues.pop(analysis_id, None)
-        active_threads.pop(analysis_id, None)

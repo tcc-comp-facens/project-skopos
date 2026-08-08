@@ -139,3 +139,73 @@ class TestPeriodoAnalisado:
         text = synth.generate([], [], {}, use_llm=False)
         assert "Resumo Executivo" in text
         assert "Período analisado" not in text
+
+
+class TestRespostaNaturalSemEstruturaFixa:
+    """A resposta via LLM deixa de ser um relatório de seções fixas — ver
+    plano de "chat mais natural". O caminho sem LLM (`_generate_structured_text`/
+    `generate_fallback`) continua estruturado de propósito (é o modo
+    degradado, sem compreensão de linguagem pra adaptar o formato)."""
+
+    def test_prompt_no_longer_prescribes_fixed_numbered_sections(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "ESTRUTURA DO TEXTO" not in prompt
+        assert "1. O que os dados mostram" not in prompt
+
+    def test_prompt_instructs_natural_conversational_response(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "COMO RESPONDER" in prompt
+        assert "não como um relatório" in prompt
+
+    def test_fallback_path_unaffected_still_structured(self, synth):
+        """O modo sem LLM continua com seções fixas — não faz parte desta
+        mudança (não há como adaptar tom/formato sem um LLM)."""
+        text = synth.generate_fallback([], [], {})
+        assert "Resumo Executivo" in text
+
+
+class TestPerguntaUsuario:
+    """`pergunta_usuario` (intent_summary do AgenteInterpretacaoIntencao)
+    faz o texto responder a pergunta original diretamente."""
+
+    def test_llm_prompt_includes_pergunta_when_given(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(
+            sample_correlacoes, sample_anomalias, sample_contexto,
+            pergunta_usuario="qual período teve os piores resultados de dengue?",
+        )
+        assert "PERGUNTA DO USUÁRIO" in prompt
+        assert "qual período teve os piores resultados de dengue?" in prompt
+
+    def test_llm_prompt_omits_pergunta_section_when_not_given(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        """A instrução genérica "COMO RESPONDER" menciona "PERGUNTA DO
+        USUÁRIO" mesmo sem uma pergunta específica (ensina o LLM a se
+        comportar nos dois casos) — o que não deve aparecer é o bloco
+        formatado com a pergunta entre aspas."""
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert 'PERGUNTA DO USUÁRIO: "' not in prompt
+
+    def test_generate_stream_accepts_pergunta_usuario(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        """Chamada nova (com pergunta_usuario) não quebra — regressão do
+        wiring em orchestrator.py/supervisors.py."""
+        with patch("core.llm_client.generate_stream", return_value=iter(["ok"])):
+            tokens = list(synth.generate_stream(
+                sample_correlacoes, sample_anomalias, sample_contexto,
+                pergunta_usuario="qual foi o pior ano?",
+            ))
+        assert tokens == ["ok"]
+
+    def test_old_call_sites_without_pergunta_still_work(self, synth):
+        """Chamadas antigas (sem pergunta_usuario) continuam funcionando —
+        parâmetro é opcional."""
+        text = synth.generate([], [], {}, use_llm=False)
+        assert "Resumo Executivo" in text

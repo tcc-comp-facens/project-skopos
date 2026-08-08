@@ -933,6 +933,7 @@ class SupervisorAnalitico(AgenteCoALA):
             use_llm = self.working_memory.get("use_llm", True)
             date_from = self.peer_data.get("date_from")
             date_to = self.peer_data.get("date_to")
+            pergunta_usuario = self.peer_data.get("intent_summary")
 
             # Correlações/anomalias/ênfase priorizadas (Etapa 3), se
             # disponíveis — nunca substitui os dados brutos usados em Q1.
@@ -959,6 +960,7 @@ class SupervisorAnalitico(AgenteCoALA):
                         enfase=enfase,
                         date_from=date_from,
                         date_to=date_to,
+                        pergunta_usuario=pergunta_usuario,
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
