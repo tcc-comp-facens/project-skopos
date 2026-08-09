@@ -298,7 +298,7 @@ class SupervisorOrcamento(AgenteCoALA):
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação externa (grounding): gera um resumo textual curto via LLM (Etapa 5).
+        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
 
         Mesmo mecanismo/regras do SupervisorSaude (ver docstring
         equivalente lá): respeita `use_llm=False`, cai no fallback
@@ -569,7 +569,7 @@ class SupervisorSaude(AgenteCoALA):
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação externa (grounding): gera um resumo textual curto via LLM (Etapa 5).
+        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
 
         Descreve em 1-2 frases o que este supervisor encontrou (cobertura
         de dados, não uma conclusão analítica — isso é papel dos agentes
@@ -757,21 +757,29 @@ class SupervisorAnalitico(AgenteCoALA):
         }
 
     def propose_actions(self) -> list[dict]:
-        """Propõe o pipeline analítico completo, se há análise e fila WS configuradas."""
+        """Propõe o pipeline analítico, se há análise e fila WS configuradas.
+
+        `verificar_afirmacoes` só é proposta quando `use_self_check=True`
+        e `use_llm=True` — decisão tomada aqui, não dentro da ação.
+        """
         if not (
             self.working_memory.get("analysis_id")
             and self.working_memory.get("_ws_queue") is not None
         ):
             return []
-        return [
+        actions = [
             {"goal": "cruzar_dados"},
             {"goal": "detectar_gaps"},
             {"goal": "analisar"},
             {"goal": "capturar_wallclock"},
             {"goal": "priorizar_achados"},
             {"goal": "sintetizar_texto"},
-            {"goal": "verificar_afirmacoes"},
         ]
+        if self.working_memory.get("use_self_check", False) and self.working_memory.get(
+            "use_llm", True
+        ):
+            actions.append({"goal": "verificar_afirmacoes"})
+        return actions
 
     # -- Comunicação lateral (Reqs 10.5, 10.6) ------------------------------
 
@@ -877,7 +885,7 @@ class SupervisorAnalitico(AgenteCoALA):
         return " ".join(partes) if partes else None
 
     def _act_priorizar_achados(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): delega a AgentePriorizacaoAnalitica (Etapa 3).
+        """Ação interna (reasoning): delega a AgentePriorizacaoAnalitica (Etapa 3).
 
         Roda depois de `capturar_wallclock` — mesma lógica do sintetizador:
         seu tempo (inclui 1 chamada LLM) fica fora da métrica de tempo
@@ -920,7 +928,7 @@ class SupervisorAnalitico(AgenteCoALA):
             self._collectors.append(mc)
 
     def _act_sintetizar_texto(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): gera o texto via TextSynthesizer."""
+        """Ação interna (reasoning): gera o texto via TextSynthesizer."""
         sint_id = f"hier-sintetizador-{uuid.uuid4().hex[:8]}"
         sintetizador = TextSynthesizer(sint_id)
         mc = MetricsCollector(sint_id, "sintetizador")
@@ -1003,17 +1011,14 @@ class SupervisorAnalitico(AgenteCoALA):
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_verificar_afirmacoes(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): self-check pós-síntese (Etapa 4).
+        """Ação interna (reasoning): self-check pós-síntese (Etapa 4).
 
         Mesmo mecanismo/regras do OrquestradorEstrela (ver docstring
-        equivalente lá): opcional via `use_self_check`, só roda com
-        `use_llm=True`, nunca propaga falha.
+        equivalente lá): `propose_actions()` só propõe este goal quando
+        `use_self_check=True` e `use_llm=True`. O guard abaixo (texto
+        vazio) permanece na ação porque depende de `sintetizar_texto` já
+        ter rodado neste mesmo ciclo. Nunca propaga falha.
         """
-        if not self.working_memory.get("use_self_check", False):
-            return
-        if not self.working_memory.get("use_llm", True):
-            return
-
         texto_analise = self.working_memory.get("texto_analise", "")
         if not texto_analise:
             return
@@ -1200,7 +1205,7 @@ class SupervisorContexto(AgenteCoALA):
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação externa (grounding): gera um resumo textual curto via LLM (Etapa 5).
+        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
 
         Descreve em 1-2 frases a tendência orçamentária mais relevante
         (maior variação em módulo), para acompanhar o `contexto_orcamentario`

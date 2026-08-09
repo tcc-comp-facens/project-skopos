@@ -22,10 +22,12 @@ Memória (Sumers et al., 2023):
 
 Espaço de ações:
     - Internas (reasoning/retrieval/learning): processamento sobre a working
-      memory, leitura de semantic_memory, gravação em episodic_memory.
-    - Externas (grounding): qualquer interação com o ambiente fora do
-      processo do agente (Neo4j, LLM, WebSocket, comunicação lateral entre
-      agentes) — implementadas dentro das estratégias de procedural_memory.
+      memory, leitura de semantic_memory, gravação em episodic_memory —
+      inclui chamadas ao LLM para raciocinar sobre o estado atual (o LLM é
+      parte da procedural memory implícita do agente, não do ambiente).
+    - Externas (grounding): interação com o ambiente fora da cognição do
+      agente (Neo4j, WebSocket, comunicação lateral entre agentes) —
+      implementadas dentro das estratégias de procedural_memory.
 """
 
 import logging

@@ -313,7 +313,7 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
         )
 
     def _act_classificar_escopo(self, action: dict) -> None:
-        """Ação externa (grounding): única chamada LLM do ciclo.
+        """Ação interna (reasoning): única chamada LLM do ciclo.
 
         Classifica escopo e, se dentro do escopo, já extrai os parâmetros
         na mesma resposta JSON (decisão de custo — ver docstring do módulo).

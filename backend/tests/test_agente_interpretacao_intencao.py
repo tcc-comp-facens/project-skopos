@@ -498,3 +498,47 @@ class TestMemoriaEpisodicaReal:
 
         prompt_enviado = mock_generate.call_args[0][0]
         assert "e a dengue em 2020?" in prompt_enviado
+
+    def test_memoria_episodica_muda_o_resultado_final_quando_llm_a_usa(self):
+        """Vai além de `test_contexto_episodico_aparece_no_prompt`: aquele só
+        prova que o texto chega ao prompt (efeito cosmético). Este prova que
+        o mecanismo completo — retrieval -> prompt -> parsing -> AnalysisIntent
+        — está corretamente encadeado ponta a ponta: quando o LLM (aqui
+        mockado) de fato usa o contexto episódico para desambiguar uma
+        pergunta vaga, o resultado final observável muda.
+
+        Limite explícito: isso NÃO prova que o LLM real, em produção, usa o
+        contexto dessa forma — não é testável deterministicamente sem chamar
+        a API real. Prova só que, SE ele usar, o resultado chega correto até
+        `AnalysisIntent` (e que, se não usar, o guardrail "natural" ainda
+        produz um resultado válido, só que mais genérico).
+        """
+        texto_vago = "e como ficou isso em 2020 e 2021?"
+
+        # Sem contexto episódico: o LLM (mockado) não tem como saber o tema,
+        # devolve health_params vazio — o guardrail "natural" completa com
+        # TODOS os indicadores válidos (comportamento documentado em
+        # _act_extrair_parametros).
+        agente_sem_contexto = _agente()
+        with patch(
+            "core.llm_client.generate",
+            return_value=_llm_json(date_from=2020, date_to=2021, health_params=[]),
+        ):
+            resultado_sem_contexto = agente_sem_contexto.parse(texto_vago)
+
+        # Com contexto episódico sobre dengue: simula o LLM usando a
+        # pergunta anterior para desambiguar a mesma mensagem vaga.
+        client = MagicMock()
+        client.get_past_analises.return_value = [
+            {"sourceQuestion": "como está a dengue em Sorocaba?", "createdAt": "2026-01-01T00:00:00Z"},
+        ]
+        agente_com_contexto = _agente(neo4j_client=client)
+        with patch(
+            "core.llm_client.generate",
+            return_value=_llm_json(date_from=2020, date_to=2021, health_params=["dengue"]),
+        ):
+            resultado_com_contexto = agente_com_contexto.parse(texto_vago)
+
+        assert resultado_sem_contexto.success and resultado_com_contexto.success
+        assert resultado_sem_contexto.params.health_params == list(VALID_HEALTH_PARAMS)
+        assert resultado_com_contexto.params.health_params == ["dengue"]

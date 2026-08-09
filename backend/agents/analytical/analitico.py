@@ -2,7 +2,7 @@
 Agente Analítico — Correlação Estatística (Spearman) + Detecção de Anomalias.
 
 Consolida os antigos `AgenteCorrelacao` e `AgenteAnomalias` num único
-agente CoALA com 2 ações de grounding (`calcular_correlacao`,
+agente CoALA com 2 ações de reasoning (`calcular_correlacao`,
 `detectar_anomalia`) — decisão tomada em PLANO_NOVO_MODELO_DADOS.md §7
 item 6, relevante justamente para o reforço CoALA da Fase 1: os dois
 cálculos sempre operaram sobre o mesmo `dados_cruzados`, com
@@ -177,7 +177,7 @@ class AgenteAnalitico(AgenteCoALA):
         return {"dados_cruzados": self.working_memory.get("dados_cruzados", [])}
 
     def propose_actions(self) -> list[dict]:
-        """Propõe as duas ferramentas de grounding se há dados cruzados
+        """Propõe as duas ações de reasoning se há dados cruzados
         disponíveis — ambas determinísticas, sem motivo para tornar
         condicional entre si (mesmo input, custo desprezível)."""
         actions: list[dict] = []
@@ -187,7 +187,7 @@ class AgenteAnalitico(AgenteCoALA):
         return actions
 
     def _act_calcular_correlacao(self, action: dict) -> None:
-        """Ação de grounding: calcula Spearman por par subfunção-indicador
+        """Ação interna (reasoning): calcula Spearman por par subfunção-indicador
         (migração 1:1 de `AgenteCorrelacao._compute_correlations`)."""
         try:
             crossed = self.working_memory.get("dados_cruzados", [])
@@ -248,7 +248,7 @@ class AgenteAnalitico(AgenteCoALA):
             raise ActionFailure(action, str(e)) from e
 
     def _act_detectar_anomalia(self, action: dict) -> None:
-        """Ação de grounding: detecta anomalias via mediana por par
+        """Ação interna (reasoning): detecta anomalias via mediana por par
         subfunção-indicador (migração 1:1 de
         `AgenteAnomalias._detect_anomalies`)."""
         try:

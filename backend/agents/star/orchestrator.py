@@ -259,7 +259,9 @@ class OrquestradorEstrela(AgenteCoALA):
         agentes relevantes à seleção do usuário são propostos (Req 9.1).
         A ativação dos agentes orçamentários segue o mesmo critério
         (health_params vazio → nenhum agente ativado, mesmo comportamento
-        histórico da fase de saúde nesta topologia).
+        histórico da fase de saúde nesta topologia). `verificar_afirmacoes`
+        só é proposta quando `use_self_check=True` e `use_llm=True` —
+        decisão tomada aqui, não dentro da ação.
         """
         actions: list[dict] = []
         health_params = self.working_memory.get("health_params", [])
@@ -298,7 +300,10 @@ class OrquestradorEstrela(AgenteCoALA):
         actions.append({"goal": "capturar_wallclock"})
         actions.append({"goal": "priorizar_achados"})
         actions.append({"goal": "sintetizar_texto"})
-        actions.append({"goal": "verificar_afirmacoes"})
+        if self.working_memory.get("use_self_check", False) and self.working_memory.get(
+            "use_llm", True
+        ):
+            actions.append({"goal": "verificar_afirmacoes"})
         actions.append({"goal": "persistir_metricas"})
         return actions
 
@@ -540,7 +545,7 @@ class OrquestradorEstrela(AgenteCoALA):
         self.working_memory["_orch_end"] = time.time()
 
     def _act_priorizar_achados(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): delega a AgentePriorizacaoAnalitica (Etapa 3).
+        """Ação interna (reasoning): delega a AgentePriorizacaoAnalitica (Etapa 3).
 
         Roda depois de `capturar_wallclock` — assim como o sintetizador,
         seu tempo (inclui 1 chamada LLM) fica fora do wall-clock "oficial"
@@ -583,7 +588,7 @@ class OrquestradorEstrela(AgenteCoALA):
             self.working_memory.setdefault("_collectors", []).append((prior_id, "priorizacao", mc))
 
     def _act_sintetizar_texto(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): gera o texto via TextSynthesizer (Req 9.6)."""
+        """Ação interna (reasoning): gera o texto via TextSynthesizer (Req 9.6)."""
         sint_id = f"star-sintetizador-{uuid.uuid4().hex[:8]}"
         sintetizador = TextSynthesizer(sint_id)
         logger.info(
@@ -670,20 +675,18 @@ class OrquestradorEstrela(AgenteCoALA):
             raise ActionFailure(action, str(exc)) from exc
 
     def _act_verificar_afirmacoes(self, action: dict) -> None:
-        """Ação externa (reasoning + grounding): self-check pós-síntese (Etapa 4).
+        """Ação interna (reasoning): self-check pós-síntese (Etapa 4).
 
-        Opcional (flag `use_self_check`, default False) e só roda quando
-        `use_llm=True` — não faz sentido verificar um texto gerado pelo
+        `propose_actions()` só propõe este goal quando `use_self_check=True`
+        e `use_llm=True` — não faz sentido verificar um texto gerado pelo
         fallback determinístico contra os próprios dados que o originaram
-        (mesma regra já aplicada ao LLM Judge/Q2+). Falha aqui nunca
-        propaga: se a verificação não rodar, o texto sintetizado permanece
-        como está (comportamento pré-Etapa-4).
+        (mesma regra já aplicada ao LLM Judge/Q2+). O guard abaixo (texto
+        vazio) permanece aqui porque depende de `sintetizar_texto` já ter
+        rodado neste mesmo ciclo — não é uma decisão que `propose_actions()`
+        (que roda uma única vez, antes de qualquer execução) poderia tomar.
+        Falha aqui nunca propaga: se a verificação não rodar, o texto
+        sintetizado permanece como está (comportamento pré-Etapa-4).
         """
-        if not self.working_memory.get("use_self_check", False):
-            return
-        if not self.working_memory.get("use_llm", True):
-            return
-
         texto_analise = self.working_memory.get("texto_analise", "")
         if not texto_analise:
             return

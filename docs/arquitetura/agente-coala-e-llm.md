@@ -46,8 +46,8 @@ Nenhum agente concreto reimplementa essas quatro estruturas do zero — todos he
 
 O espaço de ações de um agente é dividido em duas categorias (terminologia do próprio CoALA):
 
-- **Internas** (*reasoning*/*retrieval*/*learning*) — processamento sobre a `working_memory`, leitura de `semantic_memory`, gravação em `episodic_memory`. Não tocam nada fora do processo. Ex.: calcular Spearman, cruzar dados, classificar tendência, reordenar achados.
-- **Externas** (*grounding*) — qualquer interação com o ambiente fora do processo do agente: Neo4j, o LLM, o WebSocket, comunicação lateral entre agentes. Ex.: `neo4j_client.get_despesas(...)`, `core.llm_client.generate(...)`.
+- **Internas** (*reasoning*/*retrieval*/*learning*) — processamento sobre a `working_memory`, leitura de `semantic_memory`, gravação em `episodic_memory`. Inclui chamadas ao LLM para raciocinar sobre o estado atual — o LLM é parte da procedural memory implícita do agente, não do ambiente (terminologia do próprio CoALA). Ex.: calcular Spearman, cruzar dados, classificar tendência, reordenar achados, `core.llm_client.generate(...)`.
+- **Externas** (*grounding*) — interação com o ambiente fora da cognição do agente: Neo4j, o WebSocket, comunicação lateral entre agentes. Ex.: `neo4j_client.get_despesas(...)`.
 
 ---
 

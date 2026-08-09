@@ -85,8 +85,8 @@ O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023 — *"Cognitive Ar
 
 ### Espaço de ações
 
-- **Internas** (reasoning/retrieval/learning) — processamento sobre a working memory, leitura de semantic memory, gravação em episodic memory. Ex.: calcular Spearman, cruzar dados, classificar tendência.
-- **Externas** (grounding) — qualquer interação com o ambiente fora do processo do agente: Neo4j, LLM, WebSocket, comunicação lateral entre agentes. Ex.: consultar despesas no Neo4j, chamar o LLM para classificar escopo/gerar texto.
+- **Internas** (reasoning/retrieval/learning) — processamento sobre a working memory, leitura de semantic memory, gravação em episodic memory. Inclui chamadas ao LLM para raciocinar sobre o estado atual — o LLM é parte da procedural memory implícita do agente, não do ambiente. Ex.: calcular Spearman, cruzar dados, classificar tendência, chamar o LLM para classificar escopo/gerar texto.
+- **Externas** (grounding) — interação com o ambiente fora da cognição do agente: Neo4j, WebSocket, comunicação lateral entre agentes. Ex.: consultar despesas no Neo4j.
 
 ### O Ciclo CoALA
 
@@ -661,7 +661,7 @@ A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do 
 
 **Arquivo:** `agents/analytical/sintetizador.py`
 
-> **Nota arquitetural:** O sintetizador NÃO é um agente CoALA — não possui `working_memory`/`episodic_memory`/`semantic_memory`/`procedural_memory` própria nem participa do ciclo `propose_actions → evaluate_and_select → execute`. Ele é, em si, a implementação de duas ações do espaço de ações de quem o chama (orquestrador/supervisor): `_build_prompt`/`_generate_structured_text` são uma ação de *reasoning* interna (transforma dados já resolvidos em texto, sem tocar o ambiente); a chamada a `core.llm_client.generate_stream` é uma ação de *grounding* externa (invocação de uma ferramenta fora do processo — a API do LLM). A decisão de modelá-lo como classe normal reflete que ele não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas — quem decide isso é o caller. O streaming é responsabilidade do caller via `StreamingAdapter`.
+> **Nota arquitetural:** O sintetizador NÃO é um agente CoALA — não possui `working_memory`/`episodic_memory`/`semantic_memory`/`procedural_memory` própria nem participa do ciclo `propose_actions → evaluate_and_select → execute`. Ele é, em si, a implementação de duas ações do espaço de ações de quem o chama (orquestrador/supervisor), ambas de *reasoning* interna: `_build_prompt`/`_generate_structured_text` transforma dados já resolvidos em texto, sem tocar o ambiente; a chamada a `core.llm_client.generate_stream` raciocina sobre esses dados via LLM — parte da procedural memory implícita do agente, não do ambiente, mesmo sendo uma chamada de rede à API do provedor. A decisão de modelá-lo como classe normal reflete que ele não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas — quem decide isso é o caller. O streaming é responsabilidade do caller via `StreamingAdapter`.
 
 Recebe todos os resultados dos outros agentes e gera um texto de análise em português:
 

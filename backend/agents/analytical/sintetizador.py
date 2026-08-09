@@ -9,12 +9,13 @@ Quando o LLM está indisponível, gera texto estruturado como fallback.
 Nota arquitetural (CoALA): o sintetizador NÃO é um agente CoALA — não
 possui working/episodic/semantic/procedural memory própria nem participa
 do ciclo propose→evaluate→select→execute. Ele é, em si, a implementação
-de duas ações do espaço de ações de quem o chama (orquestrador/supervisor):
-`_build_prompt`/`_generate_structured_text` são uma ação de *reasoning*
-interna (transforma dados já resolvidos em texto, sem tocar o ambiente);
-a chamada a `core.llm_client.generate_stream` é uma ação de *grounding*
-externa (invocação de uma ferramenta fora do processo — a API do LLM). A
-decisão de modelá-lo como classe normal (não agente) reflete que ele não
+de duas ações do espaço de ações de quem o chama (orquestrador/supervisor),
+ambas de *reasoning* interna: `_build_prompt`/`_generate_structured_text`
+transforma dados já resolvidos em texto, sem tocar o ambiente; a chamada a
+`core.llm_client.generate_stream` raciocina sobre esses dados via LLM —
+parte da procedural memory implícita do agente, não do ambiente, mesmo
+sendo uma chamada de rede à API do provedor. A decisão de modelá-lo como
+classe normal (não agente) reflete que ele não
 percebe ambiente mutável, não propõe ações concorrentes, e não escolhe
 entre estratégias alternativas — quem decide isso é o caller. O streaming
 é responsabilidade do caller via StreamingAdapter.
@@ -41,9 +42,9 @@ class TextSynthesizer:
     """Serviço de geração de texto analítico via LLM com fallback estruturado.
 
     Não é um agente CoALA — é um serviço consumido pelos orquestradores
-    e supervisores, que implementa as ações de reasoning (montagem de
-    prompt/texto estruturado) e grounding externo (chamada ao LLM) desses
-    chamadores. Responsabilidade: dado um conjunto de correlações,
+    e supervisores, que implementa as ações de reasoning interna (montagem
+    de prompt/texto estruturado e a chamada ao LLM) desses chamadores.
+    Responsabilidade: dado um conjunto de correlações,
     anomalias e contexto orçamentário, produzir texto analítico.
 
     Args:
