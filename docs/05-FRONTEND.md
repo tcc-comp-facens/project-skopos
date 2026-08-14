@@ -120,7 +120,7 @@ interface ArchitecturePanelProps {
 ### LlmControls (`src/components/LlmControls.tsx`)
 
 Toggles de LLM e LLM Judge:
-- **LLM** — habilita/desabilita síntese textual via LLM (DeepSeek)
+- **LLM** — habilita/desabilita síntese textual via LLM (provedor configurado em `LLM_PROVIDER`: DeepSeek por default, OpenAI opcional)
 - **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge). Desabilitado automaticamente quando o toggle LLM está desligado, ou quando uma rodada está em andamento (`disabled` prop)
 
 ### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)

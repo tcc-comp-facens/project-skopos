@@ -213,9 +213,14 @@ Diferente de um design anterior (regex-primário, LLM como fallback), hoje **tod
 
 | Provider | Modelo | Variável de ambiente |
 |----------|--------|---------------------|
-| **DeepSeek** (API compatível OpenAI) | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
+| **DeepSeek** (API compatível OpenAI) — default | `deepseek-v4-flash` | `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` (opcional) |
+| **OpenAI** | `gpt-5.6-luna` | `OPENAI_API_KEY`, `OPENAI_MODEL` (opcional) |
 
-Um único modelo — sem cadeia de fallback entre modelos (diferente de um design anterior com múltiplos modelos Groq em cascata). `thinking` é desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) para resposta direta, sem chain-of-thought.
+O provedor ativo é escolhido por `LLM_PROVIDER` (`deepseek` ou `openai`; default `deepseek`). Nenhum call site muda — todos chamam `generate()`/`generate_stream()` de `core/llm_client.py`, que resolve o provedor a cada chamada. O SDK é o `openai` nos dois casos; só a `base_url` difere.
+
+Um único modelo por provedor — sem cadeia de fallback entre modelos (diferente de um design anterior com múltiplos modelos Groq em cascata). No DeepSeek, `thinking` é desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) para resposta direta, sem chain-of-thought; esse parâmetro é proprietário e não é enviado à OpenAI. Modelos de raciocínio da OpenAI (`gpt-5*`, série `o*`) recebem `max_completion_tokens` em vez de `max_tokens` e sem `temperature`, exigência da API deles.
+
+`OPENAI_STORE_LOGS=true` (opt-in, só OpenAI) envia `store=True` e `metadata={"app": "skopos", "caller": ...}` em cada chamada, tornando-as visíveis e filtráveis por agente na aba Logs do dashboard — a API não retém nada por default (`store=False`), então sem isso só o consumo aparece no billing. Numa organização com Zero Data Retention o parâmetro é ignorado.
 
 ### Rate Limiting
 
@@ -302,7 +307,7 @@ Também suporta context manager: `with MetricsCollector(...) as mc:`
 
 ### Wall-clock e exclusão do sintetizador
 
-Ambas as topologias excluem o tempo do `TextSynthesizer` (chamada LLM) do `totalExecutionTimeMs` reportado no evento `metric`, pois esse tempo depende da disponibilidade e latência da API DeepSeek — não reflete a eficiência da arquitetura multiagente em si.
+Ambas as topologias excluem o tempo do `TextSynthesizer` (chamada LLM) do `totalExecutionTimeMs` reportado no evento `metric`, pois esse tempo depende da disponibilidade e latência da API do provedor de LLM — não reflete a eficiência da arquitetura multiagente em si.
 
 | Topologia | Estratégia |
 |-----------|-----------|

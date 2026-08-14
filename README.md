@@ -12,7 +12,8 @@ Sistema de comparação de duas arquiteturas multiagente CoALA (Cognitive Archit
 # 1. Configurar variáveis de ambiente (arquivo único na raiz do repo,
 #    compartilhado por backend, frontend e docker-compose)
 cp .env.example .env
-# Edite .env com suas credenciais Neo4j e (opcionalmente) DeepSeek
+# Edite .env com suas credenciais Neo4j e (opcionalmente) a chave do
+# provedor de LLM — DeepSeek por default, ou OpenAI via LLM_PROVIDER=openai
 
 # 2. Subir todos os serviços
 docker compose up --build
@@ -78,7 +79,10 @@ uvicorn main:app --reload --port 8000
 | `NEO4J_URI` | URI Bolt do Neo4j | `bolt://neo4j:7687` (Docker) / `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha Neo4j | `your_password_here` |
+| `LLM_PROVIDER` | Provedor de LLM ativo (`deepseek` ou `openai`) | `deepseek` |
 | `DEEPSEEK_API_KEY` | Chave DeepSeek (API compatível OpenAI) | `sk-...` |
+| `OPENAI_API_KEY` | Chave OpenAI — usada quando `LLM_PROVIDER=openai` | `sk-proj-...` |
+| `DEEPSEEK_MODEL` / `OPENAI_MODEL` | Sobrescreve o modelo default do provedor | `deepseek-v4-flash` / `gpt-5.6-luna` |
 | `CORS_ORIGINS` | Origens CORS | `*` |
 | `LOG_LEVEL` | Nível de log (`INFO` mostra estágios/timing/preview de prompts; `DEBUG` mostra prompts completos enviados ao LLM) | `INFO` |
 | `USE_LLM_QUERY_PLANNING` | Liga planejamento de consulta via LLM nos agentes de domínio (desnecessário hoje — mapeamento trivial) | `false` |
@@ -124,7 +128,7 @@ backend/
 │   ├── star/                     # Topologia estrela
 │   └── hierarchical/             # Topologia hierárquica
 ├── core/                         # Utilitários
-│   ├── llm_client.py             # Cliente LLM (DeepSeek, retry, contagem de tokens, logs de chamada)
+│   ├── llm_client.py             # Cliente LLM (DeepSeek/OpenAI via LLM_PROVIDER, retry, contagem de tokens, logs de chamada)
 │   ├── metrics.py                # MetricsCollector (psutil)
 │   ├── quality_metrics.py        # Métricas de qualidade + relatório
 │   └── streaming_adapter.py      # StreamingAdapter (chunking para ws_queue)

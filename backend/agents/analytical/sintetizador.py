@@ -1,8 +1,9 @@
 """
 Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (DeepSeek)
-a partir de correlações, anomalias e contexto orçamentário.
+Gera texto consolidado de análise via LLM (provedor configurado em
+`LLM_PROVIDER` — DeepSeek por default, OpenAI opcional) a partir de
+correlações, anomalias e contexto orçamentário.
 
 Quando o LLM está indisponível, gera texto estruturado como fallback.
 

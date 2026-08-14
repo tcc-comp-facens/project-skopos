@@ -1,12 +1,21 @@
 """
-Cliente LLM centralizado (DeepSeek) — sem rate limiting próprio, com
-retry em caso de rate limit (429) reportado pelo provedor e contabilização
-de gastos (tokens) em log.
+Cliente LLM centralizado (DeepSeek ou OpenAI) — sem rate limiting
+próprio, com retry em caso de rate limit (429) reportado pelo provedor e
+contabilização de gastos (tokens) em log.
 
-Usa o modelo `deepseek-v4-flash` com `thinking` desabilitado (resposta
-direta, sem chain-of-thought) — adequado para síntese de texto e
-extração de JSON estruturado. API compatível com o SDK da OpenAI
-(`base_url="https://api.deepseek.com"`).
+O provedor é escolhido pela variável de ambiente `LLM_PROVIDER`
+(`deepseek`, o default histórico, ou `openai`) — ver `PROVIDERS` abaixo.
+Ambos falam a mesma API (o SDK da OpenAI é usado nos dois casos; o
+DeepSeek é compatível, mudando só `base_url`), então a troca não afeta
+nenhum call site: todo o resto do backend continua chamando
+`generate()`/`generate_stream()` sem saber qual provedor está ativo.
+
+No DeepSeek o default é `deepseek-v4-flash` com `thinking` desabilitado
+(resposta direta, sem chain-of-thought) — adequado para síntese de texto
+e extração de JSON estruturado; na OpenAI, `gpt-5.6-luna`. Cada provedor
+tem sua própria variável de API key (`DEEPSEEK_API_KEY` /
+`OPENAI_API_KEY`) e aceita override de modelo por env (`DEEPSEEK_MODEL` /
+`OPENAI_MODEL`) — sem precisar mexer em código para testar outro modelo.
 
 Chamadas de diferentes threads (estrela e hierárquica rodam concorrentes
 — ver api/runners.py) acontecem em paralelo de verdade, sem
@@ -19,6 +28,11 @@ Se o provedor de fato retornar 429 (limite de cota da conta, não algo
 que este módulo impõe), o retry com backoff exponencial em
 `_try_model`/`generate_stream` ainda se aplica — essa é uma reação a um
 erro real da API, não uma limitação preventiva própria.
+
+No provedor OpenAI, `OPENAI_STORE_LOGS=true` (opt-in) faz cada chamada
+ir com `store=True` + `metadata` do `caller`, o que a torna visível e
+filtrável por agente na aba Logs do dashboard — sem isso a API não retém
+nada (default `store=False`) e só o consumo aparece no billing.
 
 Observabilidade: todo call site passa um `caller` (tipicamente o
 `agent_id`/`synthesizer_id` de quem disparou a chamada) — logado junto
@@ -37,7 +51,8 @@ import logging
 import os
 import threading
 import time
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +65,138 @@ _token_lock = threading.Lock()
 MAX_RETRIES = 2  # retries antes de desistir, só em caso de 429 real do provedor
 RETRY_BASE_DELAY = 10.0  # segundos
 
-MODEL = "deepseek-v4-flash"
+TEMPERATURE = 0.7
+MAX_TOKENS = 4096
 
 # thinking desabilitado — resposta direta, sem reasoning_content
 _THINKING_DISABLED = {"type": "disabled"}
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    """Descreve um provedor de LLM compatível com o SDK da OpenAI.
+
+    O que varia de fato entre DeepSeek e OpenAI é pouco — endpoint,
+    variável da API key, modelo default e parâmetros proprietários
+    (`extra_body`) —, então o resto do módulo trata os dois de forma
+    idêntica a partir daqui.
+    """
+
+    name: str
+    api_key_env: str  # variável de ambiente com a chave
+    model_env: str  # override do modelo por env (opcional)
+    base_url_env: str  # override do endpoint por env (opcional)
+    default_model: str
+    default_base_url: Optional[str] = None  # None = default do SDK (OpenAI)
+    extra_body: dict[str, Any] = field(default_factory=dict)
+
+
+PROVIDERS: dict[str, ProviderConfig] = {
+    "deepseek": ProviderConfig(
+        name="deepseek",
+        api_key_env="DEEPSEEK_API_KEY",
+        model_env="DEEPSEEK_MODEL",
+        base_url_env="DEEPSEEK_BASE_URL",
+        default_model="deepseek-v4-flash",
+        default_base_url="https://api.deepseek.com",
+        extra_body={"thinking": _THINKING_DISABLED},
+    ),
+    "openai": ProviderConfig(
+        name="openai",
+        api_key_env="OPENAI_API_KEY",
+        model_env="OPENAI_MODEL",
+        base_url_env="OPENAI_BASE_URL",
+        default_model="gpt-5.6-luna",
+        default_base_url=None,
+        # `thinking` é proprietário do DeepSeek — a OpenAI rejeita
+        # parâmetros desconhecidos com 400, então aqui não vai nada.
+        extra_body={},
+    ),
+}
+
+DEFAULT_PROVIDER = "deepseek"
+
+# Famílias de modelos de raciocínio da OpenAI: não aceitam `max_tokens`
+# (exigem `max_completion_tokens`) nem `temperature` diferente do default.
+# Verificado contra a API real com o modelo default (gpt-5.6-luna), que
+# responde 400 "Unsupported parameter: 'max_tokens' is not supported with
+# this model. Use 'max_completion_tokens' instead".
+_OPENAI_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Lê uma env var booleana (`true/1/yes/on`), a cada chamada."""
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def get_provider() -> ProviderConfig:
+    """Provedor ativo, conforme `LLM_PROVIDER` (default: deepseek).
+
+    Lido do ambiente a cada chamada (não no import) para que o valor
+    valha mesmo se o `.env` for carregado depois deste módulo e para que
+    testes possam alternar de provedor com `monkeypatch.setenv`.
+    """
+    raw = os.environ.get("LLM_PROVIDER", "").strip().lower() or DEFAULT_PROVIDER
+    provider = PROVIDERS.get(raw)
+    if provider is None:
+        logger.warning(
+            "LLM_PROVIDER=%r desconhecido (opções: %s) — usando %s",
+            raw, ", ".join(sorted(PROVIDERS)), DEFAULT_PROVIDER,
+        )
+        provider = PROVIDERS[DEFAULT_PROVIDER]
+    return provider
+
+
+def resolve_model(provider: Optional[ProviderConfig] = None) -> str:
+    """Modelo default do provedor ativo, com override por env."""
+    provider = provider or get_provider()
+    return os.environ.get(provider.model_env, "").strip() or provider.default_model
+
+
+def _completion_params(provider: ProviderConfig, model: str) -> dict[str, Any]:
+    """Parâmetros de geração aceitos por este par provedor/modelo.
+
+    Os modelos de raciocínio da OpenAI (gpt-5, série o*) renomearam
+    `max_tokens` para `max_completion_tokens` e só aceitam a temperatura
+    default — mandar os parâmetros antigos resulta em 400. Todo o resto
+    (DeepSeek e a linha gpt-4o) usa a forma clássica.
+    """
+    if provider.name == "openai" and model.lower().startswith(_OPENAI_REASONING_PREFIXES):
+        return {"max_completion_tokens": MAX_TOKENS}
+    return {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
+
+
+def _logging_params(provider: ProviderConfig, caller: str) -> dict[str, Any]:
+    """Retenção da chamada nos logs do provedor, quando ele oferece isso.
+
+    Na OpenAI, o par requisição/resposta só é retido — e só aparece na
+    aba Logs do dashboard — se a chamada mandar `store=True`; o default
+    da API é `False`, então por padrão o consumo aparece no billing mas
+    nenhum registro fica visível. Aqui isso é **opt-in** via
+    `OPENAI_STORE_LOGS=true`, porque ativa retenção do conteúdo dos
+    prompts e das respostas na conta OpenAI (numa organização com Zero
+    Data Retention o parâmetro é ignorado e tratado como `False`).
+
+    Quando ligado, vai junto o `metadata` com o `caller` — o mesmo
+    identificador (`agent_id`/`synthesizer_id`) que aparece nos logs do
+    backend —, o que permite filtrar no dashboard as chamadas por agente
+    e cruzar com o log local. O DeepSeek não tem equivalente, então nada
+    é enviado a ele.
+    """
+    if provider.name != "openai" or not _env_flag("OPENAI_STORE_LOGS"):
+        return {}
+
+    return {
+        "store": True,
+        # metadata da OpenAI aceita só pares string→string; o limite por
+        # valor é 512 chars, folgado para um agent_id, mas truncado por
+        # garantia (um caller inesperadamente longo derrubaria a chamada
+        # com 400 em vez de só perder detalhe no log).
+        "metadata": {"app": "skopos", "caller": caller[:512]},
+    }
 
 # Acumulador global de tokens (thread-safe via _token_lock) — mantido por
 # compatibilidade (get_token_usage/reset_token_usage), mas não distingue
@@ -114,8 +257,16 @@ class TokenBucket:
         return dict(self.usage)
 
 
-def _has_api_key() -> bool:
-    return bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+def _has_api_key(provider: Optional[ProviderConfig] = None) -> bool:
+    provider = provider or get_provider()
+    return bool(os.environ.get(provider.api_key_env, "").strip())
+
+
+def has_api_key(provider: Optional[ProviderConfig] = None) -> bool:
+    """Se a chave do provedor está configurada — face pública de
+    `_has_api_key` (que os testes substituem como seam interno), usada
+    pelo log de startup em main.py."""
+    return _has_api_key(provider)
 
 
 def _strip_think_tags(text: str) -> str:
@@ -138,20 +289,34 @@ def _preview(text: str, max_chars: int = 300) -> str:
     return single_line
 
 
-def _client():
+def _client(provider: Optional[ProviderConfig] = None):
+    """Cliente do SDK da OpenAI apontado para o provedor ativo.
+
+    O DeepSeek expõe uma API compatível, então a única diferença é a
+    `base_url` (para a OpenAI, `None` — deixa o SDK usar o endpoint
+    oficial).
+    """
     from openai import OpenAI
 
-    return OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
+    provider = provider or get_provider()
+    base_url = os.environ.get(provider.base_url_env, "").strip() or provider.default_base_url
+    return OpenAI(api_key=os.environ[provider.api_key_env], base_url=base_url)
 
 
-def _generate(prompt: str, model: str) -> tuple[Optional[str], dict[str, int]]:
-    """Chama a API do DeepSeek e retorna (texto, token_usage)."""
-    response = _client().chat.completions.create(
+def _generate(
+    prompt: str,
+    model: str,
+    provider: Optional[ProviderConfig] = None,
+    caller: str = "desconhecido",
+) -> tuple[Optional[str], dict[str, int]]:
+    """Chama a API do provedor ativo e retorna (texto, token_usage)."""
+    provider = provider or get_provider()
+    response = _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=4096,
-        extra_body={"thinking": _THINKING_DISABLED},
+        **_completion_params(provider, model),
+        **_logging_params(provider, caller),
+        **({"extra_body": provider.extra_body} if provider.extra_body else {}),
     )
 
     usage: dict[str, int] = {}
@@ -213,7 +378,9 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     )
 
 
-def _try_model(prompt: str, model: str, caller: str) -> Optional[str]:
+def _try_model(
+    prompt: str, model: str, caller: str, provider: Optional[ProviderConfig] = None
+) -> Optional[str]:
     """Tenta gerar, com retry em caso de 429 real retornado pelo provedor.
 
     Sem espera preventiva antes da chamada (rate limiting próprio
@@ -225,7 +392,7 @@ def _try_model(prompt: str, model: str, caller: str) -> Optional[str]:
     """
     for attempt in range(MAX_RETRIES):
         try:
-            text, usage = _generate(prompt, model)
+            text, usage = _generate(prompt, model, provider, caller)
             _accumulate_tokens(usage)
 
             if usage:
@@ -265,15 +432,17 @@ def _try_model(prompt: str, model: str, caller: str) -> Optional[str]:
 def generate(
     prompt: str, model: Optional[str] = None, *, caller: str = "desconhecido"
 ) -> Optional[str]:
-    """Chama o LLM (DeepSeek), sem rate limiting próprio, com retry em
-    caso de 429 real do provedor e contabilização de gastos em log.
+    """Chama o LLM do provedor ativo (`LLM_PROVIDER`), sem rate limiting
+    próprio, com retry em caso de 429 real do provedor e contabilização
+    de gastos em log.
 
     Chamadas de threads diferentes acontecem em paralelo de verdade —
     nenhum lock global serializa esta função entre threads.
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Default: MODEL ("deepseek-v4-flash").
+        model: Modelo específico (opcional). Default: o modelo do provedor
+            ativo (ver `resolve_model`).
         caller: Identificador de quem está chamando (tipicamente `agent_id`
             ou `synthesizer_id`) — usado só para logging/observabilidade,
             não afeta o comportamento da chamada.
@@ -281,19 +450,23 @@ def generate(
     Returns:
         Texto gerado, ou None se falhar ou API key ausente.
     """
-    if not _has_api_key():
-        logger.warning("LLM [%s]: DEEPSEEK_API_KEY não configurada", caller)
+    provider = get_provider()
+    if not _has_api_key(provider):
+        logger.warning(
+            "LLM [%s]: %s não configurada (LLM_PROVIDER=%s)",
+            caller, provider.api_key_env, provider.name,
+        )
         return None
 
-    resolved_model = model or MODEL
+    resolved_model = model or resolve_model(provider)
     logger.info(
-        "LLM [%s]: enviando prompt (model=%s, %d chars) — %s",
-        caller, resolved_model, len(prompt), _preview(prompt),
+        "LLM [%s]: enviando prompt (provider=%s, model=%s, %d chars) — %s",
+        caller, provider.name, resolved_model, len(prompt), _preview(prompt),
     )
     logger.debug("LLM [%s]: prompt completo:\n%s", caller, prompt)
 
     try:
-        result = _try_model(prompt, resolved_model, caller)
+        result = _try_model(prompt, resolved_model, caller, provider)
         if result:
             return result
         logger.warning("LLM [%s]: falhou", caller)
@@ -318,11 +491,19 @@ def reset_token_usage() -> None:
         _token_usage["call_count"] = 0
 
 
-def _stream_response(prompt: str, model: str, usage_out: dict[str, int] | None = None):
-    """Chama a API do DeepSeek em modo streaming e yield tokens incrementalmente.
+def _stream_response(
+    prompt: str,
+    model: str,
+    usage_out: dict[str, int] | None = None,
+    provider: Optional[ProviderConfig] = None,
+    caller: str = "desconhecido",
+):
+    """Chama a API do provedor ativo em modo streaming e yield tokens
+    incrementalmente.
 
-    Com `thinking` desabilitado a resposta não deveria conter blocos
-    <think>/reasoning_content, mas o filtro é mantido defensivamente.
+    No DeepSeek, com `thinking` desabilitado a resposta não deveria
+    conter blocos <think>/reasoning_content; o filtro é mantido
+    defensivamente (e é inofensivo na OpenAI, que não emite esses blocos).
 
     `stream_options={"include_usage": True}` (padrão OpenAI-compatível,
     suportado pelo DeepSeek) faz a API emitir um chunk final só com
@@ -334,14 +515,15 @@ def _stream_response(prompt: str, model: str, usage_out: dict[str, int] | None =
     (API mudar/não suportar), `usage_out` simplesmente permanece vazio —
     degrada para o comportamento anterior, sem quebrar nada.
     """
-    stream = _client().chat.completions.create(
+    provider = provider or get_provider()
+    stream = _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=4096,
         stream=True,
         stream_options={"include_usage": True},
-        extra_body={"thinking": _THINKING_DISABLED},
+        **_completion_params(provider, model),
+        **_logging_params(provider, caller),
+        **({"extra_body": provider.extra_body} if provider.extra_body else {}),
     )
 
     buffer = ""
@@ -387,8 +569,9 @@ def _stream_response(prompt: str, model: str, usage_out: dict[str, int] | None =
 
 
 def generate_stream(prompt: str, model: str | None = None, *, caller: str = "desconhecido"):
-    """Streaming via DeepSeek, sem rate limiting próprio, com retry em
-    caso de 429 real do provedor. Yields tokens conforme chegam.
+    """Streaming via provedor ativo (`LLM_PROVIDER`), sem rate limiting
+    próprio, com retry em caso de 429 real do provedor. Yields tokens
+    conforme chegam.
 
     Sem lock global: diferente do comportamento anterior (onde este
     generator segurava um lock durante toda a transmissão, bloqueando
@@ -397,21 +580,26 @@ def generate_stream(prompt: str, model: str | None = None, *, caller: str = "des
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Default: MODEL ("deepseek-v4-flash").
+        model: Modelo específico (opcional). Default: o modelo do provedor
+            ativo (ver `resolve_model`).
         caller: Identificador de quem está chamando — só para
             logging/observabilidade (ver `generate`).
 
     Yields:
         Tokens de texto conforme são gerados pelo LLM.
     """
-    if not _has_api_key():
-        logger.warning("LLM [%s]: DEEPSEEK_API_KEY não configurada", caller)
+    provider = get_provider()
+    if not _has_api_key(provider):
+        logger.warning(
+            "LLM [%s]: %s não configurada (LLM_PROVIDER=%s)",
+            caller, provider.api_key_env, provider.name,
+        )
         return
 
-    resolved_model = model or MODEL
+    resolved_model = model or resolve_model(provider)
     logger.info(
-        "LLM [%s]: enviando prompt em modo streaming (model=%s, %d chars) — %s",
-        caller, resolved_model, len(prompt), _preview(prompt),
+        "LLM [%s]: enviando prompt em modo streaming (provider=%s, model=%s, %d chars) — %s",
+        caller, provider.name, resolved_model, len(prompt), _preview(prompt),
     )
     logger.debug("LLM [%s]: prompt completo (streaming):\n%s", caller, prompt)
 
@@ -421,7 +609,7 @@ def generate_stream(prompt: str, model: str | None = None, *, caller: str = "des
         try:
             got_tokens = False
             usage_out: dict[str, int] = {}
-            for token in _stream_response(prompt, resolved_model, usage_out):
+            for token in _stream_response(prompt, resolved_model, usage_out, provider, caller):
                 got_tokens = True
                 total_chars += len(token)
                 yield token

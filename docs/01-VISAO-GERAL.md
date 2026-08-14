@@ -54,7 +54,7 @@ A comparação é feita com base em:
 | Frontend | React + TypeScript | 18.3.1 + 5.5.3 | SPA com WebSocket client para streaming em tempo real |
 | Bundler | Vite | 5.3.4 | Build rápido, HMR, suporte nativo a TypeScript |
 | Banco de Dados | Neo4j | 5.x | Grafo nativo para modelar relações entre gastos e indicadores |
-| LLM | DeepSeek (API compatível OpenAI) | deepseek-v4-flash | Interpretação de intenção do chat e geração de análises textuais |
+| LLM | DeepSeek (default) ou OpenAI, via `LLM_PROVIDER` | deepseek-v4-flash / gpt-5.6-luna | Interpretação de intenção do chat e geração de análises textuais |
 | Métricas | psutil | latest | Coleta de CPU e memória por agente em tempo real |
 | Estatística | SciPy | latest | Spearman (correlação) |
 | ETL DataSUS | PySUS | >=0.11.0 | Download automatizado de dados do FTP DataSUS |
@@ -73,7 +73,7 @@ python-dotenv, httpx, openai, openpyxl,
 xlrd, pandas, scipy, hypothesis
 ```
 
-`openai` é usado como SDK do cliente LLM — a API do DeepSeek é compatível com o formato OpenAI (`base_url="https://api.deepseek.com"`). `hypothesis` é usado para os testes baseados em propriedade do agente de interpretação de intenção.
+`openai` é usado como SDK do cliente LLM para os dois provedores suportados — a API do DeepSeek é compatível com o formato OpenAI, mudando só a `base_url` (`https://api.deepseek.com`). `hypothesis` é usado para os testes baseados em propriedade do agente de interpretação de intenção.
 
 ### Dependências Frontend (package.json)
 
@@ -170,7 +170,7 @@ Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O
 ### Pré-requisitos
 
 - Docker Desktop instalado e rodando
-- (Opcional) Chave de API DeepSeek para interpretação de intenção no chat e geração de texto via LLM — sem ela, o chat sempre pede esclarecimento (não há mais fallback por regex) e a síntese cai no texto estruturado determinístico
+- (Opcional) Chave de API do provedor de LLM escolhido (DeepSeek ou OpenAI) para interpretação de intenção no chat e geração de texto via LLM — sem ela, o chat sempre pede esclarecimento (não há mais fallback por regex) e a síntese cai no texto estruturado determinístico
 - (Opcional) Python 3.11+ e Node.js 20+ para desenvolvimento local
 
 ### Variáveis de Ambiente
@@ -182,7 +182,10 @@ Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O
 | `NEO4J_URI` | URI de conexão Bolt do Neo4j | `bolt://neo4j:7687` (Docker) ou `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário do Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha do Neo4j | `your_password_here` |
-| `DEEPSEEK_API_KEY` | Chave API DeepSeek | `sk-...` |
+| `LLM_PROVIDER` | Provedor de LLM ativo | `deepseek` (default) ou `openai` |
+| `DEEPSEEK_API_KEY` | Chave API DeepSeek (se `LLM_PROVIDER=deepseek`) | `sk-...` |
+| `OPENAI_API_KEY` | Chave API OpenAI (se `LLM_PROVIDER=openai`) | `sk-proj-...` |
+| `DEEPSEEK_MODEL` / `OPENAI_MODEL` | Sobrescreve o modelo default do provedor | `deepseek-v4-flash` / `gpt-5.6-luna` |
 | `CORS_ORIGINS` | Origens CORS permitidas | `*` ou `http://localhost:5173` |
 | `LOG_LEVEL` | Nível de log (`INFO` default; `DEBUG` mostra prompts completos enviados ao LLM) | `INFO` |
 
@@ -381,7 +384,7 @@ project-skopos/
 │   │       └── supervisors.py                # 3 supervisores (nível 1)
 │   │
 │   ├── core/                        # Utilitários
-│   │   ├── llm_client.py            # Cliente LLM (DeepSeek, retry, tokens, logs de chamada com preview de prompt)
+│   │   ├── llm_client.py            # Cliente LLM (DeepSeek/OpenAI via LLM_PROVIDER, retry, tokens, logs de chamada com preview de prompt)
 │   │   ├── metrics.py               # MetricsCollector (psutil)
 │   │   ├── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
 │   │   └── streaming_adapter.py     # StreamingAdapter (chunking de texto para ws_queue)

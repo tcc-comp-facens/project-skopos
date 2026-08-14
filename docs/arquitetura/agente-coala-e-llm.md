@@ -1,6 +1,6 @@
-# Arquitetura Base de um Agente CoALA (e como ele chama o LLM DeepSeek)
+# Arquitetura Base de um Agente CoALA (e como ele chama o LLM)
 
-> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (DeepSeek). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md).
+> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (DeepSeek por default, OpenAI opcional — ver `LLM_PROVIDER`). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md).
 
 ## Sumário
 
@@ -200,22 +200,25 @@ def generate(
     ...
 ```
 
-### O provedor: DeepSeek
+### O provedor: DeepSeek (default) ou OpenAI
 
-| Aspecto | Valor |
-|---|---|
-| Provider | DeepSeek, via SDK compatível OpenAI (`base_url="https://api.deepseek.com"`) |
-| Modelo | `deepseek-v4-flash` — único modelo, sem cadeia de fallback entre modelos |
-| Variável de ambiente | `DEEPSEEK_API_KEY` |
-| `thinking` | Desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) — resposta direta, sem chain-of-thought |
-| Lock global | `threading.Lock()` — serializa **todas** as chamadas LLM do processo (estrela e hierárquica competem pelo mesmo lock) |
-| Intervalo mínimo | 2.0s entre chamadas |
-| Retry | Até 2 tentativas no mesmo modelo, backoff linear (`10s × tentativa`), só para erros de rate limit (429) |
+Qual provedor responde é decidido pela variável `LLM_PROVIDER` — lida a cada chamada, não no import, então basta trocar o `.env` e reiniciar o backend. Nenhum agente sabe qual provedor está ativo: todos chamam `generate()`/`generate_stream()`. O SDK é o `openai` nos dois casos (a API do DeepSeek é compatível), e o backend loga o provedor resolvido no startup e em cada chamada (`provider=`).
+
+| Aspecto | `LLM_PROVIDER=deepseek` (default) | `LLM_PROVIDER=openai` |
+|---|---|---|
+| Endpoint | `base_url="https://api.deepseek.com"` | endpoint oficial do SDK |
+| Modelo | `deepseek-v4-flash` | `gpt-5.6-luna` |
+| Variável da chave | `DEEPSEEK_API_KEY` | `OPENAI_API_KEY` |
+| Override de modelo | `DEEPSEEK_MODEL` | `OPENAI_MODEL` |
+| `thinking` | Desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) — resposta direta, sem chain-of-thought | Não enviado — é parâmetro proprietário do DeepSeek e a OpenAI responde 400 a parâmetro desconhecido |
+| Limite de saída | `max_tokens` | `max_completion_tokens` (sem `temperature`) nos modelos de raciocínio (`gpt-5*`, série `o*`), que rejeitam a forma clássica; `max_tokens` nos demais |
+
+Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e hierárquica) correm em paralelo de verdade.
 
 ### O que acontece a cada chamada
 
 1. **Antes da chamada** — log em `INFO` com um preview de uma linha do prompt (truncado a ~300 chars) e o tamanho total; o prompt **completo** só aparece em `DEBUG` (`LOG_LEVEL=DEBUG`).
-2. **A chamada em si** — respeita o lock global e o intervalo mínimo; em caso de 429, espera e tenta de novo (até 2x).
+2. **A chamada em si** — dispara direto, sem espera preventiva; em caso de 429, espera e tenta de novo (até 2x).
 3. **Pós-processamento** — remove automaticamente tags `<think>...</think>` da resposta, caso apareçam (defensivo, já que `thinking` está desabilitado).
 4. **Depois da chamada** — log com o tamanho da resposta recebida e a contagem de tokens (prompt/completion/total). O **conteúdo** da resposta não é logado (só o tamanho) — assimétrico com o prompt, que tem preview + versão completa em DEBUG.
 5. **Falha** (indisponível, erro fatal, ou todas as tentativas de retry esgotadas) — retorna `None` em vez de levantar exceção. Quem chamou decide o que fazer (tipicamente: usar um valor padrão determinístico).
