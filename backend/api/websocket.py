@@ -4,6 +4,13 @@ WebSocket endpoint for real-time streaming of analysis events.
 Streams chunk, done, error, metric events from both architectures,
 then computes quality metrics and streams the comparative report.
 
+A ordem é: métricas determinísticas → avaliação RAGAS → relatório. O
+RAGAS (`core/ragas_metrics.py`) roda sempre, transmitido nos eventos
+`ragas`/`ragas_done`, e vem **antes** do relatório porque a conclusão do
+relatório decide a topologia vencedora pela fidelidade que ele mede.
+Essa é a única parte do cálculo de métricas que gasta LLM — tudo em
+`core/quality_metrics.py` é determinístico e já foi para o cliente antes.
+
 Requirements: 8.1, 8.6
 """
 
@@ -22,6 +29,154 @@ from core.quality_metrics import compute_all_quality_metrics, generate_comparati
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+ARCH_LABELS = [("star", "★ Estrela"), ("hierarchical", "◆ Hierárquica")]
+
+# Rótulos legíveis das métricas da RAGAS, na ordem dos três aspectos de
+# qualidade do paper (Es et al., 2024): fidelidade, relevância da
+# resposta, relevância do contexto.
+RAGAS_METRIC_LABELS = [
+    ("faithfulness", "Fidelidade aos dados"),
+    ("answer_relevancy", "Relevância da resposta"),
+    ("context_relevance", "Relevância do contexto"),
+]
+
+
+def _fallback_question(results: dict) -> str:
+    """Pergunta sintética para análises que não vieram do chat.
+
+    A avaliação RAGAS precisa de um `user_input`; hoje o chat é o único
+    caminho de entrada, mas a análise pode ter sido disparada sem ele.
+    """
+    inicio = results.get("date_from")
+    fim = results.get("date_to")
+    periodo = f" no período de {inicio} a {fim}" if inicio and fim else ""
+    return (
+        "Qual a relação entre os gastos públicos em saúde e os indicadores "
+        f"de resultado{periodo}?"
+    )
+
+
+def _format_ragas_report(per_arch: dict[str, dict]) -> str:
+    """Bloco de texto comparando os scores RAGAS das duas arquiteturas."""
+    lines = ["━━━ Avaliação RAGAS — Qualidade da Resposta ━━━", ""]
+
+    unavailable = [
+        payload.get("unavailable_reason")
+        for payload in per_arch.values()
+        if not payload.get("available")
+    ]
+    if unavailable and len(unavailable) == len(per_arch):
+        lines.append("Avaliação não executada.")
+        lines.append(f"Motivo: {unavailable[0]}")
+        lines.append("")
+        return "\n".join(lines)
+
+    any_payload = next(iter(per_arch.values()), {})
+    judge = any_payload.get("judge") or {}
+    # O modelo de embeddings efetivamente usado pode diferir do pedido:
+    # a cadeia de fallback entra quando o projeto não libera o configurado.
+    pedido = judge.get("embedding_model", "?")
+    usado = judge.get("embedding_model_used")
+    embeddings = pedido if not usado or usado == pedido else f"{usado} (fallback de {pedido})"
+    lines.append(
+        f"Juiz: {judge.get('provider', '?')}/{judge.get('model', '?')} "
+        f"| embeddings: {embeddings} "
+        f"| ragas {any_payload.get('version', '?')}"
+    )
+    lines.append("")
+    lines.append("SCORES (0 a 1, quanto maior melhor)")
+
+    for key, label in RAGAS_METRIC_LABELS:
+        lines.append(f"  {label}")
+        for arch_key, arch_label in ARCH_LABELS:
+            metric = (per_arch.get(arch_key, {}).get("metrics") or {}).get(key) or {}
+            score = metric.get("score")
+            shown = "não disponível" if score is None else f"{score:.2f}"
+            lines.append(f"    {arch_label}: {shown}")
+    lines.append("")
+
+    for arch_key, arch_label in ARCH_LABELS:
+        payload = per_arch.get(arch_key, {})
+        sample = payload.get("sample") or {}
+        total = sample.get("n_contexts_total", 0)
+        lines.append(f"  {arch_label}: {total} achados avaliados")
+        for err in payload.get("errors") or []:
+            lines.append(f"    ! {err.get('metric')}: {err.get('error')}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+async def _run_ragas_evaluation(
+    *,
+    analysis_id: str,
+    results: dict,
+    star_result: dict,
+    hier_result: dict,
+) -> tuple[str, dict[str, dict]]:
+    """Roda o RAGAS nas duas arquiteturas e encaixa o resultado no payload.
+
+    As duas rodam concorrentes; a justificativa e a mecânica de isolamento
+    do custo estão em `_avaliar`, abaixo.
+    """
+    from core.quality_metrics import compute_token_cost
+
+    try:
+        from core.ragas_metrics import evaluate_architecture
+    except ImportError as exc:
+        logger.error("WS %s: biblioteca ragas indisponível — %s", analysis_id[:8], exc)
+        unavailable = {
+            "framework": "ragas",
+            "available": False,
+            "unavailable_reason": f"biblioteca ragas não instalada ({exc})",
+            "metrics": {},
+        }
+        per_arch = {k: unavailable for k, _ in ARCH_LABELS}
+        return _format_ragas_report(per_arch), per_arch
+
+    user_input = results.get("source_question") or _fallback_question(results)
+    date_from = results.get("date_from")
+    date_to = results.get("date_to")
+
+    async def _avaliar(arch_key: str, arch_result: dict) -> tuple[str, dict, dict]:
+        # O TokenBucket é aberto DENTRO da corrotina de propósito: cada
+        # Task criada por `gather` recebe uma cópia do contexto, então um
+        # bucket ativado aqui fica isolado do da outra arquitetura. Abri-lo
+        # fora seria um bucket só, compartilhado, e o custo das duas
+        # topologias se misturaria.
+        with TokenBucket() as bucket:
+            payload = await evaluate_architecture(
+                arch_result,
+                user_input,
+                caller=f"ragas-{arch_key}",
+                date_from=date_from,
+                date_to=date_to,
+            )
+        return arch_key, payload, compute_token_cost(bucket.snapshot())
+
+    # Concorrente: a precisão de contexto faz 1 chamada LLM por achado, em
+    # série dentro da métrica (o laço da ragas não paraleliza). Com dezenas
+    # de achados isso domina o tempo da avaliação, e rodar as duas
+    # arquiteturas ao mesmo tempo corta o relógio pela metade.
+    resultados = await asyncio.gather(
+        _avaliar("star", star_result),
+        _avaliar("hierarchical", hier_result),
+    )
+
+    per_arch: dict[str, dict] = {}
+    cost: dict[str, dict] = {}
+    for arch_key, payload, arch_cost in resultados:
+        per_arch[arch_key] = payload
+        cost[arch_key] = arch_cost
+
+    qm = active_results.get(analysis_id, {}).get("quality_metrics")
+    if qm:
+        for arch_key, payload in per_arch.items():
+            qm.setdefault("quality", {}).setdefault(arch_key, {})["ragas"] = payload
+        qm.setdefault("cost", {})["ragas"] = cost
+
+    return _format_ragas_report(per_arch), per_arch
 
 
 @router.websocket("/ws/{analysis_id}")
@@ -149,8 +304,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     hier_agent_metrics=captured_agent_metrics.get(
                         "hierarchical", []
                     ),
-                    use_llm_judge=False,
-                    use_llm=results.get("use_llm", True),
                     star_wall_clock_ms=captured_wall_clock.get("star", 0),
                     hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
                     star_token_usage=results.get("star_token_usage"),
@@ -167,6 +320,44 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                 active_results[analysis_id]["star_wall_clock_ms"] = captured_wall_clock.get("star", 0)
                 active_results[analysis_id]["hier_wall_clock_ms"] = captured_wall_clock.get("hierarchical", 0)
 
+                chunk_size = 80
+
+                # A avaliação RAGAS roda ANTES do relatório porque o
+                # veredito do relatório depende dela: o vencedor é
+                # decidido por fidelidade primeiro (ver
+                # quality_metrics._decide_winner). Publicar o relatório
+                # antes significaria anunciar uma vencedora escolhida sem
+                # a métrica que mais pesa no critério.
+                logger.info("WS %s: rodando avaliação RAGAS", analysis_id[:8])
+                await websocket.send_json({
+                    "analysisId": analysis_id,
+                    "architecture": "both",
+                    "type": "ragas",
+                    "payload": "",
+                })
+
+                ragas_text, ragas_payloads = await _run_ragas_evaluation(
+                    analysis_id=analysis_id,
+                    results=results,
+                    star_result=star_result,
+                    hier_result=hier_result,
+                )
+
+                for i in range(0, len(ragas_text), chunk_size):
+                    await websocket.send_json({
+                        "analysisId": analysis_id,
+                        "architecture": "both",
+                        "type": "ragas",
+                        "payload": ragas_text[i : i + chunk_size],
+                    })
+                await websocket.send_json({
+                    "analysisId": analysis_id,
+                    "architecture": "both",
+                    "type": "ragas_done",
+                    "payload": "",
+                })
+                logger.info("WS %s: avaliação RAGAS enviada", analysis_id[:8])
+
                 report = generate_comparative_report(
                     quality=quality,
                     star_agent_metrics=captured_agent_metrics.get("star", []),
@@ -178,17 +369,16 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     hier_wall_clock_ms=captured_wall_clock.get("hierarchical", 0),
                     star_result=star_result,
                     hier_result=hier_result,
+                    ragas=ragas_payloads,
                 )
                 active_results[analysis_id]["comparative_report"] = report
 
-                chunk_size = 80
                 for i in range(0, len(report), chunk_size):
-                    chunk = report[i : i + chunk_size]
                     await websocket.send_json({
                         "analysisId": analysis_id,
                         "architecture": "both",
                         "type": "chunk",
-                        "payload": chunk,
+                        "payload": report[i : i + chunk_size],
                     })
                 await websocket.send_json({
                     "analysisId": analysis_id,
@@ -202,103 +392,6 @@ async def websocket_endpoint(websocket: WebSocket, analysis_id: str):
                     analysis_id[:8],
                     len(report),
                 )
-
-                # Run LLM Judge AFTER report is sent (can be slow due to retries)
-                use_llm_judge = results.get("use_llm_judge", False)
-                if use_llm_judge:
-                    logger.info("WS %s: running LLM Judge (post-report)", analysis_id[:8])
-                    # Notify frontend that LLM Judge is starting
-                    await websocket.send_json({
-                        "analysisId": analysis_id,
-                        "architecture": "both",
-                        "type": "llm_judge",
-                        "payload": "",
-                    })
-                    from core.quality_metrics import (
-                        compute_faithfulness,
-                        compute_faithfulness_llm,
-                        compute_token_cost,
-                    )
-
-                    judge_token_usage: dict[str, dict] = {}
-                    for arch_key, arch_result in [("star", star_result), ("hierarchical", hier_result)]:
-                        # Etapa 6: um bucket por arquitetura, cobrindo tanto o
-                        # LLM Judge (score 1-5) quanto a faithfulness
-                        # claim-based (D8) — ambos rodam sequencialmente na
-                        # MainThread aqui, contabilizados juntos sob "llm_judge"
-                        # (a categoria de custo "avaliação opcional extra").
-                        with TokenBucket() as arch_bucket:
-                            judge_result = compute_faithfulness_llm(
-                                arch_result.get("correlacoes", []),
-                                arch_result.get("anomalias", []),
-                                arch_result.get("contexto_orcamentario", {}),
-                                arch_result.get("texto_analise", ""),
-                                caller=f"llm_judge-{arch_key}",
-                            )
-                            claims_result = compute_faithfulness(
-                                arch_result.get("correlacoes", []),
-                                arch_result.get("anomalias", []),
-                                arch_result.get("texto_analise", ""),
-                                arch_result.get("contexto_orcamentario", {}),
-                                use_llm=True,
-                                caller=f"faithfulness_claims-{arch_key}",
-                            )
-                        judge_token_usage[arch_key] = arch_bucket.snapshot()
-
-                        # Store in active_results
-                        if "quality_metrics" in active_results.get(analysis_id, {}):
-                            qm = active_results[analysis_id]["quality_metrics"]
-                            if arch_key in qm.get("quality", {}):
-                                qm["quality"][arch_key]["faithfulness_llm"] = judge_result
-                                qm["quality"][arch_key]["faithfulness_claims"] = claims_result
-                            qm.setdefault("cost", {})["llm_judge"] = {
-                                k: compute_token_cost(v) for k, v in judge_token_usage.items()
-                            }
-
-                    # Build combined text for streaming
-                    star_judge = active_results.get(analysis_id, {}).get(
-                        "quality_metrics", {}
-                    ).get("quality", {}).get("star", {}).get("faithfulness_llm", {})
-                    hier_judge = active_results.get(analysis_id, {}).get(
-                        "quality_metrics", {}
-                    ).get("quality", {}).get("hierarchical", {}).get("faithfulness_llm", {})
-
-                    star_score = star_judge.get("score", 0)
-                    hier_score = hier_judge.get("score", 0)
-                    star_just = star_judge.get("justificativa", "")
-                    hier_just = hier_judge.get("justificativa", "")
-
-                    judge_text = (
-                        "━━━ LLM-as-Judge — Avaliação de Fidelidade ━━━\n"
-                        "\n"
-                        "SCORES\n"
-                        f"★ Estrela: {star_score}/5\n"
-                        f"◆ Hierárquica: {hier_score}/5\n"
-                        "\n"
-                        "JUSTIFICATIVAS\n"
-                    )
-                    if star_just:
-                        judge_text += f"★ Estrela\n{star_just}\n\n"
-                    if hier_just:
-                        judge_text += f"◆ Hierárquica\n{hier_just}\n"
-
-                    # Stream judge text in chunks
-                    for i in range(0, len(judge_text), chunk_size):
-                        chunk = judge_text[i : i + chunk_size]
-                        await websocket.send_json({
-                            "analysisId": analysis_id,
-                            "architecture": "both",
-                            "type": "llm_judge",
-                            "payload": chunk,
-                        })
-                    await websocket.send_json({
-                        "analysisId": analysis_id,
-                        "architecture": "both",
-                        "type": "llm_judge_done",
-                        "payload": "",
-                    })
-                    logger.info("WS %s: LLM Judge results sent", analysis_id[:8])
-                    logger.info("WS %s: LLM Judge metrics sent", analysis_id[:8])
 
             except Exception as exc:
                 logger.error(

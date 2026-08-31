@@ -6,7 +6,6 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 interface OutgoingMessage {
   text: string;
-  useLlmJudge: boolean;
 }
 
 export interface UseChatWebSocketCallbacks {
@@ -20,7 +19,7 @@ export interface UseChatWebSocketCallbacks {
 export interface UseChatWebSocketState {
   connectionStatus: ConnectionStatus;
   hasEverConnected: boolean;
-  sendMessage: (text: string, useLlmJudge: boolean) => void;
+  sendMessage: (text: string) => void;
 }
 
 /**
@@ -53,7 +52,7 @@ export function useChatWebSocket(
       if (!msg) break;
       ws.send(JSON.stringify({
         type: 'user_message',
-        payload: { text: msg.text, useLlmJudge: msg.useLlmJudge },
+        payload: { text: msg.text },
       }));
     }
   }, []);
@@ -132,15 +131,15 @@ export function useChatWebSocket(
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, useLlmJudge: boolean) => {
+    (text: string) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'user_message',
-          payload: { text, useLlmJudge },
+          payload: { text },
         }));
       } else {
-        outgoingQueueRef.current.push({ text, useLlmJudge });
+        outgoingQueueRef.current.push({ text });
       }
     },
     [],

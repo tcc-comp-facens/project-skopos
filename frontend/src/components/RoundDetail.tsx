@@ -40,8 +40,8 @@ export function RoundDetail({ snapshot }: RoundDetailProps): JSX.Element {
       <ComparativeSection
         comparativeReport={snapshot.comparativeReport}
         comparativeLoading={snapshot.comparativeLoading}
-        llmJudgeText={snapshot.llmJudgeText}
-        llmJudgeLoading={snapshot.llmJudgeLoading}
+        ragasText={snapshot.ragasText}
+        ragasLoading={snapshot.ragasLoading}
       />
     </div>
   );

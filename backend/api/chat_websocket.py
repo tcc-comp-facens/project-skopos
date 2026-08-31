@@ -10,7 +10,7 @@ não pode competir por ela.
 
 Protocolo:
   cliente → servidor:
-    {"type": "user_message", "payload": {"text": str, "useLlmJudge": bool}}
+    {"type": "user_message", "payload": {"text": str}}
     (uso de LLM é sempre ativo no backend — toggle removido do frontend)
   servidor → cliente:
     {"type": "user_ack", "payload": ""}
@@ -102,7 +102,6 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
             payload = raw.get("payload") or {}
             text = str(payload.get("text", ""))
             use_llm = True  # toggle removido do frontend — LLM sempre ativo
-            use_llm_judge = bool(payload.get("useLlmJudge", False))
             use_self_check = bool(payload.get("useSelfCheck", False))
 
             await websocket.send_json({"type": "user_ack", "payload": ""})
@@ -160,7 +159,6 @@ async def chat_websocket_endpoint(websocket: WebSocket, session_id: str) -> None
                 analysis_id, confirmation = run_chat_analysis(
                     params=result.params,
                     use_llm=use_llm,
-                    use_llm_judge=use_llm_judge,
                     source_question=text,
                     interpreted_via=result.interpreted_via,
                     interpreter=interpreter,

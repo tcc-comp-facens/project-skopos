@@ -9,7 +9,6 @@ import type { ActiveTab, ChatRound } from './types';
 
 export function App() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
-  const [useLlmJudge, setUseLlmJudge] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('user');
   const [rounds, setRounds] = useState<ChatRound[]>([]);
 
@@ -51,9 +50,6 @@ export function App() {
     );
   }, [ws]);
 
-  const isActiveRoundRunning =
-    !!analysisId && (ws.starLoading || ws.hierLoading || ws.comparativeLoading);
-
   return (
     <div className="app" data-testid="app">
       <Header />
@@ -62,7 +58,6 @@ export function App() {
 
       <div style={{ display: activeTab === 'user' ? 'block' : 'none' }}>
         <UserTab
-          useLlmJudge={useLlmJudge}
           onAnalysisStarted={handleAnalysisStarted}
           activeRoundId={analysisId}
           activeRoundWs={analysisId ? ws : null}
@@ -71,12 +66,7 @@ export function App() {
 
       <div style={{ display: activeTab === 'tech' ? 'block' : 'none' }}>
         <ErrorBoundary>
-          <TechTab
-            useLlmJudge={useLlmJudge}
-            onUseLlmJudgeChange={setUseLlmJudge}
-            rounds={rounds}
-            isActiveRoundRunning={isActiveRoundRunning}
-          />
+          <TechTab rounds={rounds} />
         </ErrorBoundary>
       </div>
     </div>

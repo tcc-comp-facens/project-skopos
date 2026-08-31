@@ -34,7 +34,6 @@ Componente principal. Gerencia o estado de **rodadas de chat** (`rounds: ChatRou
 
 - `analysisId` — id da análise ativa (rodada mais recente em andamento)
 - `rounds` — histórico de rodadas, cada uma com `{ id, question, startedAt, snapshot }`
-- `useLlm` (default `false`) e `useLlmJudge` (default `false`) — toggles compartilhados entre chat e aba técnica
 - `activeTab` (`'user'` | `'tech'`), iniciando em `'user'`
 - Deriva `winner` via `useMemo(() => parseWinner(ws.comparativeReport))`
 - `ws = useWebSocket(analysisId)` — um único hook de resultados, cujo estado é espelhado a cada atualização na rodada correspondente de `rounds` (via `useEffect`); quando a próxima rodada começa, `analysisId` muda, `useWebSocket` reseta sozinho, e o último snapshot espelhado fica **congelado** no array `rounds` — única fonte de verdade para rodadas passadas (a fila do backend é de consumidor único e é descartada ao terminar, então uma rodada antiga não pode ser "re-conectada")
@@ -53,7 +52,7 @@ Componente principal. Gerencia o estado de **rodadas de chat** (`rounds: ChatRou
 Chat de texto livre — autocontido, com sua própria conexão WebSocket (`useChatWebSocket`) para o turno de intenção. O resultado da análise disparada é acompanhado via `activeRoundWs` (o mesmo estado que alimenta a aba técnica), evitando duplicar o streaming de resultados.
 
 - Mensagem de boas-vindas busca `GET /api/data-range` para informar o intervalo de anos realmente disponível (best-effort — se falhar, mantém texto genérico)
-- `handleSend`: valida (`isBlank`/`isTooLong`), adiciona a mensagem do usuário e uma bolha de sistema vazia em streaming, chama `chat.sendMessage(text, useLlm, useLlmJudge)`
+- `handleSend`: valida (`isBlank`/`isTooLong`), adiciona a mensagem do usuário e uma bolha de sistema vazia em streaming, chama `chat.sendMessage(text)`
 - Callbacks do `useChatWebSocket`: `onChunk` (acrescenta token à bolha em streaming), `onDone` (marca fim do streaming), `onError` (bolha de erro), `onAnalysisStarted` (propaga para `App` via `onAnalysisStarted` prop)
 - Assim que a rodada ativa termina de carregar (`activeRoundWs` para de estar em loading), acrescenta uma bolha de **resumo** gerada por `formatRoundSummary` — cada `analysisId` só gera um resumo (guard via ref, evita duplicar em re-renders)
 - Indicador de status de conexão (`connectionStatus`) quando não está `'connected'`
@@ -88,8 +87,7 @@ Destinada a avaliadores técnicos e pesquisadores do TCC — agora **navegável 
 
 - `<RoundSelector>` — escolhe qual rodada inspecionar
 - A rodada mais recente é selecionada automaticamente assim que começa (`useEffect` que observa o tamanho de `rounds`); uma seleção manual do avaliador persiste até a próxima rodada começar
-- `<LlmControls>`, dois `<ArchitecturePanel>` lado a lado, `<QualityMetricsSection>`, `<ComparativeSection>` — todos alimentados pelo `snapshot` da rodada selecionada (`INITIAL_STATE` se nenhuma rodada existe ainda)
-- `disabled={isActiveRoundRunning}` nos toggles LLM — não faz sentido mudar `useLlm`/`useLlmJudge` no meio de uma análise em andamento
+- Dois `<ArchitecturePanel>` lado a lado, `<QualityMetricsSection>`, `<ComparativeSection>` — todos alimentados pelo `snapshot` da rodada selecionada (`INITIAL_STATE` se nenhuma rodada existe ainda)
 
 ### RoundSelector (`src/components/RoundSelector.tsx`)
 
@@ -117,25 +115,20 @@ interface ArchitecturePanelProps {
 }
 ```
 
-### LlmControls (`src/components/LlmControls.tsx`)
-
-Toggles de LLM e LLM Judge:
-- **LLM** — habilita/desabilita síntese textual via LLM (DeepSeek)
-- **LLM Judge** — habilita avaliação Q2+ (LLM-as-Judge). Desabilitado automaticamente quando o toggle LLM está desligado, ou quando uma rodada está em andamento (`disabled` prop)
-
 ### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)
 
 Cards de métricas de qualidade (via `ScoreCard`, `src/components/ScoreCard.tsx`) organizados em três grupos:
 - **Eficiência**: E1, E2
-- **Qualidade**: Q1, Q2, Q3
+- **Qualidade**: Q1, Q3
 - **Resiliência**: R1
 
-Cada `ScoreCard` exibe valores de ambas as arquiteturas lado a lado.
+Cada `ScoreCard` exibe valores de ambas as arquiteturas lado a lado. Não há card de fidelidade: ela agora vem do RAGAS, que é opcional, chega depois destes cards (eventos `ragas`/`ragas_done`) e é exibida no painel do relatório comparativo.
 
 ### ComparativeSection (`src/components/ComparativeSection.tsx`)
 
-Relatório comparativo e LLM Judge:
+Relatório comparativo e avaliação RAGAS:
 - Parsing linha a linha com formatação visual: títulos (`━━━`), vereditos (`→`), sucessos (`✓`), alertas (`✗`), bullets (`•`)
+- Painel RAGAS separado (`ragasText`/`ragasLoading`), com destaque para scores ≥ 0.80; um score ausente aparece como "não disponível", nunca como zero. O RAGAS chega **antes** do relatório (o veredito depende dele), então a seção aparece assim que o primeiro chunk de RAGAS chega, com o corpo do relatório ainda vazio
 - Loading cursor durante streaming
 
 ---
@@ -160,7 +153,7 @@ Error boundary genérico (classe React — é o único jeito de implementar `com
 
 ### useWebSocket (`src/hooks/useWebSocket.ts`)
 
-Streaming de **resultados** de uma análise (`/ws/{analysisId}`) — inalterado na essência desde antes do chat existir, mas o estado (`UseWebSocketState`) foi movido para `types/index.ts` (evita import circular com `ChatRound`, que também precisa desse tipo) e ganhou dois campos novos para o LLM Judge.
+Streaming de **resultados** de uma análise (`/ws/{analysisId}`) — inalterado na essência desde antes do chat existir, mas o estado (`UseWebSocketState`) foi movido para `types/index.ts` (evita import circular com `ChatRound`, que também precisa desse tipo) e ganhou dois campos novos para a avaliação RAGAS (`ragasText`, `ragasLoading`, alimentados pelos eventos `ragas`/`ragas_done`).
 
 ```typescript
 export const INITIAL_STATE: UseWebSocketState = {
@@ -178,7 +171,7 @@ export const INITIAL_STATE: UseWebSocketState = {
 - Conecta automaticamente quando `analysisId` muda; reseta todo o estado (`INITIAL_STATE`) nessa troca
 - Auto-reconnect em desconexão inesperada (máximo 3 tentativas, delay **linear**: `1000 * tentativa` ms)
 - Não reconecta em close code 1000 (fechamento limpo)
-- Processa eventos por `architecture` (`star` / `hierarchical` / `both`), incluindo `llm_judge`/`llm_judge_done` (acumula `llmJudgeText`, controla `llmJudgeLoading`)
+- Processa eventos por `architecture` (`star` / `hierarchical` / `both`), incluindo `ragas`/`ragas_done` (acumula `ragasText`, controla `ragasLoading`)
 
 ### useChatWebSocket (`src/hooks/useChatWebSocket.ts`)
 
@@ -210,7 +203,7 @@ export interface UseChatWebSocketCallbacks {
 interface WSEvent {
   analysisId: string;
   architecture: 'star' | 'hierarchical' | 'both';
-  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'llm_judge' | 'llm_judge_done';
+  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'ragas' | 'ragas_done';
   payload: string | BenchmarkMetrics | Record<string, unknown>;
 }
 
@@ -263,7 +256,7 @@ interface QualityMetrics {
 }
 interface ArchitectureQualityMetrics {
   efficiency: { E1: number; E2: number };
-  quality: { Q1: number; Q2: number; Q3: number };
+  quality: { Q1: number; Q3: number };
   resilience: { R1: number };
 }
 ```
@@ -342,7 +335,6 @@ Tema dark com CSS puro e paleta Sophia:
 | `src/components/ChatInterface.test.tsx` | Chat (envio, streaming, validação de mensagem) |
 | `src/components/TechTab.test.tsx` | Seleção de rodada, exibição de painéis |
 | `src/components/TabNav.test.tsx` | Navegação entre abas (acessibilidade) |
-| `src/components/LlmControls.test.tsx` | Toggles LLM/Judge (dependência, disabled) |
 | `src/components/WinnerPanel.test.tsx` | Painel do vencedor (texto, erro, título) |
 | `src/components/Header.test.tsx` | Identidade visual (Sophia, brasão) |
 | `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório comparativo |

@@ -23,8 +23,8 @@ const { EMPTY_WS_STATE, mockWsStates } = vi.hoisted(() => {
     comparativeReport: '',
     comparativeLoading: false,
     qualityMetrics: null,
-    llmJudgeText: '',
-    llmJudgeLoading: false,
+    ragasText: '',
+    ragasLoading: false,
     starAgentData: null,
     hierAgentData: null,
   };

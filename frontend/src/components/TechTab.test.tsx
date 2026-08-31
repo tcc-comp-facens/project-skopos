@@ -1,5 +1,5 @@
 /**
- * Tests for TechTab — só o LLM Judge toggle + o panorama de todas as
+ * Tests for TechTab — só o toggle da avaliação RAGAS + o panorama de todas as
  * rodadas da sessão (RoundOverview substituiu o antigo seletor de rodada
  * única — cobertura detalhada de expand/collapse está em
  * RoundOverview.test.tsx / RoundCard.test.tsx).
@@ -20,16 +20,15 @@ function makeRound(id: string, question: string): ChatRound {
 }
 
 describe('TechTab', () => {
-  const defaultProps = {
-    useLlmJudge: false,
-    onUseLlmJudgeChange: vi.fn(),
-    isActiveRoundRunning: false,
-  };
+  const defaultProps = {};
 
-  it('renders only the LLM Judge toggle (LLM toggle was removed)', () => {
+  it('no longer renders any LLM/RAGAS toggle', () => {
+    // A síntese via LLM e a avaliação RAGAS passaram a ser incondicionais
+    // — não há mais nada para o usuário alternar nesta aba.
     render(<TechTab {...defaultProps} rounds={[]} />);
-    expect(screen.getByTestId('llm-judge-toggle-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('ragas-toggle-input')).not.toBeInTheDocument();
     expect(screen.queryByTestId('llm-toggle-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('llm-controls')).not.toBeInTheDocument();
   });
 
   it('shows empty state when there are no rounds yet', () => {

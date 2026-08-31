@@ -10,12 +10,22 @@ E. Eficiência dos Agentes:
 
 Q. Qualidade da Resposta:
    - Q1: Deterministic consistency (outputs numéricos idênticos entre topologias)
-   - Q2: Faithfulness (texto reflete dados numéricos)
    - Q3: Completeness (todos os achados relevantes mencionados no texto)
-   - Q4: Structural quality (texto contém seções esperadas)
 
 R. Resiliência:
    - R1: Partial result coverage (agentes que completaram com sucesso)
+
+A fidelidade do texto aos dados (o antigo Q2) NÃO está mais aqui: é
+medida por `core/ragas_metrics.py`, que usa a biblioteca RAGAS (Es et
+al., 2024). As três implementações caseiras que existiam neste módulo
+— checklist por substring, claim-based "estilo RAGAS" e LLM-as-judge de
+1 a 5 — foram removidas; a última era justamente o baseline "GPT Score"
+que o paper do RAGAS mede como inferior à própria metodologia (0.72 vs
+0.95 de concordância com anotadores humanos, Tabela 4).
+
+Com isso tudo o que este módulo calcula é determinístico e gratuito:
+nenhuma função aqui chama o LLM. A avaliação que custa LLM roda à parte,
+de forma assíncrona, em `api/websocket.py`.
 
 Requisitos: 11.1, 11.2, 11.3, 11.4
 """
@@ -23,7 +33,6 @@ Requisitos: 11.1, 11.2, 11.3, 11.4
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -223,299 +232,6 @@ def compute_deterministic_consistency(
     }
 
 
-def compute_faithfulness(
-    correlacoes: list[dict],
-    anomalias: list[dict],
-    texto: str,
-    contexto_orcamentario: dict | None = None,
-    use_llm: bool = False,
-    caller: str = "faithfulness_claims",
-) -> dict[str, Any]:
-    """Q2 — Verifica se o texto do sintetizador reflete os dados numéricos.
-
-    Etapa 6 do PLANO_REFATORACAO.md (D8): reformulado para suportar dois
-    métodos de cálculo, escolhidos por `use_llm`, mantendo sempre a mesma
-    assinatura de retorno (`score`, `details`, entre outras chaves) para
-    não quebrar o frontend:
-
-    - `use_llm=False` (padrão — **comportamento inalterado**): checklist
-      determinístico por substring, gratuito e síncrono, chamado sempre
-      no caminho rápido de `/ws/{analysisId}` (antes do relatório).
-    - `use_llm=True`: claim-based, estilo RAGAS — usa
-      `core.claim_verifier.extract_claims`/`verify_claims` para extrair
-      afirmações do texto e verificar cada uma contra os dados brutos,
-      `score = claims_suportados / total_claims`. Envolve 2 chamadas LLM;
-      só deve ser acionado no caminho opcional (mesmo gate de
-      `use_llm_judge`), nunca no cálculo padrão — ver `compute_all_quality_metrics`.
-
-    Args:
-        correlacoes: Lista de correlações calculadas.
-        anomalias: Lista de anomalias detectadas.
-        texto: Texto gerado pelo sintetizador.
-        contexto_orcamentario: Usado apenas no modo claim-based (dado
-            adicional para `verify_claims`); ignorado no modo substring.
-        use_llm: Se True, usa o método claim-based via `claim_verifier`.
-        caller: Identificador para logging (ver core.llm_client),
-            repassado ao `claim_verifier` no modo claim-based.
-
-    Returns:
-        Dict com score (0.0 a 1.0), detalhes de hits/misses.
-    """
-    if use_llm:
-        return _compute_faithfulness_claims(
-            correlacoes, anomalias, contexto_orcamentario or {}, texto, caller
-        )
-
-    if not texto:
-        return {
-            "score": 0.0,
-            "total_checkpoints": 0,
-            "hits": 0,
-            "misses": 0,
-            "details": [],
-        }
-
-    texto_lower = texto.lower()
-    hits = 0
-    total = 0
-    details: list[dict[str, Any]] = []
-
-    # Verificar correlações fortes (classificação "alta")
-    for c in correlacoes:
-        if c.get("classificacao") != "alta":
-            continue
-        total += 1
-        subfuncao = c.get("subfuncao", 0)
-        tipo = c.get("tipo_indicador", "")
-        subfuncao_nome = SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao))
-
-        # Verificar se subfunção OU nome OU tipo indicador aparece no texto
-        found = (
-            str(subfuncao) in texto
-            or subfuncao_nome.lower() in texto_lower
-            or tipo.lower() in texto_lower
-        )
-        if found:
-            hits += 1
-        details.append({
-            "type": "correlacao_alta",
-            "subfuncao": subfuncao,
-            "tipo_indicador": tipo,
-            "found": found,
-        })
-
-    # Verificar todas as anomalias
-    for a in anomalias:
-        total += 1
-        subfuncao = a.get("subfuncao", 0)
-        tipo = a.get("tipo_indicador", "")
-        ano = a.get("ano", 0)
-        tipo_anomalia = a.get("tipo_anomalia", "")
-        subfuncao_nome = SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao))
-
-        # Verificar se ano E (subfunção OU nome OU tipo) aparecem no texto
-        ano_found = str(ano) in texto
-        entity_found = (
-            str(subfuncao) in texto
-            or subfuncao_nome.lower() in texto_lower
-            or tipo.lower() in texto_lower
-        )
-        found = ano_found and entity_found
-        if found:
-            hits += 1
-        details.append({
-            "type": "anomalia",
-            "subfuncao": subfuncao,
-            "tipo_indicador": tipo,
-            "ano": ano,
-            "tipo_anomalia": tipo_anomalia,
-            "found": found,
-        })
-
-    score = hits / total if total > 0 else 1.0
-
-    return {
-        "score": round(score, 4),
-        "total_checkpoints": total,
-        "hits": hits,
-        "misses": total - hits,
-        "details": details,
-    }
-
-
-def _compute_faithfulness_claims(
-    correlacoes: list[dict],
-    anomalias: list[dict],
-    contexto_orcamentario: dict,
-    texto: str,
-    caller: str,
-) -> dict[str, Any]:
-    """Q2 (claim-based, estilo RAGAS) — Etapa 6, D8.
-
-    Reaproveita `core.claim_verifier` (Etapa 4) sem a passada de revisão
-    (essa métrica só mede, não corrige o texto). Nunca lança exceção —
-    falha do LLM em qualquer passo resulta em `total_checkpoints=0`,
-    `score=1.0` (mesma convenção de "nada a penalizar" já usada no modo
-    substring quando não há correlações/anomalias fortes).
-    """
-    from core.claim_verifier import extract_claims, verify_claims
-
-    if not texto:
-        return {
-            "score": 0.0,
-            "method": "claim_based",
-            "total_checkpoints": 0,
-            "hits": 0,
-            "misses": 0,
-            "details": [],
-        }
-
-    try:
-        claims = extract_claims(texto, caller=caller)
-    except Exception as exc:
-        logger.warning("Faithfulness claim-based: extração de claims falhou — %s", exc)
-        claims = []
-
-    if not claims:
-        return {
-            "score": 1.0,
-            "method": "claim_based",
-            "total_checkpoints": 0,
-            "hits": 0,
-            "misses": 0,
-            "details": [],
-        }
-
-    dados = {
-        "correlacoes": correlacoes,
-        "anomalias": anomalias,
-        "contexto_orcamentario": contexto_orcamentario,
-    }
-    try:
-        verificacoes = verify_claims(claims, dados, caller=caller)
-    except Exception as exc:
-        logger.warning("Faithfulness claim-based: verificação de claims falhou — %s", exc)
-        verificacoes = []
-
-    total = len(verificacoes)
-    hits = sum(1 for v in verificacoes if v.get("suportado"))
-    score = hits / total if total > 0 else 1.0
-
-    return {
-        "score": round(score, 4),
-        "method": "claim_based",
-        "total_checkpoints": total,
-        "hits": hits,
-        "misses": total - hits,
-        "details": verificacoes,
-    }
-
-
-def compute_faithfulness_llm(
-    correlacoes: list[dict],
-    anomalias: list[dict],
-    contexto_orcamentario: dict,
-    texto: str,
-    caller: str = "llm_judge",
-) -> dict[str, Any]:
-    """Q2 (LLM-as-judge) — Avalia faithfulness via chamada ao LLM.
-
-    Envia os dados numéricos e o texto gerado para o LLM e pede
-    uma avaliação de fidelidade estruturada numa escala de 1 a 5.
-
-    Args:
-        correlacoes: Lista de correlações calculadas.
-        anomalias: Lista de anomalias detectadas.
-        contexto_orcamentario: Dict com tendências orçamentárias.
-        texto: Texto gerado pelo sintetizador.
-        caller: Identificador para logging (ver core.llm_client) — por
-            padrão só "llm_judge"; `compute_all_quality_metrics` passa
-            algo como "llm_judge-star"/"llm_judge-hierarchical".
-
-    Returns:
-        Dict com score (1-5), justificativa e método usado.
-    """
-    import core.llm_client as llm_client
-
-    # Formatar dados de forma legível para o LLM
-    corr_summary = []
-    for c in correlacoes:
-        sf = c.get("subfuncao", "?")
-        tipo = c.get("tipo_indicador", "?")
-        sp = c.get("spearman", 0)
-        cls = c.get("classificacao", "?")
-        corr_summary.append(f"  - Subfunção {sf} × {tipo}: Spearman={sp}, classificação={cls}")
-
-    anom_summary = []
-    for a in anomalias:
-        sf = a.get("subfuncao", "?")
-        tipo = a.get("tipo_indicador", "?")
-        ano = a.get("ano", "?")
-        tipo_a = a.get("tipo_anomalia", "?")
-        anom_summary.append(f"  - {ano}: subfunção {sf} × {tipo} → {tipo_a}")
-
-    ctx_summary = []
-    for sf_key, dados in contexto_orcamentario.items():
-        if isinstance(dados, dict):
-            tend = dados.get("tendencia", "?")
-            var = dados.get("variacao_media_percentual", 0)
-            ctx_summary.append(f"  - Subfunção {sf_key}: tendência={tend}, variação média={var}%")
-
-    prompt = (
-        "Você é um avaliador especializado em qualidade de textos analíticos sobre "
-        "gastos públicos em saúde. Sua tarefa é avaliar se o TEXTO GERADO abaixo é "
-        "fiel aos DADOS NUMÉRICOS fornecidos.\n\n"
-        "DADOS NUMÉRICOS:\n\n"
-        f"Correlações ({len(correlacoes)} pares):\n"
-        + ("\n".join(corr_summary) if corr_summary else "  Nenhuma correlação calculada") + "\n\n"
-        f"Anomalias ({len(anomalias)} detectadas):\n"
-        + ("\n".join(anom_summary) if anom_summary else "  Nenhuma anomalia detectada") + "\n\n"
-        f"Contexto Orçamentário ({len(contexto_orcamentario)} subfunções):\n"
-        + ("\n".join(ctx_summary) if ctx_summary else "  Sem contexto orçamentário") + "\n\n"
-        "TEXTO GERADO:\n"
-        f"{texto}\n\n"
-        "INSTRUÇÕES DE AVALIAÇÃO:\n"
-        "Avalie o texto nos seguintes critérios:\n"
-        "1. ACURÁCIA: O texto apresenta os dados corretamente, sem inventar valores?\n"
-        "2. COBERTURA: O texto menciona as correlações fortes, anomalias e tendências?\n"
-        "3. COERÊNCIA: As conclusões do texto são consistentes com os dados?\n\n"
-        "Responda APENAS com um JSON válido no formato abaixo (sem texto antes ou depois):\n"
-        "{\n"
-        '  "score": <1-5>,\n'
-        '  "justificativa": "<avaliação em 2-3 frases cobrindo acurácia, cobertura e coerência>"\n'
-        "}\n\n"
-        "Escala:\n"
-        "1 = Texto contradiz ou inventa dados\n"
-        "2 = Texto omite a maioria dos achados relevantes\n"
-        "3 = Texto parcialmente fiel, com omissões significativas\n"
-        "4 = Texto majoritariamente fiel, com omissões menores\n"
-        "5 = Texto completamente fiel e coerente com os dados"
-    )
-
-    try:
-        response = llm_client.generate(prompt, caller=caller)
-        if response:
-            import json
-            json_match = re.search(r'\{[^}]+\}', response)
-            if json_match:
-                parsed = json.loads(json_match.group())
-                return {
-                    "method": "llm_as_judge",
-                    "score": parsed.get("score", 0),
-                    "justificativa": parsed.get("justificativa", ""),
-                    "raw_response": response,
-                }
-    except Exception as exc:
-        logger.warning("Faithfulness LLM evaluation failed: %s", exc)
-
-    return {
-        "method": "llm_as_judge",
-        "score": 0,
-        "justificativa": "LLM indisponível para avaliação",
-        "raw_response": None,
-    }
-
-
 def compute_completeness(
     correlacoes: list[dict],
     anomalias: list[dict],
@@ -524,9 +240,9 @@ def compute_completeness(
 ) -> dict[str, Any]:
     """Q3 — Verifica se todos os achados relevantes aparecem no texto.
 
-    Diferente de faithfulness (que verifica se o que está no texto é
-    verdadeiro), completeness verifica se TUDO que deveria estar no
-    texto está lá.
+    Diferente da fidelidade medida pelo RAGAS (que verifica se o que está
+    no texto é sustentado pelos dados), completeness verifica se TUDO que
+    deveria estar no texto está lá — e faz isso sem chamar o LLM.
 
     Args:
         correlacoes: Lista de correlações calculadas.
@@ -562,17 +278,27 @@ def compute_completeness(
         ):
             corr_found += 1
 
-    # 2. Cobertura de anomalias
+    # 2. Cobertura de anomalias — verificada anomalia a anomalia.
+    #
+    # A versão anterior fazia uma busca GLOBAL por palavra-chave de
+    # categoria ("ineficiência", "alto gasto", ...): uma única ocorrência
+    # de qualquer uma delas marcava TODAS as anomalias daquele tipo como
+    # cobertas, então o score não distinguia um texto que menciona 1 de
+    # 20 anomalias de um que menciona as 20. Agora cada anomalia é
+    # procurada pela sua própria identidade (ano + subfunção/indicador),
+    # o mesmo critério que o resto do módulo usa.
     anom_total = len(anomalias)
     anom_found = 0
     for a in anomalias:
-        tipo_anomalia = a.get("tipo_anomalia", "")
-        # Verificar menção do tipo de anomalia no texto
-        if tipo_anomalia == "alto_gasto_baixo_resultado":
-            keywords = ["alto gasto", "gasto acima", "ineficiência", "ineficiente", "resultado insatisfatório"]
-        else:
-            keywords = ["baixo gasto", "gasto abaixo", "eficiência", "eficiente", "resultado positivo"]
-        if any(kw in texto_lower for kw in keywords):
+        subfuncao = a.get("subfuncao", 0)
+        tipo = a.get("tipo_indicador", "")
+        ano = a.get("ano", 0)
+        subfuncao_nome = SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao))
+        if str(ano) in texto and (
+            str(subfuncao) in texto
+            or subfuncao_nome.lower() in texto_lower
+            or (tipo and tipo.lower() in texto_lower)
+        ):
             anom_found += 1
 
     # 3. Cobertura de contexto orçamentário
@@ -671,7 +397,8 @@ def compute_token_cost(token_usage: dict[str, int] | None) -> dict[str, Any]:
 
     Args:
         token_usage: Snapshot de `TokenBucket.snapshot()`, ou None se o
-            segmento não rodou (ex.: LLM Judge quando `use_llm_judge=False`).
+            segmento não rodou (ex.: a avaliação RAGAS quando o usuário
+            não a solicitou).
 
     Returns:
         Dict com prompt_tokens, completion_tokens, total_tokens, call_count.
@@ -808,30 +535,27 @@ def compute_all_quality_metrics(
     hier_result: dict[str, Any],
     star_agent_metrics: list[dict],
     hier_agent_metrics: list[dict],
-    use_llm_judge: bool = False,
-    use_llm: bool = True,
     star_wall_clock_ms: float = 0,
     hier_wall_clock_ms: float = 0,
     star_token_usage: dict[str, int] | None = None,
     hier_token_usage: dict[str, int] | None = None,
     intent_token_usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Calcula todas as métricas de qualidade e eficiência.
+    """Calcula todas as métricas determinísticas de qualidade e eficiência.
 
     Função de conveniência que agrega todas as métricas em um único
     dicionário, pronto para ser enviado via WebSocket ou persistido.
+
+    **Nenhuma métrica aqui chama o LLM** — esta função é sempre gratuita e
+    reproduzível. A avaliação da fidelidade do texto (RAGAS) é assíncrona
+    e roda separada, em `api/websocket.py`, encaixando o resultado em
+    `quality.{star,hierarchical}.ragas`.
 
     Args:
         star_result: Resultado completo da topologia estrela.
         hier_result: Resultado completo da topologia hierárquica.
         star_agent_metrics: Métricas por agente da estrela.
         hier_agent_metrics: Métricas por agente da hierárquica.
-        use_llm_judge: Se True, também executa avaliação via LLM (LLM
-            Judge) **e** a reformulação claim-based de Q2 (Etapa 6, D8) —
-            os dois únicos pontos desta função que gastam LLM extra além
-            do próprio pipeline, por isso compartilham o mesmo gate.
-        use_llm: Se False, LLM Judge/Q2 claim-based são desabilitados
-            independente de use_llm_judge.
         star_wall_clock_ms: Tempo real (wall-clock) da estrela em ms.
         hier_wall_clock_ms: Tempo real (wall-clock) da hierárquica em ms.
         star_token_usage: Snapshot de `TokenBucket` do pipeline estrela
@@ -877,11 +601,6 @@ def compute_all_quality_metrics(
             star_result, hier_result
         ),
         "star": {
-            "faithfulness": compute_faithfulness(
-                star_result.get("correlacoes", []),
-                star_result.get("anomalias", []),
-                star_result.get("texto_analise", ""),
-            ),
             "completeness": compute_completeness(
                 star_result.get("correlacoes", []),
                 star_result.get("anomalias", []),
@@ -890,11 +609,6 @@ def compute_all_quality_metrics(
             ),
         },
         "hierarchical": {
-            "faithfulness": compute_faithfulness(
-                hier_result.get("correlacoes", []),
-                hier_result.get("anomalias", []),
-                hier_result.get("texto_analise", ""),
-            ),
             "completeness": compute_completeness(
                 hier_result.get("correlacoes", []),
                 hier_result.get("anomalias", []),
@@ -903,46 +617,6 @@ def compute_all_quality_metrics(
             ),
         },
     }
-
-    # LLM-as-judge + Q2 claim-based (Etapa 6, D8) — ambos exigem use_llm
-    # ativo (sem sentido avaliar texto de fallback determinístico) e
-    # compartilham o gate use_llm_judge, já que ambos são LLM extra além
-    # do próprio pipeline.
-    if use_llm_judge and use_llm:
-        metrics["quality"]["star"]["faithfulness_llm"] = (
-            compute_faithfulness_llm(
-                star_result.get("correlacoes", []),
-                star_result.get("anomalias", []),
-                star_result.get("contexto_orcamentario", {}),
-                star_result.get("texto_analise", ""),
-                caller="llm_judge-star",
-            )
-        )
-        metrics["quality"]["hierarchical"]["faithfulness_llm"] = (
-            compute_faithfulness_llm(
-                hier_result.get("correlacoes", []),
-                hier_result.get("anomalias", []),
-                hier_result.get("contexto_orcamentario", {}),
-                hier_result.get("texto_analise", ""),
-                caller="llm_judge-hierarchical",
-            )
-        )
-        metrics["quality"]["star"]["faithfulness_claims"] = compute_faithfulness(
-            star_result.get("correlacoes", []),
-            star_result.get("anomalias", []),
-            star_result.get("texto_analise", ""),
-            star_result.get("contexto_orcamentario", {}),
-            use_llm=True,
-            caller="faithfulness_claims-star",
-        )
-        metrics["quality"]["hierarchical"]["faithfulness_claims"] = compute_faithfulness(
-            hier_result.get("correlacoes", []),
-            hier_result.get("anomalias", []),
-            hier_result.get("texto_analise", ""),
-            hier_result.get("contexto_orcamentario", {}),
-            use_llm=True,
-            caller="faithfulness_claims-hierarchical",
-        )
 
     # --- C. Resiliência ---
     metrics["resilience"] = {
@@ -976,12 +650,10 @@ def compute_all_quality_metrics(
     }
 
     logger.info(
-        "Quality metrics computed: consistency=%s, star_faithfulness=%.2f, "
-        "hier_faithfulness=%.2f, star_completeness=%.2f, hier_completeness=%.2f, "
+        "Quality metrics computed: consistency=%s, "
+        "star_completeness=%.2f, hier_completeness=%.2f, "
         "star_tokens=%d, hier_tokens=%d",
         metrics["quality"]["deterministic_consistency"]["all_identical"],
-        metrics["quality"]["star"]["faithfulness"]["score"],
-        metrics["quality"]["hierarchical"]["faithfulness"]["score"],
         metrics["quality"]["star"]["completeness"]["score"],
         metrics["quality"]["hierarchical"]["completeness"]["score"],
         metrics["cost"]["star"]["total_tokens"],
@@ -996,6 +668,83 @@ def compute_all_quality_metrics(
 # =========================================================================
 
 
+# Diferença mínima de fidelidade para desempatar as topologias. O juiz é
+# um LLM: reavaliar o mesmo texto produz variação, então uma diferença de
+# 0,01 não distingue arquitetura, distingue ruído. Abaixo deste valor o
+# veredito cai para a completude e diz que caiu. O número é escolha de
+# engenharia — nenhuma fonte prescreve um limiar (ver D25 no doc).
+FAITHFULNESS_TIE_THRESHOLD = 0.05
+
+
+def _ragas_faithfulness(ragas: dict[str, dict[str, Any]] | None, arch: str) -> float | None:
+    """Score de fidelidade do RAGAS de uma arquitetura, ou None.
+
+    None significa "não medido" (juiz indisponível, métrica falhou), que é
+    diferente de zero. Quem decide o vencedor precisa tratar os dois casos
+    de forma distinta — ver `_decide_winner`.
+    """
+    if not ragas:
+        return None
+    metric = ((ragas.get(arch) or {}).get("metrics") or {}).get("faithfulness") or {}
+    score = metric.get("score")
+    return score if isinstance(score, (int, float)) else None
+
+
+def _decide_winner(
+    quality: dict[str, Any],
+    ragas: dict[str, dict[str, Any]] | None,
+    star_total: float,
+    hier_total: float,
+) -> tuple[str, str]:
+    """Escolhe a topologia vencedora e o critério que decidiu.
+
+    Ordem lexicográfica: fidelidade (RAGAS) > completude (Q3) > tempo. A
+    fidelidade vem primeiro por ser a única métrica de qualidade textual
+    com validação publicada (Es et al., 2024); o tempo vem por último
+    porque uma resposta errada mais rápida não é melhor.
+
+    A fidelidade só é usada quando **as duas** arquiteturas têm score.
+    Tratar um `None` como zero entregaria a vitória por falha de medição
+    do adversário, não por qualidade própria — por isso, se qualquer uma
+    das duas não foi medida, o critério cai para completude e isso é dito
+    em voz alta no relatório.
+
+    Diferenças menores que `FAITHFULNESS_TIE_THRESHOLD` contam como
+    empate: o juiz é um LLM e reproduz o mesmo texto com alguma variação,
+    então decidir a topologia vencedora por 0,01 seria decidir por ruído.
+
+    Returns:
+        (vencedor, critério) — vencedor em {"star", "hierarchical", "tie"}.
+    """
+    star_faith = _ragas_faithfulness(ragas, "star")
+    hier_faith = _ragas_faithfulness(ragas, "hierarchical")
+    faithfulness_medida = star_faith is not None and hier_faith is not None
+
+    if faithfulness_medida and abs(star_faith - hier_faith) >= FAITHFULNESS_TIE_THRESHOLD:
+        return ("star" if star_faith > hier_faith else "hierarchical", "fidelidade")
+
+    qual = quality.get("quality", {})
+    star_comp = qual.get("star", {}).get("completeness", {}).get("score", 0)
+    hier_comp = qual.get("hierarchical", {}).get("completeness", {}).get("score", 0)
+
+    if not faithfulness_medida:
+        criterio = "completude (fidelidade não medida)"
+    elif star_faith == hier_faith:
+        criterio = "completude"
+    else:
+        criterio = "completude (fidelidade tecnicamente empatada)"
+    if star_comp != hier_comp:
+        return ("star" if star_comp > hier_comp else "hierarchical", criterio)
+
+    if star_total != hier_total:
+        return (
+            "star" if star_total < hier_total else "hierarchical",
+            "eficiência (empate em fidelidade e completude)",
+        )
+
+    return ("tie", criterio)
+
+
 def generate_comparative_report(
     quality: dict[str, Any],
     star_agent_metrics: list[dict],
@@ -1005,6 +754,7 @@ def generate_comparative_report(
     hier_wall_clock_ms: float = 0,
     star_result: dict[str, Any] | None = None,
     hier_result: dict[str, Any] | None = None,
+    ragas: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Gera relatório textual comparativo entre as duas topologias.
 
@@ -1113,56 +863,45 @@ def generate_comparative_report(
         sorted_anoms = sorted(star_anoms, key=lambda a: (a.get("ano", 0), a.get("subfuncao", 0)))
         sections.append(f"  Anomalias ({len(sorted_anoms)} detectadas):")
         sections.append("")
-        # Cabeçalho da tabela
-        sections.append(f"    {'Ano':<6}{'Subfunção':<28}{'Indicador':<16}{'Diagnóstico'}")
-        sections.append(f"    {'─'*6}{'─'*28}{'─'*16}{'─'*20}")
-        for a in sorted_anoms:
-            sf = a.get("subfuncao", "?")
-            sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
-            tipo = a.get("tipo_indicador", "?")
-            ano = str(a.get("ano", "?"))
-            tipo_a = a.get("tipo_anomalia", "?")
-            label = "ineficiência" if tipo_a == "alto_gasto_baixo_resultado" else "eficiência"
+
+        # Larguras derivadas do conteúdo, não fixas: nomes de subfunção
+        # ("Suporte Profilático e Terapêutico", 33 chars) e indicadores
+        # ("sifilis_adquirida", 17) estouravam as constantes 28/16 e as
+        # colunas colidiam no relatório ("Terapêuticodengue").
+        linhas = [
+            (
+                str(a.get("ano", "?")),
+                SUBFUNCAO_NOMES.get(a.get("subfuncao", "?"), str(a.get("subfuncao", "?"))),
+                str(a.get("tipo_indicador", "?")),
+                "ineficiência"
+                if a.get("tipo_anomalia") == "alto_gasto_baixo_resultado"
+                else "eficiência",
+            )
+            for a in sorted_anoms
+        ]
+        w_ano = max(len("Ano"), *(len(l[0]) for l in linhas)) + 2
+        w_sf = max(len("Subfunção"), *(len(l[1]) for l in linhas)) + 2
+        w_ind = max(len("Indicador"), *(len(l[2]) for l in linhas)) + 2
+        w_diag = max(len("Diagnóstico"), *(len(l[3]) for l in linhas))
+
+        sections.append(
+            f"    {'Ano':<{w_ano}}{'Subfunção':<{w_sf}}"
+            f"{'Indicador':<{w_ind}}{'Diagnóstico'}"
+        )
+        sections.append(
+            f"    {'─' * w_ano}{'─' * w_sf}{'─' * w_ind}{'─' * w_diag}"
+        )
+        for ano, sf_nome, tipo, label in linhas:
             sections.append(
-                f"    {ano:<6}{sf_nome:<28}{tipo:<16}{label}"
+                f"    {ano:<{w_ano}}{sf_nome:<{w_sf}}{tipo:<{w_ind}}{label}"
             )
         sections.append("")
 
     for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
         arch_qual = qual.get(arch_key, {})
-        faith_data = arch_qual.get("faithfulness", {})
         comp_data = arch_qual.get("completeness", {})
-        faith = faith_data.get("score", 0)
         comp = comp_data.get("score", 0)
-        sections.append(
-            f"  {arch_name}: fidelidade {faith:.0%} | "
-            f"completude {comp:.0%}"
-        )
-
-        # Detalhar faithfulness (hits/misses)
-        faith_hits = faith_data.get("hits", 0)
-        faith_total = faith_data.get("total_checkpoints", 0)
-        faith_misses = faith_data.get("misses", 0)
-        if faith_total > 0:
-            sections.append(
-                f"    Q2: {faith_hits}/{faith_total} checkpoints verificados"
-            )
-            if faith_misses > 0:
-                details = faith_data.get("details", [])
-                for d in details:
-                    if not d.get("found"):
-                        d_type = d.get("type", "?")
-                        sf = d.get("subfuncao", "?")
-                        tipo = d.get("tipo_indicador", "?")
-                        if d_type == "anomalia":
-                            ano = d.get("ano", "?")
-                            sections.append(
-                                f"      ✗ Anomalia não mencionada: {ano} sf{sf} × {tipo}"
-                            )
-                        else:
-                            sections.append(
-                                f"      ✗ Correlação alta não mencionada: sf{sf} × {tipo}"
-                            )
+        sections.append(f"  {arch_name}: completude {comp:.0%}")
 
         # Detalhar completeness
         comp_details = comp_data.get("details", {})
@@ -1198,20 +937,29 @@ def generate_comparative_report(
     sections.append("")
 
     # ── Conclusão ──
-    # Prioridade: qualidade (fidelidade) > eficiência.
-    # A resposta mais confiável é preferida sobre a mais rápida.
+    # Ordem lexicográfica: fidelidade (RAGAS) > completude (Q3) > tempo.
+    # Ver `_decide_winner` para o porquê de cada nível e para o tratamento
+    # de fidelidade não medida.
     sections.append("━━━ Conclusão ━━━")
     sections.append("")
 
-    star_faith = qual.get("star", {}).get("faithfulness", {}).get("score", 0)
-    hier_faith = qual.get("hierarchical", {}).get("faithfulness", {}).get("score", 0)
+    star_faith = _ragas_faithfulness(ragas, "star")
+    hier_faith = _ragas_faithfulness(ragas, "hierarchical")
 
-    if star_faith > hier_faith:
-        sections.append("  • Qualidade: Estrela")
-    elif hier_faith > star_faith:
-        sections.append("  • Qualidade: Hierárquica")
-    else:
-        sections.append("  • Qualidade: Empate")
+    def _fmt(score: float | None) -> str:
+        return "não medida" if score is None else f"{score:.0%}"
+
+    if star_faith is not None or hier_faith is not None:
+        sections.append(
+            f"  • Fidelidade (RAGAS): Estrela {_fmt(star_faith)} | "
+            f"Hierárquica {_fmt(hier_faith)}"
+        )
+
+    star_comp = qual.get("star", {}).get("completeness", {}).get("score", 0)
+    hier_comp = qual.get("hierarchical", {}).get("completeness", {}).get("score", 0)
+    sections.append(
+        f"  • Completude: Estrela {star_comp:.0%} | Hierárquica {hier_comp:.0%}"
+    )
 
     if star_total < hier_total:
         sections.append("  • Eficiência: Estrela")
@@ -1225,18 +973,18 @@ def generate_comparative_report(
 
     sections.append("")
 
-    # Decisão final: qualidade tem peso maior que eficiência
-    if star_faith > hier_faith:
-        sections.append("  → Topologia Estrela apresentou melhor desempenho geral.")
-    elif hier_faith > star_faith:
-        sections.append("  → Topologia Hierárquica apresentou melhor desempenho geral.")
-    elif star_total < hier_total:
-        # Empate em qualidade — desempata por eficiência
-        sections.append("  → Topologia Estrela apresentou melhor desempenho geral (desempate por eficiência).")
-    elif hier_total < star_total:
-        sections.append("  → Topologia Hierárquica apresentou melhor desempenho geral (desempate por eficiência).")
+    winner, criterio = _decide_winner(quality, ragas, star_total, hier_total)
+    nomes = {"star": "Estrela", "hierarchical": "Hierárquica"}
+    if winner == "tie":
+        sections.append(
+            "  → Ambas as topologias apresentaram desempenho equivalente "
+            f"(critério: {criterio})."
+        )
     else:
-        sections.append("  → Ambas as topologias apresentaram desempenho equivalente.")
+        sections.append(
+            f"  → Topologia {nomes[winner]} apresentou melhor desempenho geral "
+            f"(critério: {criterio})."
+        )
 
     sections.append("")
     sections.append("=" * 60)

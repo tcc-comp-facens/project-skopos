@@ -11,3 +11,12 @@ xlrd
 pandas
 scipy
 hypothesis
+
+# Avaliação da qualidade da resposta (core/ragas_metrics.py).
+# Faixa fixada: a 0.4 já marcou o namespace clássico de métricas como
+# deprecado (acessado via __getattr__), então uma 0.5 pode movê-lo.
+ragas>=0.4,<0.5
+# A ragas declara langchain-community sem teto, mas importa
+# `langchain_community.chat_models.vertexai`, que sumiu na 0.4 — sem este
+# pin o `import ragas` quebra com ModuleNotFoundError já no build.
+langchain-community<0.4

@@ -180,7 +180,7 @@ body {
   }
 }
 
-/* ===== 9. LlmControls ===== */
+/* ===== 9. Toggles (LlmControls removido — nada a alternar) ===== */
 .llm-controls {
   display: flex;
   align-items: center;
@@ -588,8 +588,8 @@ body {
   height: 6px;
 }
 
-/* LLM Judge Section */
-.llm-judge-body {
+/* Avaliação RAGAS */
+.ragas-body {
   margin-top: 16px;
   padding: 16px 20px;
   background: var(--surface-input);
@@ -598,7 +598,7 @@ body {
   border-left: 3px solid var(--sophia-gold);
 }
 
-.judge-subtitle {
+.ragas-subtitle {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-muted);
@@ -608,7 +608,7 @@ body {
   margin-bottom: 8px;
 }
 
-.judge-score {
+.ragas-score {
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   font-size: 0.95rem;
   font-weight: 600;
@@ -619,12 +619,12 @@ body {
   border-radius: 6px;
 }
 
-.judge-score.good {
+.ragas-score.good {
   color: var(--color-success);
   background: rgba(76, 175, 125, 0.08);
 }
 
-.judge-arch-label {
+.ragas-arch-label {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--sophia-light);
@@ -632,7 +632,7 @@ body {
   margin-bottom: 4px;
 }
 
-.judge-justification {
+.ragas-justification {
   font-size: 0.84rem;
   line-height: 1.7;
   color: var(--text-secondary);
@@ -665,7 +665,7 @@ body {
   border-top-color: var(--sophia-gold);
 }
 
-.judge-loading-indicator {
+.ragas-loading-indicator {
   display: flex;
   align-items: center;
   gap: 10px;

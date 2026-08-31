@@ -22,10 +22,13 @@ JSON malformado) retorna o texto original sem alterações — este módulo
 nunca lança exceção para o caller, seguindo o mesmo padrão de degradação
 graciosa do resto do sistema.
 
-Reaproveitável pela Etapa 6 (métrica Q2 reformulada como faithfulness
-claim-based, estilo RAGAS) — `extract_claims`/`verify_claims` já produzem
-exatamente o par (claim, suportado) que essa métrica precisa, sem a
-passada de revisão.
+Este módulo **corrige** o texto, não o mede: é parte do pipeline, não do
+eixo de métricas. A medição de fidelidade fica em `core/ragas_metrics.py`,
+que usa a biblioteca RAGAS. Houve uma métrica Q2 "claim-based, estilo
+RAGAS" que reaproveitava `extract_claims`/`verify_claims` daqui; ela foi
+removida em favor da biblioteca de verdade — misturar o mecanismo que
+edita o texto com o instrumento que o avalia também deixava a medida
+dependente do próprio corretor.
 """
 
 from __future__ import annotations

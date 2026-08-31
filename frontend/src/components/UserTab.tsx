@@ -11,14 +11,12 @@ import type { UseWebSocketState } from '../types';
  * Requirements: 3.6, 4.1, 4.2, 4.3, 4.5, 10.3, 10.4 + spec realtime-chat-interface
  */
 export interface UserTabProps {
-  useLlmJudge: boolean;
   onAnalysisStarted: (analysisId: string, question: string) => void;
   activeRoundId: string | null;
   activeRoundWs: UseWebSocketState | null;
 }
 
 export function UserTab({
-  useLlmJudge,
   onAnalysisStarted,
   activeRoundId,
   activeRoundWs,
@@ -32,7 +30,6 @@ export function UserTab({
       data-testid="user-tab"
     >
       <ChatInterface
-        useLlmJudge={useLlmJudge}
         onAnalysisStarted={onAnalysisStarted}
         activeRoundId={activeRoundId}
         activeRoundWs={activeRoundWs}

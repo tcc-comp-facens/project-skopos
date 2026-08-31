@@ -16,9 +16,11 @@ const EFFICIENCY_METRICS = [
   { key: 'E2' as const, label: 'Latency breakdown' },
 ];
 
+// Só as métricas determinísticas. A fidelidade (o antigo card Q2) vem
+// agora do RAGAS: é opcional, custa LLM e chega depois destes cards —
+// aparece no painel do relatório comparativo (ComparativeSection).
 const QUALITY_METRICS = [
   { key: 'Q1' as const, label: 'Consistência determinística' },
-  { key: 'Q2' as const, label: 'Faithfulness' },
   { key: 'Q3' as const, label: 'Completeness' },
 ];
 
@@ -93,7 +95,6 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         },
         quality: {
           Q1: extractNumber(qual.deterministic_consistency) ?? 0,
-          Q2: extractNumber(starQual?.faithfulness) ?? 0,
           Q3: extractNumber(starQual?.completeness) ?? 0,
         },
         resilience: {
@@ -107,7 +108,6 @@ function normalizeMetrics(raw: unknown): QualityMetrics | null {
         },
         quality: {
           Q1: extractNumber(qual.deterministic_consistency) ?? 0,
-          Q2: extractNumber(hierQual?.faithfulness) ?? 0,
           Q3: extractNumber(hierQual?.completeness) ?? 0,
         },
         resilience: {

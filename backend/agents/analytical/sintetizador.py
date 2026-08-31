@@ -1,8 +1,9 @@
 """
 Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (DeepSeek)
-a partir de correlações, anomalias e contexto orçamentário.
+Gera texto consolidado de análise via LLM (provedor configurado em
+`LLM_PROVIDER` — DeepSeek por default, OpenAI opcional) a partir de
+correlações, anomalias e contexto orçamentário.
 
 Quando o LLM está indisponível, gera texto estruturado como fallback.
 
@@ -35,6 +36,26 @@ SUBFUNCAO_NOMES: dict[int, str] = {
     302: "Assistência Hospitalar",
     303: "Suporte Profilático",
     305: "Vigilância Epidemiológica",
+}
+
+# Afirmações que o prompt FORNECE ao modelo (não vêm dos dados analisados)
+# e que ele é instruído a repetir no texto. São constantes de módulo porque
+# `core/ragas_metrics.py` também as consome: em termos de RAG elas fazem
+# parte do contexto sobre o qual a geração se apoia, então precisam chegar
+# ao juiz da métrica de fidelidade. Duplicar as strings lá faria o contexto
+# do juiz divergir deste prompt na primeira edição — e o texto passaria a
+# ser reprovado por afirmar exatamente o que mandamos afirmar.
+CONTEXTO_PANDEMIA = (
+    "O ano de 2020, 2021 e 2022 foi impactado pela pandemia de COVID-19, "
+    "o que pode explicar variações atípicas nos gastos e indicadores desse "
+    "período."
+)
+
+TRADUCAO_SUBFUNCOES: dict[int, str] = {
+    301: "investimento em postos de saúde e equipes de família",
+    302: "investimento em hospitais e atendimentos especializados",
+    303: "investimento em medicamentos e insumos",
+    305: "investimento em prevenção de epidemias e vigilância sanitária",
 }
 
 
@@ -283,8 +304,7 @@ class TextSynthesizer:
             "informativo sobre como o dinheiro público investido em saúde se relaciona "
             "com os resultados de saúde da população.\n\n"
             "CONTEXTO IMPORTANTE:\n"
-            "- O ano de 2020, 2021 e 2022 foi impactado pela pandemia de COVID-19, o que pode "
-            "explicar variações atípicas nos gastos e indicadores desse período.\n"
+            f"- {CONTEXTO_PANDEMIA}\n"
             "- Sempre mencione esse fator ao interpretar dados que incluam 2020 até 2022.\n\n"
             "REGRAS DE LINGUAGEM:\n"
             "- Use linguagem simples e direta, como se explicasse para um vizinho\n"
@@ -292,10 +312,11 @@ class TextSynthesizer:
             "- Use exemplos concretos e comparações do cotidiano\n"
             "- Prefira 'relação forte/moderada/fraca' em vez de coeficientes numéricos\n"
             "- Traduza subfunções para linguagem comum:\n"
-            "  301 = investimento em postos de saúde e equipes de família\n"
-            "  302 = investimento em hospitais e atendimentos especializados\n"
-            "  303 = investimento em medicamentos e insumos\n"
-            "  305 = investimento em prevenção de epidemias e vigilância sanitária\n"
+            + "".join(
+                f"  {codigo} = {traducao}\n"
+                for codigo, traducao in sorted(TRADUCAO_SUBFUNCOES.items())
+            )
+            +
             "- Diga o que os números significam para a vida das pessoas\n"
             "- Cada correlação abaixo já vem com um campo \"leitura\" dizendo se o "
             "sinal (positivo/negativo) é DESEJÁVEL ou INDESEJÁVEL para aquele "

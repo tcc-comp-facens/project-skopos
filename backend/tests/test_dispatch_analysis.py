@@ -40,14 +40,12 @@ class TestDispatchAnalysis:
             date_to=2022,
             health_params=["dengue"],
             use_llm=True,
-            use_llm_judge=False,
         )
 
         assert analysis_id in active_queues
         assert analysis_id in active_threads
         assert analysis_id in active_results
         assert active_results[analysis_id]["use_llm"] is True
-        assert active_results[analysis_id]["use_llm_judge"] is False
 
     def test_persists_source_question_and_interpreted_via(self, neo4j_client):
         dispatch.dispatch_analysis(
@@ -55,7 +53,6 @@ class TestDispatchAnalysis:
             date_to=2022,
             health_params=["dengue"],
             use_llm=True,
-            use_llm_judge=False,
             source_question="compare dengue de 2019 a 2022",
             interpreted_via="regex",
         )
@@ -70,7 +67,6 @@ class TestDispatchAnalysis:
             date_to=2022,
             health_params=["dengue"],
             use_llm=True,
-            use_llm_judge=False,
             interpreted_via="form",
         )
 

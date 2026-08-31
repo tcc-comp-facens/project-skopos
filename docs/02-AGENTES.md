@@ -681,9 +681,10 @@ Recebe todos os resultados dos outros agentes e gera um texto de análise em por
        └────────┬────────┘
                 ▼
        ┌─────────────────┐
-       │  Tenta LLM       │──► Sucesso? → Texto do LLM (DeepSeek,
-       │  (deepseek-v4-   │              modelo único, com retry)
-       │   flash)         │──► Falhou?  → Texto estruturado (fallback)
+       │  Tenta LLM       │──► Sucesso? → Texto do LLM (provedor de
+       │  (provedor ativo │              LLM_PROVIDER, modelo único,
+       │   em LLM_PROVIDER)│              com retry)
+       │                  │──► Falhou?  → Texto estruturado (fallback)
        └────────┬────────┘
                 ▼
        ┌─────────────────┐
