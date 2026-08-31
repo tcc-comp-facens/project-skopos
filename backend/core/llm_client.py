@@ -17,6 +17,12 @@ tem sua própria variável de API key (`DEEPSEEK_API_KEY` /
 `OPENAI_API_KEY`) e aceita override de modelo por env (`DEEPSEEK_MODEL` /
 `OPENAI_MODEL`) — sem precisar mexer em código para testar outro modelo.
 
+`generate()` aceita ainda um `provider` explícito, que ignora
+`LLM_PROVIDER` só naquela chamada. É o que `core/ragas_metrics.py` usa
+para manter o juiz da avaliação num provedor fixo (independente do que o
+pipeline está usando) sem abrir um cliente próprio — assim a avaliação
+continua contabilizada no mesmo `TokenBucket` e coberta pelo retry de 429.
+
 Chamadas de diferentes threads (estrela e hierárquica rodam concorrentes
 — ver api/runners.py) acontecem em paralelo de verdade, sem
 serialização artificial: não há lock global nem intervalo mínimo
@@ -67,6 +73,17 @@ RETRY_BASE_DELAY = 10.0  # segundos
 
 TEMPERATURE = 0.7
 MAX_TOKENS = 4096
+
+# Modelos de raciocínio da OpenAI cobram o MESMO teto de saída para os
+# tokens de raciocínio e para a resposta visível. Com 4096 compartilhados
+# e esforço de raciocínio no default (`medium`), um prompt grande — a
+# verificação de afirmações do RAGAS, ou uma síntese longa — gasta o
+# orçamento inteiro pensando e devolve `content` vazio com
+# `finish_reason="length"`. Daí um teto próprio, bem mais folgado (o
+# gpt-5.6-luna aceita até 128k de saída), e um esforço de raciocínio
+# baixo por default.
+REASONING_MAX_TOKENS = 16384
+REASONING_EFFORT = "low"
 
 # thinking desabilitado — resposta direta, sem reasoning_content
 _THINKING_DISABLED = {"type": "disabled"}
@@ -123,6 +140,41 @@ DEFAULT_PROVIDER = "deepseek"
 # this model. Use 'max_completion_tokens' instead".
 _OPENAI_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
+# Valores aceitos por `reasoning_effort` no Chat Completions. Um valor
+# inválido é 400 na API, então é validado aqui antes de sair.
+_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r inválido — usando %d", name, raw, default)
+        return default
+    return value if value > 0 else default
+
+
+def resolve_reasoning_effort() -> str:
+    """Esforço de raciocínio para modelos que o aceitam (`OPENAI_REASONING_EFFORT`).
+
+    Default `low`: os prompts que este sistema manda para modelos de
+    raciocínio são extração e julgamento de JSON estruturado, que não se
+    beneficiam de chain-of-thought longo — e cada token de raciocínio sai
+    do mesmo orçamento da resposta (e é cobrado). É o análogo OpenAI do
+    `thinking: disabled` que o provedor DeepSeek já manda.
+    """
+    raw = os.environ.get("OPENAI_REASONING_EFFORT", "").strip().lower() or REASONING_EFFORT
+    if raw not in _REASONING_EFFORTS:
+        logger.warning(
+            "OPENAI_REASONING_EFFORT=%r inválido (opções: %s) — usando %s",
+            raw, ", ".join(_REASONING_EFFORTS), REASONING_EFFORT,
+        )
+        return REASONING_EFFORT
+    return raw
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     """Lê uma env var booleana (`true/1/yes/on`), a cada chamada."""
@@ -156,17 +208,38 @@ def resolve_model(provider: Optional[ProviderConfig] = None) -> str:
     return os.environ.get(provider.model_env, "").strip() or provider.default_model
 
 
-def _completion_params(provider: ProviderConfig, model: str) -> dict[str, Any]:
+def _completion_params(
+    provider: ProviderConfig, model: str, temperature: Optional[float] = None
+) -> dict[str, Any]:
     """Parâmetros de geração aceitos por este par provedor/modelo.
 
     Os modelos de raciocínio da OpenAI (gpt-5, série o*) renomearam
     `max_tokens` para `max_completion_tokens` e só aceitam a temperatura
     default — mandar os parâmetros antigos resulta em 400. Todo o resto
     (DeepSeek e a linha gpt-4o) usa a forma clássica.
+
+    `temperature` sobrescreve o default do módulo (`TEMPERATURE`) só onde
+    o parâmetro é aceito — é o que a avaliação RAGAS usa para pedir
+    temperatura baixa (juiz determinístico) sem quebrar nos modelos de
+    raciocínio, que simplesmente ignoram o pedido.
+
+    Nos modelos de raciocínio vão dois parâmetros que os clássicos não
+    têm: um teto de saída próprio (`REASONING_MAX_TOKENS`, porque esse
+    teto é compartilhado com os tokens de raciocínio) e
+    `reasoning_effort` — sem ele o esforço fica no default `medium` e um
+    prompt grande esgota o orçamento pensando, devolvendo resposta vazia.
     """
     if provider.name == "openai" and model.lower().startswith(_OPENAI_REASONING_PREFIXES):
-        return {"max_completion_tokens": MAX_TOKENS}
-    return {"temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
+        return {
+            "max_completion_tokens": _env_int(
+                "OPENAI_MAX_COMPLETION_TOKENS", REASONING_MAX_TOKENS
+            ),
+            "reasoning_effort": resolve_reasoning_effort(),
+        }
+    return {
+        "temperature": TEMPERATURE if temperature is None else temperature,
+        "max_tokens": MAX_TOKENS,
+    }
 
 
 def _logging_params(provider: ProviderConfig, caller: str) -> dict[str, Any]:
@@ -303,18 +376,35 @@ def _client(provider: Optional[ProviderConfig] = None):
     return OpenAI(api_key=os.environ[provider.api_key_env], base_url=base_url)
 
 
+def build_client(provider: Optional[ProviderConfig] = None):
+    """Cliente do SDK apontado para `provider` — face pública de `_client`
+    (que os testes substituem como seam interno).
+
+    Existe para `core.ragas_metrics` poder falar com o endpoint de
+    *embeddings* (que não passa por `generate()`, é outra rota da API)
+    sem duplicar a resolução de api key/base_url por provedor.
+    """
+    return _client(provider)
+
+
 def _generate(
     prompt: str,
     model: str,
     provider: Optional[ProviderConfig] = None,
     caller: str = "desconhecido",
-) -> tuple[Optional[str], dict[str, int]]:
-    """Chama a API do provedor ativo e retorna (texto, token_usage)."""
+    temperature: Optional[float] = None,
+) -> tuple[Optional[str], dict[str, int], Optional[str]]:
+    """Chama a API do provedor e retorna (texto, token_usage, finish_reason).
+
+    `finish_reason` sobe junto porque é o que distingue "o modelo não
+    tinha o que dizer" de "o orçamento de tokens acabou no meio" — sem
+    ele, os dois casos chegam ao caller como um texto vazio idêntico.
+    """
     provider = provider or get_provider()
     response = _client(provider).chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        **_completion_params(provider, model),
+        **_completion_params(provider, model, temperature),
         **_logging_params(provider, caller),
         **({"extra_body": provider.extra_body} if provider.extra_body else {}),
     )
@@ -327,8 +417,10 @@ def _generate(
             "total_tokens": getattr(response.usage, "total_tokens", 0) or 0,
         }
 
-    text = response.choices[0].message.content or ""
-    return _strip_think_tags(text), usage
+    choice = response.choices[0] if response.choices else None
+    text = (getattr(choice, "message", None) and choice.message.content) or ""
+    finish_reason = getattr(choice, "finish_reason", None)
+    return _strip_think_tags(text), usage, finish_reason
 
 
 def _accumulate_tokens(usage: dict[str, int]) -> None:
@@ -358,6 +450,18 @@ def _accumulate_tokens(usage: dict[str, int]) -> None:
         bucket["call_count"] += 1
 
 
+def record_token_usage(usage: dict[str, int]) -> None:
+    """Contabiliza um gasto de tokens que não veio de `generate()`.
+
+    Face pública de `_accumulate_tokens`, para as chamadas de *embeddings*
+    de `core.ragas_metrics`: elas usam outra rota da API (não
+    `chat.completions`), mas o custo é real e deve aparecer no mesmo
+    `TokenBucket` da avaliação — sem isso o eixo D subestimaria o custo
+    de rodar as métricas.
+    """
+    _accumulate_tokens(usage)
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     """Verifica se a exceção é um erro de rate limit (429)."""
     try:
@@ -379,7 +483,11 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 
 def _try_model(
-    prompt: str, model: str, caller: str, provider: Optional[ProviderConfig] = None
+    prompt: str,
+    model: str,
+    caller: str,
+    provider: Optional[ProviderConfig] = None,
+    temperature: Optional[float] = None,
 ) -> Optional[str]:
     """Tenta gerar, com retry em caso de 429 real retornado pelo provedor.
 
@@ -392,7 +500,9 @@ def _try_model(
     """
     for attempt in range(MAX_RETRIES):
         try:
-            text, usage = _generate(prompt, model, provider, caller)
+            text, usage, finish_reason = _generate(
+                prompt, model, provider, caller, temperature
+            )
             _accumulate_tokens(usage)
 
             if usage:
@@ -411,7 +521,25 @@ def _try_model(
                 )
                 return text
 
-            logger.warning("LLM [%s] (%s): resposta vazia", caller, model)
+            if finish_reason == "length":
+                # Nos modelos de raciocínio o teto de saída é compartilhado
+                # com os tokens de raciocínio: se o esforço consumir tudo,
+                # a resposta visível volta vazia. Sem esta mensagem o
+                # sintoma é indistinguível de "o modelo não respondeu".
+                logger.error(
+                    "LLM [%s] (%s): resposta truncada — orçamento de saída "
+                    "esgotado (limite atual: %s). Reduza OPENAI_REASONING_EFFORT "
+                    "ou aumente OPENAI_MAX_COMPLETION_TOKENS.",
+                    caller, model,
+                    _completion_params(provider or get_provider(), model).get(
+                        "max_completion_tokens", MAX_TOKENS
+                    ),
+                )
+            else:
+                logger.warning(
+                    "LLM [%s] (%s): resposta vazia (finish_reason=%s)",
+                    caller, model, finish_reason,
+                )
             return None
 
         except Exception as exc:
@@ -430,7 +558,12 @@ def _try_model(
 
 
 def generate(
-    prompt: str, model: Optional[str] = None, *, caller: str = "desconhecido"
+    prompt: str,
+    model: Optional[str] = None,
+    *,
+    caller: str = "desconhecido",
+    provider: Optional[ProviderConfig] = None,
+    temperature: Optional[float] = None,
 ) -> Optional[str]:
     """Chama o LLM do provedor ativo (`LLM_PROVIDER`), sem rate limiting
     próprio, com retry em caso de 429 real do provedor e contabilização
@@ -446,11 +579,19 @@ def generate(
         caller: Identificador de quem está chamando (tipicamente `agent_id`
             ou `synthesizer_id`) — usado só para logging/observabilidade,
             não afeta o comportamento da chamada.
+        provider: Provedor específico (opcional). Default: o de
+            `LLM_PROVIDER`. Usado por `core.ragas_metrics` para fixar o
+            juiz da avaliação num provedor independente do que o pipeline
+            está usando, sem abrir um cliente próprio — assim a avaliação
+            continua passando pela contabilização de tokens (`TokenBucket`)
+            e pelo retry de 429 deste módulo.
+        temperature: Sobrescreve `TEMPERATURE` onde o modelo aceita o
+            parâmetro (ver `_completion_params`).
 
     Returns:
         Texto gerado, ou None se falhar ou API key ausente.
     """
-    provider = get_provider()
+    provider = provider or get_provider()
     if not _has_api_key(provider):
         logger.warning(
             "LLM [%s]: %s não configurada (LLM_PROVIDER=%s)",
@@ -466,7 +607,7 @@ def generate(
     logger.debug("LLM [%s]: prompt completo:\n%s", caller, prompt)
 
     try:
-        result = _try_model(prompt, resolved_model, caller, provider)
+        result = _try_model(prompt, resolved_model, caller, provider, temperature)
         if result:
             return result
         logger.warning("LLM [%s]: falhou", caller)

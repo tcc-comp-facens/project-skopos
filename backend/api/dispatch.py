@@ -39,7 +39,6 @@ def dispatch_analysis(
     date_to: int,
     health_params: list[str],
     use_llm: bool,
-    use_llm_judge: bool,
     source_question: str | None = None,
     interpreted_via: str | None = None,
     intent_summary: str | None = None,
@@ -57,9 +56,9 @@ def dispatch_analysis(
     refatoração) — repassado no dict `params` para as duas arquiteturas,
     que é a camada de entrada estruturada compartilhada por ambas.
 
-    `use_self_check` (opcional, default False — mesmo padrão de
-    `use_llm_judge`) habilita a verificação pós-síntese via LLM (Etapa 4
-    do plano de refatoração) em ambas as arquiteturas.
+    `use_self_check` (opcional, default False) habilita a verificação
+    pós-síntese via LLM (Etapa 4 do plano de refatoração) em ambas as
+    arquiteturas.
 
     `intent_token_usage` (opcional, só vem do chat) é o snapshot de custo
     de tokens da interpretação de intenção (Etapa 6) — persistido em
@@ -71,10 +70,10 @@ def dispatch_analysis(
     analysis_id = str(uuid.uuid4())
     logger.info(
         "Analysis [%s]: disparando análise (periodo=%s-%s, health_params=%s, "
-        "use_llm=%s, use_llm_judge=%s, use_self_check=%s, interpreted_via=%s, "
+        "use_llm=%s, use_self_check=%s, interpreted_via=%s, "
         "intent_summary=%r)",
         analysis_id[:8], date_from, date_to, health_params,
-        use_llm, use_llm_judge, use_self_check, interpreted_via, intent_summary,
+        use_llm, use_self_check, interpreted_via, intent_summary,
     )
 
     neo4j_client = get_neo4j_client()
@@ -101,7 +100,6 @@ def dispatch_analysis(
         "date_to": date_to,
         "health_params": health_params,
         "use_llm": use_llm,
-        "use_llm_judge": use_llm_judge,
         "intent_summary": intent_summary,
         "use_self_check": use_self_check,
     }
@@ -118,9 +116,19 @@ def dispatch_analysis(
     )
     active_threads[analysis_id] = [t_star, t_hier]
     active_results[analysis_id] = {
-        "use_llm_judge": use_llm_judge,
         "use_llm": use_llm,
         "intent_token_usage": intent_token_usage,
+        # A pergunta original também fica em memória (além de persistida no
+        # Neo4j) porque é o `user_input` da avaliação RAGAS — a métrica
+        # answer_relevancy mede justamente o quanto a análise responde a
+        # ela, então precisa do texto exato que o usuário digitou.
+        "source_question": source_question,
+        # Também usados pela avaliação RAGAS: o período entra no contexto
+        # do juiz (o prompt do sintetizador manda o texto declará-lo) e no
+        # `user_input` de fallback quando a análise não veio do chat. O
+        # `result` dos orquestradores não carrega essas datas.
+        "date_from": date_from,
+        "date_to": date_to,
     }
     t_star.start()
     t_hier.start()

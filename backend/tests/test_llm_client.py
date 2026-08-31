@@ -23,9 +23,15 @@ import core.llm_client as llm_client
 from core.llm_client import TokenBucket
 
 
-def _fake_response(text: str, prompt_tokens=10, completion_tokens=5, total_tokens=15):
+def _fake_response(
+    text: str, prompt_tokens=10, completion_tokens=5, total_tokens=15, finish_reason="stop"
+):
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=text), finish_reason=finish_reason
+            )
+        ],
         usage=SimpleNamespace(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -368,9 +374,34 @@ class TestProviderRequestShape:
         'max_tokens' is not supported with this model. Use
         'max_completion_tokens' instead") — verificado contra a API real."""
         kwargs = self._capture_create_kwargs()
-        assert kwargs["max_completion_tokens"] == llm_client.MAX_TOKENS
+        assert kwargs["max_completion_tokens"] == llm_client.REASONING_MAX_TOKENS
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
+
+    def test_reasoning_budget_is_larger_than_the_classic_one(self):
+        """Nos modelos de raciocínio esse teto é compartilhado com os
+        tokens de raciocínio — usar os mesmos 4096 dos modelos clássicos
+        fazia o orçamento acabar durante o raciocínio e a resposta voltar
+        vazia com finish_reason=length."""
+        assert llm_client.REASONING_MAX_TOKENS > llm_client.MAX_TOKENS
+
+    def test_openai_reasoning_model_limits_reasoning_effort(self, openai_provider):
+        """Sem `reasoning_effort` explícito o default da API é `medium`, e
+        um prompt grande gasta o orçamento inteiro pensando."""
+        kwargs = self._capture_create_kwargs()
+        assert kwargs["reasoning_effort"] == llm_client.REASONING_EFFORT
+
+    def test_reasoning_params_configuraveis_por_env(self, monkeypatch, openai_provider):
+        monkeypatch.setenv("OPENAI_REASONING_EFFORT", "none")
+        monkeypatch.setenv("OPENAI_MAX_COMPLETION_TOKENS", "32000")
+        kwargs = self._capture_create_kwargs()
+        assert kwargs["reasoning_effort"] == "none"
+        assert kwargs["max_completion_tokens"] == 32000
+
+    def test_reasoning_effort_invalido_cai_no_default(self, monkeypatch, openai_provider):
+        """Um valor inválido é 400 na API — melhor cair no default aqui."""
+        monkeypatch.setenv("OPENAI_REASONING_EFFORT", "turbinado")
+        assert self._capture_create_kwargs()["reasoning_effort"] == llm_client.REASONING_EFFORT
 
     def test_openai_classic_model_uses_max_tokens(self, monkeypatch, openai_provider):
         """A linha gpt-4o continua usando a forma clássica — a distinção é
@@ -380,6 +411,12 @@ class TestProviderRequestShape:
         assert kwargs["temperature"] == llm_client.TEMPERATURE
         assert kwargs["max_tokens"] == llm_client.MAX_TOKENS
         assert "max_completion_tokens" not in kwargs
+        assert "reasoning_effort" not in kwargs
+
+    def test_deepseek_nao_recebe_reasoning_effort(self, has_api_key):
+        """`reasoning_effort` é da OpenAI; o DeepSeek desliga raciocínio
+        pelo `extra_body.thinking`."""
+        assert "reasoning_effort" not in self._capture_create_kwargs()
 
     def test_deepseek_client_uses_deepseek_base_url(self, has_api_key):
         with patch("openai.OpenAI") as mock_openai:
@@ -486,3 +523,39 @@ class TestTokenUsageResetAndGet:
         assert usage == {
             "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "call_count": 0,
         }
+
+
+class TestRespostaTruncada:
+    """Distinção entre "o modelo não respondeu" e "o orçamento acabou".
+
+    Nos modelos de raciocínio da OpenAI o teto de saída é compartilhado
+    com os tokens de raciocínio; quando o esforço consome tudo, a API
+    devolve `content` vazio com `finish_reason="length"`. Sem tratar isso
+    à parte, o sintoma chega ao caller idêntico a uma resposta vazia
+    qualquer — foi o que fez a métrica de fidelidade do RAGAS falhar com
+    "LLM indisponível" sem nenhuma pista da causa.
+    """
+
+    def _generate_with(self, response, provider_env=None, monkeypatch=None):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = response
+        with patch("core.llm_client._client", return_value=mock_client):
+            return llm_client.generate("prompt", caller="test")
+
+    def test_truncagem_e_logada_como_orcamento_esgotado(self, openai_provider, caplog):
+        resposta = _fake_response("", finish_reason="length")
+        with caplog.at_level("ERROR"):
+            resultado = self._generate_with(resposta)
+        assert resultado is None
+        assert "truncada" in caplog.text
+        assert "OPENAI_MAX_COMPLETION_TOKENS" in caplog.text
+
+    def test_resposta_vazia_comum_nao_vira_erro_de_truncagem(self, has_api_key, caplog):
+        resposta = _fake_response("", finish_reason="stop")
+        with caplog.at_level("WARNING"):
+            resultado = self._generate_with(resposta)
+        assert resultado is None
+        assert "truncada" not in caplog.text
+
+    def test_resposta_normal_nao_e_afetada(self, has_api_key):
+        assert self._generate_with(_fake_response("conteúdo")) == "conteúdo"

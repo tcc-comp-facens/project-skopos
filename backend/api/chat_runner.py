@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 def run_chat_analysis(
     params: AnalysisIntent,
     use_llm: bool,
-    use_llm_judge: bool,
     source_question: str,
     interpreted_via: str,
     interpreter: AgenteInterpretacaoIntencao,
@@ -37,7 +36,6 @@ def run_chat_analysis(
             para alimentar a camada de entrada compartilhada pelas duas
             arquiteturas (Etapa 1 do plano de refatoração).
         use_llm: Se True, usa LLM para síntese textual das arquiteturas.
-        use_llm_judge: Se True, habilita avaliação LLM-as-Judge.
         source_question: Texto original digitado pelo usuário (auditoria).
         interpreted_via: sempre "llm" — mantido para compatibilidade do
             registro de auditoria em Neo4j (não há mais caminho "regex").
@@ -62,7 +60,6 @@ def run_chat_analysis(
         date_to=params.date_to,
         health_params=params.health_params,
         use_llm=use_llm,
-        use_llm_judge=use_llm_judge,
         source_question=source_question,
         interpreted_via=interpreted_via,
         intent_summary=params.intent_summary,

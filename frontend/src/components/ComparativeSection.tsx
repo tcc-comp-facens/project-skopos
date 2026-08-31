@@ -1,5 +1,5 @@
 /**
- * ComparativeSection — seção do relatório comparativo e LLM Judge.
+ * ComparativeSection — seção do relatório comparativo e da avaliação RAGAS.
  * Extraído de App.tsx para uso na TechTab.
  *
  * Requirements: 7.1, 7.2, 7.3, 7.4
@@ -7,17 +7,22 @@
 export interface ComparativeSectionProps {
   comparativeReport: string;
   comparativeLoading: boolean;
-  llmJudgeText: string;
-  llmJudgeLoading: boolean;
+  ragasText: string;
+  ragasLoading: boolean;
 }
 
 export function ComparativeSection({
   comparativeReport,
   comparativeLoading,
-  llmJudgeText,
-  llmJudgeLoading,
+  ragasText,
+  ragasLoading,
 }: ComparativeSectionProps): JSX.Element | null {
-  if (!comparativeReport && !comparativeLoading) return null;
+  // A avaliação RAGAS chega ANTES do relatório (o veredito do relatório
+  // depende dela), então checar só o relatório esconderia a seção inteira
+  // justamente enquanto o RAGAS está streamando.
+  if (!comparativeReport && !comparativeLoading && !ragasText && !ragasLoading) {
+    return null;
+  }
 
   return (
     <div className="comparative-section" data-testid="comparative-section">
@@ -71,41 +76,42 @@ export function ComparativeSection({
         )}
       </div>
 
-      {(llmJudgeText || llmJudgeLoading) && (
+      {(ragasText || ragasLoading) && (
         <div
-          className="llm-judge-body"
-          data-testid="llm-judge-report"
+          className="ragas-body"
+          data-testid="ragas-report"
           aria-live="polite"
         >
-          {!llmJudgeText && llmJudgeLoading && (
+          {!ragasText && ragasLoading && (
             <div className="panel-loading-indicator">
               <div className="spinner purple" />
-              <span>LLM Judge avaliando fidelidade dos textos...</span>
+              <span>RAGAS avaliando a qualidade das respostas...</span>
             </div>
           )}
-          {llmJudgeText.split('\n').map((line, i) => {
+          {ragasText.split('\n').map((line, i) => {
+            const trimmed = line.trim();
             if (line.startsWith('━━━')) {
               const title = line.replace(/━/g, '').trim();
               return <h4 key={`j${i}`} className="report-section-title">{title}</h4>;
             }
-            if (line === 'SCORES' || line === 'JUSTIFICATIVAS') {
-              return <p key={`j${i}`} className="judge-subtitle">{line}</p>;
-            }
-            if (line.startsWith('★ Estrela:') || line.startsWith('◆ Hierárquica:')) {
-              const isHigh = line.includes('5/5') || line.includes('4/5');
-              const cls = isHigh ? 'judge-score good' : 'judge-score';
-              return <p key={`j${i}`} className={cls}>{line}</p>;
-            }
-            if (line === '★ Estrela' || line === '◆ Hierárquica') {
-              return <p key={`j${i}`} className="judge-arch-label">{line}</p>;
-            }
-            if (line.trim() === '') {
+            if (trimmed === '') {
               return <div key={`j${i}`} className="report-spacer" />;
             }
-            return <p key={`j${i}`} className="judge-justification">{line}</p>;
+            if (trimmed.startsWith('SCORES')) {
+              return <p key={`j${i}`} className="ragas-subtitle">{trimmed}</p>;
+            }
+            if (trimmed.startsWith('★') || trimmed.startsWith('◆')) {
+              // Scores vêm em [0,1] (escala do RAGAS). O destaque marca os
+              // altos; "não disponível" nunca conta como alto.
+              const value = Number(trimmed.split(':').pop());
+              const cls =
+                Number.isFinite(value) && value >= 0.8 ? 'ragas-score good' : 'ragas-score';
+              return <p key={`j${i}`} className={cls}>{trimmed}</p>;
+            }
+            return <p key={`j${i}`} className="ragas-arch-label">{trimmed}</p>;
           })}
-          {llmJudgeLoading && (
-            <span className="loading-cursor" data-testid="llm-judge-loading">▍</span>
+          {ragasLoading && (
+            <span className="loading-cursor" data-testid="ragas-loading">▍</span>
           )}
         </div>
       )}

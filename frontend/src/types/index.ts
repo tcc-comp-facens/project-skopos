@@ -20,8 +20,8 @@ export interface WSEvent {
     | 'metric'
     | 'agent_data'
     | 'quality_metrics'
-    | 'llm_judge'
-    | 'llm_judge_done';
+    | 'ragas'
+    | 'ragas_done';
   payload: string | BenchmarkMetrics | AgentDataPayload | Record<string, unknown>;
 }
 
@@ -98,8 +98,8 @@ export interface UseWebSocketState {
   comparativeReport: string;
   comparativeLoading: boolean;
   qualityMetrics: QualityMetrics | null;
-  llmJudgeText: string;
-  llmJudgeLoading: boolean;
+  ragasText: string;
+  ragasLoading: boolean;
   starAgentData: AgentDataEntry[] | null;
   hierAgentData: AgentDataEntry[] | null;
 }
@@ -123,9 +123,12 @@ export interface EfficiencyMetrics {
   E2: number; // latency breakdown
 }
 
+// Só as métricas determinísticas do backend entram aqui. A fidelidade do
+// texto agora é medida pelo RAGAS, que é opcional, chega depois (eventos
+// `ragas`/`ragas_done`) e vem em escala própria — é exibida no painel do
+// relatório comparativo, não nestes cards.
 export interface QualityScores {
   Q1: number; // consistência determinística
-  Q2: number; // faithfulness
   Q3: number; // completeness
 }
 

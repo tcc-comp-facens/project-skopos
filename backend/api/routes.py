@@ -86,19 +86,20 @@ async def get_benchmarks():
 
 
 @router.get("/api/analysis/{analysis_id}/quality")
-async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = None):
-    """Return quality and efficiency metrics for a completed analysis."""
+async def get_quality_metrics(analysis_id: str):
+    """Return quality and efficiency metrics for a completed analysis.
+
+    Sempre devolve o cache quando ele existe: a avaliação RAGAS é
+    assíncrona, roda uma única vez em `api/websocket.py` e já chega
+    encaixada em `quality.{arch}.ragas`. Recomputar aqui gastaria LLM de
+    novo para produzir o mesmo payload.
+    """
     results = active_results.get(analysis_id, {})
     star_result = results.get("star")
     hier_result = results.get("hierarchical")
 
-    # If not explicitly passed, use the value from the original analysis request
-    if use_llm_judge is None:
-        use_llm_judge = results.get("use_llm_judge", False)
-
-    # Return cached result only if llm_judge setting matches
     cached = results.get("quality_metrics")
-    if cached and not use_llm_judge:
+    if cached:
         return cached
 
     if not star_result or not hier_result:
@@ -110,15 +111,11 @@ async def get_quality_metrics(analysis_id: str, use_llm_judge: bool | None = Non
     star_agent_metrics = results.get("star_agent_metrics", [])
     hier_agent_metrics = results.get("hier_agent_metrics", [])
 
-    use_llm = results.get("use_llm", True)
-
     quality = compute_all_quality_metrics(
         star_result=star_result,
         hier_result=hier_result,
         star_agent_metrics=star_agent_metrics,
         hier_agent_metrics=hier_agent_metrics,
-        use_llm_judge=use_llm_judge,
-        use_llm=use_llm,
         star_wall_clock_ms=results.get("star_wall_clock_ms", 0),
         hier_wall_clock_ms=results.get("hier_wall_clock_ms", 0),
         star_token_usage=results.get("star_token_usage"),

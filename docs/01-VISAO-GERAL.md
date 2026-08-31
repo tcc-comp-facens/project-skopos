@@ -1,3 +1,4 @@
+ker
 # Visão Geral do Projeto
 
 ## Sumário
@@ -305,7 +306,6 @@ python download_pysus.py 2019 2025
 | `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório comparativo |
 | `src/utils/validateMessage.test.ts` | Validação de mensagem de chat (vazio, tamanho máximo) |
 | `src/components/TabNav.test.tsx` | Navegação entre abas (acessibilidade) |
-| `src/components/LlmControls.test.tsx` | Toggles LLM/Judge (dependência, disabled) |
 | `src/components/WinnerPanel.test.tsx` | Painel do vencedor (texto, erro, título) |
 | `src/components/Header.test.tsx` | Identidade visual (Sophia, brasão) |
 
@@ -441,7 +441,6 @@ project-skopos/
 │       │   ├── QualityMetricsSection.tsx
 │       │   ├── ComparativeSection.tsx
 │       │   ├── Header.tsx / .test.tsx
-│       │   ├── LlmControls.tsx / .test.tsx
 │       │   ├── TabNav.tsx / .test.tsx
 │       │   └── WinnerPanel.tsx / .test.tsx
 │       ├── hooks/

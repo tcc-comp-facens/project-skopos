@@ -24,8 +24,8 @@ export const INITIAL_STATE: UseWebSocketState = {
   comparativeReport: '',
   comparativeLoading: false,
   qualityMetrics: null,
-  llmJudgeText: '',
-  llmJudgeLoading: false,
+  ragasText: '',
+  ragasLoading: false,
   starAgentData: null,
   hierAgentData: null,
 };
@@ -173,15 +173,15 @@ export function useWebSocket(analysisId: string | null): UseWebSocketState {
             qualityMetrics: event.payload as unknown as QualityMetrics,
           }));
           break;
-        case 'llm_judge':
+        case 'ragas':
           setState((prev) => ({
             ...prev,
-            llmJudgeText: prev.llmJudgeText + (event.payload as string),
-            llmJudgeLoading: true,
+            ragasText: prev.ragasText + (event.payload as string),
+            ragasLoading: true,
           }));
           break;
-        case 'llm_judge_done':
-          setState((prev) => ({ ...prev, llmJudgeLoading: false }));
+        case 'ragas_done':
+          setState((prev) => ({ ...prev, ragasLoading: false }));
           break;
       }
     }

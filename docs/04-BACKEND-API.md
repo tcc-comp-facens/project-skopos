@@ -9,7 +9,7 @@
 5. [Métricas de Execução](#métricas-de-execução)
 6. [Métricas de Qualidade e Eficiência — Detalhamento Completo](#métricas-de-qualidade-e-eficiência--detalhamento-completo)
    - [E. Eficiência dos Agentes](#e-eficiência-dos-agentes) (E1, E2)
-   - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q2, Q2+, Q3)
+   - [Q. Qualidade da Resposta](#q-qualidade-da-resposta) (Q1, Q3, RAGAS)
    - [R. Resiliência](#r-resiliência) (R1)
    - [Métricas Complementares dos Agentes Analíticos](#métricas-complementares-agentes-analíticos)
    - [Resumo de Valores-Alvo](#resumo-de-valores-alvo)
@@ -51,7 +51,6 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (n�
     "mortalidade": true
   },
   "useLlm": true,
-  "useLlmJudge": false
 }
 ```
 
@@ -61,7 +60,6 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (n�
 | `dateTo` | `int` | `2021` | Ano final do período |
 | `healthParams` | `object` | — | Parâmetros de saúde (pelo menos um `true`) |
 | `useLlm` | `bool` | `true` | Se `true`, usa LLM para síntese textual; se `false`, gera texto estruturado (fallback) |
-| `useLlmJudge` | `bool` | `false` | Se `true`, habilita avaliação Q2+ (LLM-as-Judge) durante o cálculo de métricas de qualidade. Consome 1 chamada LLM extra por topologia |
 
 **Validações (retorna 400):**
 - `dateFrom` deve ser < `dateTo` (intervalo mínimo de 2 anos)
@@ -88,14 +86,14 @@ O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (n�
 Computa métricas de qualidade em três eixos após ambas as topologias completarem.
 
 **Query parameters:**
-- `use_llm_judge` (bool, default `false`) — habilita avaliação Q2+ via LLM-as-Judge (consome 1 chamada LLM extra por topologia)
+- (sem parâmetros — devolve o resultado já calculado)
 
 **Comportamento:**
 - Usa o tempo real (wall-clock) de cada topologia (`star_wall_clock_ms`, `hier_wall_clock_ms`) armazenado em `active_results` para o cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes — consistente com o cálculo feito via WebSocket.
 
 **Cache:**
-- Resultado cacheado em `active_results` para requests subsequentes sem `use_llm_judge`
-- Requests com `use_llm_judge=true` sempre recomputam as métricas (ignora cache)
+- Resultado cacheado em `active_results`; o endpoint sempre devolve o cache quando ele existe
+- A avaliação RAGAS (quando solicitada) roda uma única vez no WebSocket e já chega encaixada no cache, em `quality.{arch}.ragas` — o endpoint nunca a recomputa
 
 ### GET /api/analysis/{id}/report
 
@@ -127,7 +125,7 @@ Streaming de eventos em tempo real das duas arquiteturas.
 {
   "analysisId": "uuid",
   "architecture": "star" | "hierarchical" | "both",
-  "type": "chunk" | "done" | "error" | "metric" | "quality_metrics" | "llm_judge" | "llm_judge_done",
+  "type": "chunk" | "done" | "error" | "metric" | "quality_metrics" | "ragas" | "ragas_done",
   "payload": "string ou objeto"
 }
 ```
@@ -143,9 +141,9 @@ Streaming de eventos em tempo real das duas arquiteturas.
 | `quality_metrics` | `both` | `QualityMetrics` | Métricas de qualidade (3 eixos) |
 | `chunk` | `both` | `string` | Fragmento do relatório comparativo |
 | `done` | `both` | `""` | Relatório comparativo concluído |
-| `llm_judge` | `both` | `""` | Notificação de início do LLM Judge |
-| `llm_judge` | `both` | `string` | Fragmento do resultado LLM-as-Judge (~80 chars) |
-| `llm_judge_done` | `both` | `""` | Streaming do LLM Judge concluído |
+| `ragas` | `both` | `""` | Notificação de início da avaliação RAGAS |
+| `ragas` | `both` | `string` | Fragmento do resultado RAGAS (~80 chars) |
+| `ragas_done` | `both` | `""` | Streaming da avaliação RAGAS concluído |
 
 ### Ciclo de Vida do WebSocket
 
@@ -155,10 +153,10 @@ Streaming de eventos em tempo real das duas arquiteturas.
 4. Captura métricas de agentes dos eventos `metric`
 5. Envia cada evento como JSON ao cliente
 6. Encerra quando recebe 2 eventos `done` (um por arquitetura)
-7. Computa `quality_metrics` **sem LLM Judge** (rápido) e envia como evento
+7. Computa `quality_metrics` (determinístico, sem nenhuma chamada LLM) e envia como evento
 8. Gera relatório comparativo e faz streaming em chunks de 80 chars
 9. Envia evento `done` final com `architecture: "both"`
-10. Se `use_llm_judge=true` e `use_llm=true`: envia evento `llm_judge` inicial com payload vazio (notifica frontend que o LLM Judge está iniciando), executa `compute_faithfulness_llm` por topologia (apenas Q2+, sem recomputar todas as métricas), armazena resultado em `active_results`, e faz streaming do resultado formatado em chunks via eventos `llm_judge` seguido de `llm_judge_done`
+10. Envia evento `ragas` inicial com payload vazio (notifica o frontend que a avaliação começou), executa `core.ragas_metrics.evaluate_architecture` por topologia (cada uma sob seu próprio `TokenBucket`, sequencialmente), encaixa o resultado em `quality.{arch}.ragas` e o custo em `cost.ragas` dentro de `active_results`, e faz streaming do texto formatado em chunks via eventos `ragas` seguido de `ragas_done`. **Só então** gera e transmite o relatório comparativo — cuja seção "Conclusão" decide a topologia vencedora pela fidelidade do RAGAS
 11. Em desconexão: limpa `active_queues` e `active_threads` (mantém `active_results`)
 
 ---
@@ -175,7 +173,7 @@ Cuida apenas do turno de intenção: interpreta a mensagem do usuário, dispara 
 
 ```
 cliente → servidor:
-  {"type": "user_message", "payload": {"text": str, "useLlm": bool, "useLlmJudge": bool}}
+  {"type": "user_message", "payload": {"text": str}}
 
 servidor → cliente:
   {"type": "user_ack", "payload": ""}
@@ -245,7 +243,7 @@ O cliente LLM oferece dois modos de geração:
 
 | Modo | Função | Descrição |
 |------|--------|-----------|
-| **Batch** | `generate(prompt, model=None, *, caller="desconhecido")` | Retorna o texto completo de uma vez. Usado pelo `AgenteInterpretacaoIntencao`, pelo `TextSynthesizer` (fallback) e pela avaliação Q2+ (LLM-as-Judge). |
+| **Batch** | `generate(prompt, model=None, *, caller="desconhecido", provider=None, temperature=None)` | Retorna o texto completo de uma vez. Usado pelo `AgenteInterpretacaoIntencao`, pelo `TextSynthesizer` (fallback) e pela avaliação RAGAS — que passa `provider` explícito para fixar o juiz num provedor independente de `LLM_PROVIDER`. Para modelos de raciocínio da OpenAI (`gpt-5*`, `o*`) a chamada leva `max_completion_tokens` (`OPENAI_MAX_COMPLETION_TOKENS`, default 16384) e `reasoning_effort` (`OPENAI_REASONING_EFFORT`, default `low`) em vez de `max_tokens`/`temperature` — esse teto é compartilhado com os tokens de raciocínio, e sem limitar o esforço um prompt grande volta vazio. |
 | **Streaming** | `generate_stream(prompt, model=None, *, caller="desconhecido")` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
 
 Ambos os modos compartilham o mesmo lock global, rate limiting e retry em caso de 429.
@@ -279,7 +277,7 @@ O `AgenteInterpretacaoIntencao`, quando o LLM falha, cai na estratégia de fallb
 
 ### Consumo por análise
 
-Cada comparação estrela vs. hierárquica consome **2 chamadas LLM** de síntese (1 sintetizador estrela + 1 sintetizador hierárquica) — mais **1 chamada adicional** de interpretação de intenção quando a análise se origina do chat (não conta quando vem do formulário REST direto). Com `useLlmJudge=true`, mais 2 chamadas (Q2+ por topologia).
+Cada comparação estrela vs. hierárquica consome **2 chamadas LLM** de síntese (1 sintetizador estrela + 1 sintetizador hierárquica) — mais **1 chamada adicional** de interpretação de intenção quando a análise se origina do chat (não conta quando vem do formulário REST direto). A avaliação RAGAS (sempre executada) acrescenta, por topologia, um custo **fixo**: 2 chamadas para faithfulness, 3 para answer relevancy e 2 para context relevance, mais 1 requisição de embeddings por pergunta gerada. Nenhuma métrica escala com o número de achados.
 
 ---
 
@@ -354,7 +352,7 @@ Calculadas automaticamente após ambas as topologias completarem, organizadas em
 | Eixo | Métricas | Pergunta que responde |
 |------|----------|-----------------------|
 | **E. Eficiência** | E1, E2 | Qual topologia usa melhor seus recursos computacionais e de comunicação? |
-| **Q. Qualidade** | Q1, Q2, Q2+, Q3 | Os resultados são corretos, fiéis aos dados e bem estruturados? |
+| **Q. Qualidade** | Q1, Q3 (determinísticas) + RAGAS (opcional) | Os resultados são corretos, fiéis aos dados e respondem à pergunta feita? |
 | **R. Resiliência** | R1 | O sistema se comporta bem quando algo falha? |
 
 ---
@@ -463,79 +461,45 @@ all_identical = corr_identical AND anom_identical
 
 ---
 
-#### Q2 — Fidelidade (Faithfulness) — Checklist Automático
+#### Fidelidade e relevância — biblioteca RAGAS (opcional)
 
-**Função:** `compute_faithfulness(correlacoes, anomalias, texto)`
+**Módulo:** `core/ragas_metrics.py` — `evaluate_architecture(result, user_input, *, caller)` (assíncrona)
 
-**O que mede:** Se o texto gerado pelo `TextSynthesizer` (via LLM) reflete fielmente os dados numéricos calculados pelos agentes analíticos. Verifica se o texto não "inventa" informações nem omite achados importantes.
+Substituiu três implementações caseiras que existiam aqui (`compute_faithfulness` por substring, `_compute_faithfulness_claims` "estilo RAGAS" e `compute_faithfulness_llm` com nota 1-5). A última era o baseline "GPT Score" que o paper do RAGAS mede como inferior à própria metodologia — 0.72 contra 0.95 de concordância com anotadores humanos (Es et al., 2024, Tabela 4).
 
-**Como é calculado:**
+**O que mede:** três aspectos reference-free (não exigem resposta-padrão anotada), calculados pela biblioteca [`ragas`](https://github.com/explodinggradients/ragas) 0.4.x:
 
-Cria um checklist de "checkpoints" e verifica cada um no texto:
+| Métrica | Pergunta que responde |
+|---------|-----------------------|
+| `faithfulness` | O texto é sustentado pelos dados? Decompõe a resposta em afirmações e verifica cada uma contra o contexto: `score = suportadas / total` |
+| `answer_relevancy` | O texto responde à pergunta feita? Gera N perguntas a partir da resposta e mede a similaridade de cosseno com a pergunta original (exige embeddings) |
+| `context_relevance` | Os achados entregues ao sintetizador eram relevantes à pergunta? Dois juízes avaliam o conjunto numa escala 0/1/2 |
 
-**Para cada correlação com classificação "alta" (|Spearman| ≥ 0.7):**
-- Verifica se o texto menciona o número da subfunção (ex: "301"), OU o nome da subfunção (ex: "Atenção Básica"), OU o tipo de indicador (ex: "vacinacao")
-- Se encontrou → hit; senão → miss
+**Como a tripla do RAGAS é montada:** o sistema não é um RAG clássico (não há retriever nem corpus). O mapeamento é `user_input` = pergunta original do chat, `response` = `texto_analise`, `retrieved_contexts` = **tudo** que o sintetizador recebeu: um chunk por achado (com a leitura do sinal, o n e a descrição com valores em R$), mais o período, a cobertura de dados e as afirmações que o próprio prompt injeta (pandemia, traduções de subfunção) — que o modelo é instruído a repetir e sem as quais o texto seria reprovado por obedecer à instrução. Justificativa completa em [metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md).
 
-**Para cada anomalia detectada:**
-- Verifica se o texto menciona o ano da anomalia E (o número da subfunção OU o nome OU o tipo de indicador)
-- Ambas as condições devem ser verdadeiras → hit; senão → miss
+**Juiz:** provedor fixo via `RAGAS_PROVIDER` (default `openai`), **independente de `LLM_PROVIDER`** — trocar o provedor do pipeline não pode trocar o instrumento de medida. As chamadas passam por `core.llm_client.generate(provider=...)`, então continuam contabilizadas no `TokenBucket` e cobertas pelo retry de 429.
 
-```
-score = hits / total_checkpoints
-```
+**Configuração (toda via `.env`):** `RAGAS_PROVIDER`, `RAGAS_MODEL`, `RAGAS_EMBEDDING_MODEL` (default `text-embedding-3-large` — melhor qualidade multilíngue, que é o que importa para comparar textos curtos em português), e `RAGAS_EMBEDDING_FALLBACKS` (cadeia separada por vírgula; vazio desliga o fallback). Não há teto de contextos: todas as métricas recebem o conjunto completo, porque nenhuma escala em número de chamadas com a quantidade de achados.
 
-Se não há checkpoints (nenhuma correlação alta e nenhuma anomalia), o score é 1.0 (vacuamente verdadeiro).
+**Embeddings sem acesso (403 `model_not_found`):** pode ocorrer com a mesma chave que funciona no `chat.completions`. O código repete a chamada sem o cabeçalho `OpenAI-Project` (que dispara uma checagem que falha em algumas configurações) e, persistindo, desce a cadeia de fallback, reportando o modelo efetivo em `judge.embedding_model_used`. Para separar "fora da allowlist" de "na allowlist mas negado" — mesmo erro, soluções diferentes: `cd backend && python -m scripts.check_embeddings`.
 
 **Valores retornados:**
-- `score`: 0.0 a 1.0
-- `total_checkpoints`: número de itens verificados
-- `hits`: quantos foram encontrados no texto
-- `misses`: quantos não foram encontrados
-- `details`: lista detalhada de cada checkpoint com `found: true/false`
+```json
+{
+  "framework": "ragas", "version": "0.4.3",
+  "judge": {"provider": "openai", "model": "...", "embedding_model": "..."},
+  "metrics": {"faithfulness": {"score": 0.86}, "answer_relevancy": {"score": 0.91},
+              "context_relevance": {"score": 0.62}},
+  "sample": {"n_contexts_total": 67, "response_chars": 1840},
+  "available": true, "unavailable_reason": null, "errors": []
+}
+```
 
-**Valores-alvo:**
-- ≥ 0.80 (80%): bom — o texto menciona a maioria dos achados relevantes
-- ≥ 0.60 (60%): aceitável — algumas omissões
-- < 0.60 (60%): ruim — o texto omite muitos achados importantes
+Todos os scores estão em `[0, 1]` ou são `null` (métrica não calculável) — nunca `NaN`, que quebraria o `JSON.parse` do cliente.
 
-**Significado para o TCC:** Mede a qualidade do output do LLM. Se o sintetizador gera texto que não menciona uma correlação forte entre gasto em Atenção Básica e cobertura vacinal, o texto é infiel aos dados. Permite comparar se uma topologia produz textos mais fiéis que a outra (embora ambas usem o mesmo sintetizador, o contexto passado pode diferir em caso de falhas parciais).
+**Degradação graciosa:** sem a API key do juiz, vem `available: false` com `unavailable_reason` legível — não um score 0, que seria indistinguível de um score 0 legítimo. A falha de uma métrica não impede as outras (registrada em `errors[]`).
 
----
-
-#### Q2+ — Fidelidade via LLM-as-Judge (Opcional)
-
-**Função:** `compute_faithfulness_llm(correlacoes, anomalias, contexto_orcamentario, texto)`
-
-**O que mede:** Avaliação qualitativa da fidelidade do texto usando o próprio LLM como juiz, complementando o checklist automático (Q2).
-
-**Como é calculado:**
-
-1. Monta um prompt com todos os dados numéricos (correlações, anomalias, contexto orçamentário) e o texto gerado
-2. Pede ao LLM que avalie a fidelidade numa escala de 1 a 5
-3. Extrai o JSON da resposta via regex `\{[^}]+\}`
-
-**Escala de avaliação:**
-
-| Score | Significado |
-|-------|-------------|
-| 1 | Texto contradiz os dados |
-| 2 | Texto omite a maioria dos achados |
-| 3 | Texto parcialmente fiel, com omissões significativas |
-| 4 | Texto majoritariamente fiel, com omissões menores |
-| 5 | Texto completamente fiel aos dados |
-
-**Valores retornados:**
-- `method`: `"llm_as_judge"`
-- `score`: 1 a 5 (ou 0 se LLM indisponível)
-- `justificativa`: explicação do LLM
-- `raw_response`: resposta bruta
-
-**Valor-alvo:** ≥ 4
-
-**Pré-condição:** Requer `use_llm=True` (análise com texto gerado por LLM). Quando `use_llm=False`, a avaliação Q2+ é desabilitada automaticamente, independente do valor de `use_llm_judge`, pois não faz sentido avaliar fidelidade semântica de texto gerado pelo fallback estruturado.
-
-**Significado para o TCC:** Oferece uma avaliação mais nuançada que o checklist automático. O checklist verifica presença textual (mencionou ou não), enquanto o LLM-as-judge avalia se o texto é semanticamente correto e coerente. Desabilitado por padrão para economizar chamadas LLM.
+**Significado para o TCC:** é a única métrica de qualidade textual do sistema com validação publicada. Permite comparar se uma topologia produz textos mais fiéis, mais relevantes ou apoiados em contexto mais enxuto que a outra.
 
 ---
 
@@ -543,7 +507,7 @@ Se não há checkpoints (nenhuma correlação alta e nenhuma anomalia), o score 
 
 **Função:** `compute_completeness(correlacoes, anomalias, contexto_orcamentario, texto)`
 
-**O que mede:** Se TODOS os achados relevantes aparecem no texto, não apenas os mais importantes. Diferente de Q2 (que verifica se o que está no texto é verdadeiro), Q3 verifica se tudo que deveria estar no texto está lá.
+**O que mede:** Se TODOS os achados relevantes aparecem no texto, não apenas os mais importantes. Diferente da fidelidade medida pelo RAGAS (que verifica se o que está no texto é sustentado pelos dados), Q3 verifica se tudo que deveria estar no texto está lá — e faz isso sem chamar o LLM.
 
 **Como é calculado:**
 
@@ -586,7 +550,7 @@ score = corr_coverage × 0.4 + anom_coverage × 0.4 + ctx_coverage × 0.2
 - ≥ 0.50 (50%): aceitável — cobre os principais achados
 - < 0.50 (50%): ruim — texto incompleto
 
-**Significado para o TCC:** Complementa Q2 medindo abrangência. Um texto pode ser fiel (Q2 alto) mas incompleto (Q3 baixo) se menciona corretamente apenas metade dos achados. Os pesos refletem a importância relativa: correlações e anomalias são o core da análise (40% cada), enquanto o contexto orçamentário é complementar (20%).
+**Significado para o TCC:** Complementa a fidelidade medindo abrangência. Um texto pode ser fiel (faithfulness alto) mas incompleto (Q3 baixo) se menciona corretamente apenas metade dos achados. Os pesos refletem a importância relativa: correlações e anomalias são o core da análise (40% cada), enquanto o contexto orçamentário é complementar (20%).
 
 ---
 
@@ -685,7 +649,7 @@ Para cada par (subfunção, tipo_indicador) com ≥ 2 pontos:
 \* "Resultado ruim" = indicador negativo acima da mediana OU indicador positivo abaixo da mediana.
 \* "Resultado bom" = indicador negativo abaixo da mediana OU indicador positivo acima da mediana.
 
-**Significado para o TCC:** Identifica anos onde o gasto e o resultado divergem do padrão. Um ano com gasto acima da mediana mas indicador abaixo sugere ineficiência na aplicação dos recursos. A consideração da polaridade garante interpretação correta — para vacinação (positivo), cobertura baixa é resultado ruim; para dengue (negativo), casos altos é resultado ruim. Essas anomalias são o principal achado analítico do sistema e alimentam tanto o texto do sintetizador quanto as métricas de fidelidade (Q2) e completude (Q3).
+**Significado para o TCC:** Identifica anos onde o gasto e o resultado divergem do padrão. Um ano com gasto acima da mediana mas indicador abaixo sugere ineficiência na aplicação dos recursos. A consideração da polaridade garante interpretação correta — para vacinação (positivo), cobertura baixa é resultado ruim; para dengue (negativo), casos altos é resultado ruim. Essas anomalias são o principal achado analítico do sistema e alimentam tanto o texto do sintetizador quanto as métricas de completude (Q3) e a avaliação RAGAS (onde cada anomalia vira um chunk de contexto).
 
 ---
 
@@ -732,7 +696,7 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 
 ### Função Agregadora
 
-`compute_all_quality_metrics()` calcula todas as métricas de uma vez e retorna dict organizado por eixo, pronto para envio via WebSocket. Parâmetros fixos: estrela = 8 agentes, hierárquica = 11 agentes (8 + 3 supervisores). Aceita `use_llm` (default `True`) que, quando `False`, desabilita a avaliação Q2+ (LLM-as-Judge) independente de `use_llm_judge`, pois não faz sentido avaliar fidelidade semântica de texto gerado pelo fallback estruturado. Aceita `star_wall_clock_ms` e `hier_wall_clock_ms` (default `0`) para usar o tempo real (wall-clock) percebido pelo usuário no cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes.
+`compute_all_quality_metrics()` calcula todas as métricas determinísticas de uma vez e retorna dict organizado por eixo, pronto para envio via WebSocket. **Nenhuma delas chama o LLM** — a avaliação RAGAS roda à parte, de forma assíncrona, em `api/websocket.py`. Parâmetros fixos: estrela = 8 agentes, hierárquica = 11 agentes (8 + 3 supervisores). Aceita `star_wall_clock_ms` e `hier_wall_clock_ms` (default `0`) para usar o tempo real (wall-clock) percebido pelo usuário no cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes.
 
 ### Resumo de Valores-Alvo
 
@@ -741,8 +705,8 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 | E1 Overhead | Estrela ~0%, Hierárquica < 15% | Custo aceitável de coordenação |
 | E2 Breakdown | Fase analítica 30-50% | LLM é o gargalo esperado |
 | Q1 Consistência | `true` (sempre) | Resultados numéricos idênticos |
-| Q2 Fidelidade | ≥ 0.80 | Texto reflete os dados |
-| Q2+ LLM Judge | ≥ 4 (de 5) | Avaliação semântica positiva |
+| RAGAS faithfulness | ≥ 0.80 | Texto sustentado pelos dados |
+| RAGAS faithfulness / answer relevancy | ≥ 0.80 | Texto fiel aos dados e aderente à pergunta |
 | Q3 Completude | ≥ 0.75 | Texto abrangente |
 | R1 Cobertura | 1.0 (7/7 componentes) | Pipeline completo |
 

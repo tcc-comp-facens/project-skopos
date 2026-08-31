@@ -17,7 +17,6 @@ describe('ChatInterface', () => {
   const sendMessage = vi.fn();
 
   const defaultProps = {
-    useLlmJudge: false,
     onAnalysisStarted: vi.fn(),
     activeRoundId: null,
     activeRoundWs: null,
@@ -53,7 +52,7 @@ describe('ChatInterface', () => {
     fireEvent.click(sendBtn);
 
     expect(input).toBeDisabled();
-    expect(sendMessage).toHaveBeenCalledWith('compare dengue de 2019 a 2022', false);
+    expect(sendMessage).toHaveBeenCalledWith('compare dengue de 2019 a 2022');
 
     act(() => capturedCallbacks?.onDone());
 

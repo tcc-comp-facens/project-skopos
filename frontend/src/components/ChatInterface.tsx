@@ -8,7 +8,6 @@ import { API_URL } from '../config';
 import type { ChatMessage, UseWebSocketState, WinnerArchitecture } from '../types';
 
 export interface ChatInterfaceProps {
-  useLlmJudge: boolean;
   onAnalysisStarted: (analysisId: string, question: string) => void;
   activeRoundId: string | null;
   activeRoundWs: UseWebSocketState | null;
@@ -34,7 +33,6 @@ const WELCOME_TEXT =
  * Requirements: 1.1-1.5, 2.1-2.5, 5.1-5.4, 7.1-7.6 (spec realtime-chat-interface)
  */
 export function ChatInterface({
-  useLlmJudge,
   onAnalysisStarted,
   activeRoundId,
   activeRoundWs,
@@ -257,8 +255,8 @@ export function ChatInterface({
 
     setIsAwaitingResponse(true);
     setInputText('');
-    chat.sendMessage(text, useLlmJudge);
-  }, [inputText, isAwaitingResponse, useLlmJudge, chat, appendMessage]);
+    chat.sendMessage(text);
+  }, [inputText, isAwaitingResponse, chat, appendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
