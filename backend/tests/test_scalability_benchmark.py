@@ -201,22 +201,21 @@ class TestScalabilityBenchmark:
                 f"Q1 divergiu em N={n_years}: {ponto['consistency']['divergences']}"
             )
 
-    def test_hierarchical_communication_grows_by_fixed_lateral_overhead(self):
-        """O overhead de comunicação lateral da hierárquica (Etapa 5) é
-        fixo (3 hops + 2 resumos) independente de N — não cresce com o
-        volume de dados, só o volume de payload cresce. Confirma
-        estruturalmente a mitigação de risco registrada na Etapa 5
-        ("fixo em nº de supervisores, seguro para escala")."""
+    def test_hierarchical_message_count_grows_only_with_agent_invocations(self):
+        """A hierárquica é uma árvore estrita (sem canal lateral entre
+        supervisores) — message_count é sempre agent_invocations × 2 (1
+        chamada + 1 retorno por agente/supervisor invocado), igual à
+        estrela, em qualquer N. Só o volume de payload cresce com N."""
         pequeno = _benchmark_point(N_SMALL)
         grande = _benchmark_point(N_LARGE)
 
-        assert pequeno["hierarchical"]["communication"]["lateral_hops"] == 3
-        assert grande["hierarchical"]["communication"]["lateral_hops"] == 3
-        assert pequeno["star"]["communication"]["lateral_hops"] == 0
-        assert grande["star"]["communication"]["lateral_hops"] == 0
+        for ponto in (pequeno, grande):
+            for arch in ("star", "hierarchical"):
+                comm = ponto[arch]["communication"]
+                assert comm["message_count"] == comm["agent_invocations"] * 2
 
-        # O payload (nº de registros), ao contrário do overhead lateral,
-        # cresce com N — confirma que N=grande de fato move mais dados.
+        # O payload (nº de registros) cresce com N — confirma que
+        # N=grande de fato move mais dados.
         assert (
             grande["hierarchical"]["communication"]["payload_records"]
             > pequeno["hierarchical"]["communication"]["payload_records"]

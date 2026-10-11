@@ -47,20 +47,20 @@ class TestComputeTokenCost:
 
 
 class TestComputeCommunicationVolume:
-    def test_star_never_has_lateral_hops(self):
-        agent_metrics = [{"agentName": "vigilancia_epidemiologica"}, {"agentName": "correlacao"}]
+    def test_star_message_count(self):
+        agent_metrics = [{"agentName": "sinan"}, {"agentName": "analitico"}]
         result = compute_communication_volume("star", agent_metrics)
-        assert result["lateral_hops"] == 0
-        assert result["lateral_summaries"] == 0
         assert result["agent_invocations"] == 2
         assert result["message_count"] == 4  # 2 agentes * (1 chamada + 1 retorno)
 
-    def test_hierarchical_always_has_3_lateral_hops(self):
-        agent_metrics = [{"agentName": "supervisor_dominio"}, {"agentName": "vigilancia_epidemiologica"}]
+    def test_hierarchical_message_count(self):
+        """Árvore estrita: sem canal lateral entre supervisores, o proxy de
+        mensagens é o mesmo cálculo da estrela — a diferença de volume
+        real já aparece em agent_invocations (supervisores contam também)."""
+        agent_metrics = [{"agentName": "supervisor_saude"}, {"agentName": "sinan"}]
         result = compute_communication_volume("hierarchical", agent_metrics)
-        assert result["lateral_hops"] == 3
-        assert result["lateral_summaries"] == 2
-        assert result["message_count"] == 2 * 2 + 3
+        assert result["agent_invocations"] == 2
+        assert result["message_count"] == 4
 
     def test_payload_records_sums_despesas_e_indicadores(self):
         result = compute_communication_volume(
@@ -211,8 +211,8 @@ class TestComputeAllQualityMetricsWiring:
         )
         assert metrics["cost"]["star"] == star_usage
         assert metrics["cost"]["hierarchical"]["total_tokens"] == 0
-        assert metrics["communication"]["star"]["lateral_hops"] == 0
-        assert metrics["communication"]["hierarchical"]["lateral_hops"] == 3
+        assert metrics["communication"]["star"]["agent_invocations"] == 1
+        assert metrics["communication"]["hierarchical"]["agent_invocations"] == 1
         assert metrics["communication"]["star"]["payload_records"] == 3
         assert "outcome" in metrics
         assert "success" in metrics["outcome"]["star"]

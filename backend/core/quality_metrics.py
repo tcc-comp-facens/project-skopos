@@ -424,14 +424,13 @@ def compute_communication_volume(
     plano original, `message_log`): o sistema não mantém um log de
     mensagens brutas (sockets/filas) — o proxy usado aqui é determinístico
     e real, nunca estimado: cada entrada em `agent_metrics` corresponde a
-    exatamente 1 agente efetivamente invocado pelo hub/coordenador nesta
-    análise (contabilizado como 1 chamada + 1 retorno = 2 mensagens). Na
-    hierárquica, soma-se os 3 hops de comunicação lateral fixos entre
-    supervisores (Etapa 5: Dominio→Analitico, Dominio→Contexto,
-    Contexto→Analitico — sempre propostos pelo `CoordenadorGeral`,
-    independente de falha upstream) e os 2 resumos textuais semânticos
-    que os acompanham (resumo_dominio, resumo_contexto). A estrela nunca
-    tem comunicação lateral (hub-and-spoke), então ambos ficam em 0.
+    exatamente 1 agente (ou supervisor, na hierárquica) efetivamente
+    invocado nesta análise (contabilizado como 1 chamada + 1 retorno = 2
+    mensagens). A hierárquica é uma árvore estrita — supervisores nunca
+    trocam dado diretamente entre si, só com o `CoordenadorGeral` (seu
+    pai) — então o proxy é o mesmo para as duas topologias; a diferença
+    real de volume entre elas já aparece em `agent_invocations` (a
+    hierárquica invoca também os 4 supervisores, além dos agentes-folha).
 
     Args:
         architecture: "star" ou "hierarchical".
@@ -442,19 +441,14 @@ def compute_communication_volume(
         indicadores_count: Nº de registros de indicador, idem.
 
     Returns:
-        Dict com contagem de invocações, hops laterais, resumos
-        semânticos, total de mensagens e tamanho aproximado do payload.
+        Dict com contagem de invocações, total de mensagens e tamanho
+        aproximado do payload.
     """
     n_agents = len(agent_metrics)
-    is_hierarchical = architecture == "hierarchical"
-    lateral_hops = 3 if is_hierarchical else 0
-    lateral_summaries = 2 if is_hierarchical else 0
-    message_count = n_agents * 2 + lateral_hops
+    message_count = n_agents * 2
 
     return {
         "agent_invocations": n_agents,
-        "lateral_hops": lateral_hops,
-        "lateral_summaries": lateral_summaries,
         "message_count": message_count,
         "payload_records": despesas_count + indicadores_count,
     }

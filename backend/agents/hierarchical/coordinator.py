@@ -4,7 +4,8 @@ Coordenador geral da arquitetura hierárquica (Nível 0).
 Delega para 4 supervisores especializados de nível 1:
 - SupervisorOrcamento (agentes AgenteOrcamentoSubfuncao — 1 por
   subfunção, 7 no total)
-- SupervisorSaude (5 agentes de saúde — SINAN, SIH, SIM, SI-PNI, COVID)
+- SupervisorSaude (8 agentes de saúde — SINAN, SIH, SIM, SI-PNI, COVID,
+  SINASC, SIA, CNES)
 - SupervisorAnalitico (agentes analíticos)
 - SupervisorContexto (1 agente de contexto orçamentário)
 
@@ -19,22 +20,30 @@ mais. A combinação/dedupe permanece como salvaguarda (custa pouco,
 protege contra qualquer regressão futura), não porque haja overlap real
 hoje.
 
-Implementa comunicação lateral entre supervisores (Reqs 10.5, 10.6),
-degradação graciosa em falha de supervisor (Req 10.9), e contagem
+Árvore estrita, sem canal lateral entre supervisores: um design anterior
+tinha os supervisores trocando dados diretamente entre si (mediado pela
+raiz, mas ainda uma troca par-a-par — `receive_from_peer`/`peer_data`,
+inclusive com resumos textuais via LLM). Removido por decisão explícita:
+isso fazia a "hierárquica" deste projeto não ser uma árvore no sentido
+estrito. Hoje o `CoordenadorGeral` colhe o retorno de cada supervisor
+(`SupervisorOrcamento`, `SupervisorSaude`, `SupervisorContexto`) e repassa
+o que for necessário como **parâmetro direto** na chamada seguinte —
+nenhum supervisor conhece ou escreve no estado de outro.
+
+Degradação graciosa em falha de supervisor (Req 10.9), e contagem
 de mensagens para comparação quantitativa (Reqs 11.1, 11.2).
 
 Nota arquitetural (CoALA): assim como o OrquestradorEstrela, o
 CoordenadorGeral executa de fato pelo ciclo CoALA — cada etapa de
-delegação e cada comunicação lateral entre supervisores é uma ação
-nomeada em `procedural_memory`, proposta em ordem fixa por
-`propose_actions()` (a ordem reflete as dependências de dados entre
-supervisores: orçamento + saúde → combinar despesas → comunicação
-lateral → contexto → comunicação lateral → analítico).
-`evaluate_and_select` colapsa num passthrough pelo mesmo motivo que no
-orquestrador estrela — não há candidatos concorrentes a arbitrar neste
-nível (a deliberação real acontece dentro de AgenteSINAN, nível 2).
+delegação é uma ação nomeada em `procedural_memory`, proposta em ordem
+fixa por `propose_actions()` (a ordem reflete as dependências de dados
+entre supervisores: orçamento + saúde → combinar despesas → contexto →
+analítico). `evaluate_and_select` colapsa num passthrough pelo mesmo
+motivo que no orquestrador estrela — não há candidatos concorrentes a
+arbitrar neste nível (a deliberação real acontece dentro de AgenteSINAN,
+nível 2).
 
-Requisitos: 10.1, 10.5, 10.6, 10.8, 10.9, 11.1, 11.2
+Requisitos: 10.1, 10.8, 10.9, 11.1, 11.2
 """
 
 from __future__ import annotations
@@ -65,14 +74,15 @@ class CoordenadorGeral(AgenteCoALA):
     """Nível 0 da topologia hierárquica com 4 supervisores (Req 10).
 
     Delega para SupervisorOrcamento, SupervisorSaude, SupervisorAnalitico
-    e SupervisorContexto. Os supervisores trocam dados lateralmente via
-    ``receive_from_peer`` (Reqs 10.5, 10.6). Agrega resultados, registra
+    e SupervisorContexto. Coleta o retorno de cada supervisor e repassa o
+    que for necessário como parâmetro direto ao próximo — árvore estrita,
+    sem canal lateral entre supervisores. Agrega resultados, registra
     métricas por agente e supervisor (Req 10.8), e trata falhas com
     degradação graciosa (Req 10.9).
 
     Herda de AgenteCoALA e executa de fato pelo ciclo CoALA — cada etapa
-    de delegação/comunicação lateral é uma ação registrada em
-    `procedural_memory`, proposta em ordem fixa por `propose_actions()`.
+    de delegação é uma ação registrada em `procedural_memory`, proposta em
+    ordem fixa por `propose_actions()`.
 
     Attributes:
         neo4j_client: Cliente Neo4j para queries e persistência.
@@ -85,10 +95,7 @@ class CoordenadorGeral(AgenteCoALA):
             "delegar_orcamento": [self._act_delegar_orcamento],
             "delegar_saude": [self._act_delegar_saude],
             "combinar_despesas": [self._act_combinar_despesas],
-            "comunicar_saude_analitico": [self._act_comunicar_saude_analitico],
-            "comunicar_orcamento_contexto": [self._act_comunicar_orcamento_contexto],
             "delegar_contexto": [self._act_delegar_contexto],
-            "comunicar_contexto_analitico": [self._act_comunicar_contexto_analitico],
             "delegar_analitico": [self._act_delegar_analitico],
             "persistir_metricas": [self._act_persistir_metricas],
         }
@@ -108,9 +115,8 @@ class CoordenadorGeral(AgenteCoALA):
         """Propõe as macro-ações do pipeline hierárquico, em ordem de dependência.
 
         A ordem reflete as dependências de dados entre supervisores
-        (orçamento + saúde → combinar despesas → comunicação lateral →
-        contexto → comunicação lateral → analítico → persistência), não
-        uma arbitragem entre candidatos concorrentes.
+        (orçamento + saúde → combinar despesas → contexto → analítico →
+        persistência), não uma arbitragem entre candidatos concorrentes.
         """
         if not self.working_memory.get("analysis_id"):
             return []
@@ -118,10 +124,7 @@ class CoordenadorGeral(AgenteCoALA):
             {"goal": "delegar_orcamento"},
             {"goal": "delegar_saude"},
             {"goal": "combinar_despesas"},
-            {"goal": "comunicar_saude_analitico"},
-            {"goal": "comunicar_orcamento_contexto"},
             {"goal": "delegar_contexto"},
-            {"goal": "comunicar_contexto_analitico"},
             {"goal": "delegar_analitico"},
             {"goal": "persistir_metricas"},
         ]
@@ -225,64 +228,20 @@ class CoordenadorGeral(AgenteCoALA):
         except Exception as exc:
             raise ActionFailure(action, str(exc)) from exc
 
-    def _act_comunicar_saude_analitico(self, action: dict) -> None:
-        """Comunicação lateral: SupervisorOrcamento + SupervisorSaude →
-        SupervisorAnalitico (Req 10.5).
-
-        Repassa despesas combinadas e indicadores para o pipeline
-        analítico, acompanhados dos resumos textuais gerados por ambos
-        os supervisores de origem (Etapa 5) — dá conteúdo semântico à
-        comunicação lateral, não só transporte de dados brutos (D4 do
-        PLANO_REFATORACAO.md).
-        """
-        sup_analitico = self.working_memory["_sup_analitico"]
-        orcamento_data = self.working_memory.get("_orcamento_data", {})
-        saude_data = self.working_memory.get("_saude_data", {})
-        despesas = self.working_memory.get("_despesas_combinadas", [])
-        resumo_orcamento = orcamento_data.get("resumo", "")
-        resumo_saude = saude_data.get("resumo", "")
-        resumo_dominio = " ".join(p for p in (resumo_orcamento, resumo_saude) if p)
-        logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Orcamento+Saude -> Analitico "
-            "(%d despesas, %d indicadores, resumo=%r)",
-            self.agent_id,
-            len(despesas),
-            len(saude_data.get("indicadores", [])),
-            resumo_dominio,
-        )
-        sup_analitico.receive_from_peer({
-            "despesas": despesas,
-            "indicadores": saude_data.get("indicadores", []),
-            "date_from": self.working_memory["date_from"],
-            "date_to": self.working_memory["date_to"],
-            "health_params": self.working_memory.get("health_params", []),
-            "intent_summary": self.working_memory.get("intent_summary"),
-            "resumo_dominio": resumo_dominio,
-        })
-
-    def _act_comunicar_orcamento_contexto(self, action: dict) -> None:
-        """Comunicação lateral: despesas combinadas → SupervisorContexto (Req 10.5).
-
-        Repassa despesas (orçamento + saúde combinadas) para análise de
-        tendências orçamentárias — cobre todas as subfunções presentes,
-        não só as que SupervisorOrcamento já instancia nesta fase.
-        """
-        sup_contexto = self.working_memory["_sup_contexto"]
-        despesas = self.working_memory.get("_despesas_combinadas", [])
-        logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Orcamento+Saude -> Contexto (%d despesas)",
-            self.agent_id, len(despesas),
-        )
-        sup_contexto.receive_from_peer({"despesas": despesas})
-
     def _act_delegar_contexto(self, action: dict) -> None:
-        """Ação externa: delega para SupervisorContexto.run() (Req 10.4)."""
+        """Ação externa: delega para SupervisorContexto.run() (Req 10.4).
+
+        Repassa as despesas combinadas (orçamento + saúde) como parâmetro
+        direto — o coordenador colheu esse dado de `_act_combinar_despesas`,
+        não há canal lateral entre supervisores.
+        """
         sup_contexto = self.working_memory["_sup_contexto"]
         mc = MetricsCollector(sup_contexto.agent_id, "supervisor_contexto")
         mc.start()
+        despesas = self.working_memory.get("_despesas_combinadas", [])
         use_llm = self.working_memory.get("use_llm", True)
         try:
-            contexto_data = sup_contexto.run(use_llm=use_llm)
+            contexto_data = sup_contexto.run(despesas=despesas, use_llm=use_llm)
             mc.stop()
             logger.info("CoordenadorGeral %s: SupervisorContexto completed", self.agent_id)
         except Exception as exc:
@@ -297,28 +256,14 @@ class CoordenadorGeral(AgenteCoALA):
         self.working_memory["_contexto_data"] = contexto_data
         self.working_memory["_metrics_collectors"].append(mc)
 
-    def _act_comunicar_contexto_analitico(self, action: dict) -> None:
-        """Comunicação lateral: SupervisorContexto → SupervisorAnalitico (Req 10.6).
-
-        Repassa contexto orçamentário para enriquecer a síntese textual,
-        acompanhado do resumo textual gerado por SupervisorContexto
-        (Etapa 5) — ver docstring de `_act_comunicar_saude_analitico`.
-        """
-        sup_analitico = self.working_memory["_sup_analitico"]
-        contexto_data = self.working_memory.get("_contexto_data", {})
-        resumo_contexto = contexto_data.get("resumo", "")
-        logger.info(
-            "[%s] CoordenadorGeral: comunicação lateral Contexto -> Analitico "
-            "(%d subfunções, resumo=%r)",
-            self.agent_id, len(contexto_data.get("contexto_orcamentario", {})), resumo_contexto,
-        )
-        sup_analitico.receive_from_peer({
-            "contexto_orcamentario": contexto_data.get("contexto_orcamentario", {}),
-            "resumo_contexto": resumo_contexto,
-        })
-
     def _act_delegar_analitico(self, action: dict) -> None:
-        """Ação externa: delega para SupervisorAnalitico.run() (Req 10.3)."""
+        """Ação externa: delega para SupervisorAnalitico.run() (Req 10.3).
+
+        Repassa despesas combinadas, indicadores (de SupervisorSaude) e
+        contexto orçamentário (de SupervisorContexto) como parâmetros
+        diretos — o coordenador colheu tudo do retorno dos supervisores de
+        origem, sem canal lateral entre eles.
+        """
         sup_analitico = self.working_memory["_sup_analitico"]
         mc = MetricsCollector(sup_analitico.agent_id, "supervisor_analitico")
         mc.start()
@@ -326,9 +271,21 @@ class CoordenadorGeral(AgenteCoALA):
         ws_queue = self.working_memory["_ws_queue"]
         use_llm = self.working_memory.get("use_llm", True)
         use_self_check = self.working_memory.get("use_self_check", False)
+        despesas = self.working_memory.get("_despesas_combinadas", [])
+        saude_data = self.working_memory.get("_saude_data", {})
+        contexto_data = self.working_memory.get("_contexto_data", {})
         try:
             analitico_data = sup_analitico.run(
-                analysis_id=analysis_id, ws_queue=ws_queue, use_llm=use_llm,
+                analysis_id=analysis_id,
+                ws_queue=ws_queue,
+                despesas=despesas,
+                indicadores=saude_data.get("indicadores", []),
+                contexto_orcamentario=contexto_data.get("contexto_orcamentario", {}),
+                date_from=self.working_memory.get("date_from"),
+                date_to=self.working_memory.get("date_to"),
+                health_params=self.working_memory.get("health_params", []),
+                intent_summary=self.working_memory.get("intent_summary"),
+                use_llm=use_llm,
                 use_self_check=use_self_check,
             )
             # Usa o timestamp de fim da parte determinística (exclui tempo
@@ -368,7 +325,8 @@ class CoordenadorGeral(AgenteCoALA):
         Supervisores NÃO entram em workers_time porque seu tempo já
         engloba o dos subordinados — somar ambos causaria dupla contagem.
         O overhead captura: tempo dos supervisores fora dos subordinados
-        + comunicação lateral (receive_from_peer) + instanciação.
+        + instanciação (não há mais tempo de comunicação lateral a
+        capturar — a árvore agora é estrita).
         """
         analysis_id = self.working_memory["analysis_id"]
         metrics_collectors: list[MetricsCollector] = self.working_memory.get(

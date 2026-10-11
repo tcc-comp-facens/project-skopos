@@ -5,22 +5,28 @@ Quatro supervisores especializados coordenam os agentes de nível 2:
 
 - **SupervisorOrcamento** coordena agentes `AgenteOrcamentoSubfuncao`
   (1 por subfunção, 7 no total — PLANO_NOVO_MODELO_DADOS.md §5).
-- **SupervisorSaude** coordena os 5 agentes de saúde (SINAN, SIH, SIM,
-  SI-PNI, COVID — 1 por Sistema de Informação). Substitui o antigo
-  `SupervisorDominio`, que combinava despesas+indicadores num único
-  nível — separado aqui em SupervisorOrcamento (despesas) vs.
-  SupervisorSaude (indicadores), decisão tomada com o usuário na Fase 1.
+- **SupervisorSaude** coordena os 8 agentes de saúde (SINAN, SIH, SIM,
+  SI-PNI, COVID, SINASC, SIA, CNES — 1 por Sistema de Informação).
+  Substitui o antigo `SupervisorDominio`, que combinava despesas+
+  indicadores num único nível — separado aqui em SupervisorOrcamento
+  (despesas) vs. SupervisorSaude (indicadores), decisão tomada com o
+  usuário na Fase 1.
 - **SupervisorAnalitico** coordena os agentes analíticos (correlação +
   anomalias consolidadas em `AgenteAnalitico`, priorização, síntese).
 - **SupervisorContexto** coordena `AgenteContextoOrcamentario` (tendências
   de todas as subfunções presentes nas despesas recebidas).
 
-Todos implementam ``receive_from_peer`` para comunicação lateral
-direta entre supervisores do mesmo nível, sem intermediação do
-CoordenadorGeral (Reqs 10.5, 10.6) — tratada como uma ação externa de
-comunicação que escreve numa região nomeada da working memory
-(``peer_data``), sem passar pelo ciclo `propose_actions`/`execute` de
-quem recebe (é o par que empurra o dado, não o receptor que o busca).
+Árvore estrita: cada supervisor só troca dados com o `CoordenadorGeral`
+(seu pai), nunca diretamente com outro supervisor. Um design anterior
+tinha um canal `receive_from_peer`/`peer_data` mediado pela raiz
+(comunicação "lateral", inclusive com resumos textuais via LLM) — removido
+por decisão explícita: o modelo de hierárquica deste projeto não é uma
+árvore estrita se dois nós do mesmo nível trocam dado entre si, mesmo que
+a troca seja disparada pelo coordenador. Hoje `SupervisorContexto.run()` e
+`SupervisorAnalitico.run()` recebem tudo de que precisam como parâmetros
+diretos de `CoordenadorGeral` (que colhe o retorno de cada supervisor e
+repassa o que for necessário ao próximo) — sem estado intermediário de
+"dado de par".
 
 Cada supervisor executa de fato pelo ciclo CoALA: `run()` configura a
 working memory e delega a `run_coala_cycle()`, que percorre as
@@ -28,7 +34,7 @@ macro-ações registradas em `procedural_memory` na ordem proposta por
 `propose_actions` — a mesma degradação graciosa e coleta de métricas por
 agente subordinado que o pipeline imperativo anterior já tinha.
 
-Requisitos: 10.2, 10.3, 10.4, 10.5, 10.6, 10.7
+Requisitos: 10.2, 10.3, 10.4, 10.7
 """
 
 from __future__ import annotations
@@ -176,17 +182,14 @@ class SupervisorOrcamento(AgenteCoALA):
 
     Attributes:
         neo4j_client: Cliente Neo4j repassado aos agentes orçamentários.
-        peer_data: Dados recebidos de supervisores pares via comunicação lateral.
     """
 
     def __init__(self, agent_id: str, neo4j_client: "Neo4jClient") -> None:
         super().__init__(agent_id)
         self.neo4j_client = neo4j_client
-        self.peer_data: dict[str, Any] = {}
         self.procedural_memory = {
             "consultar_orcamento": [self._act_consultar_orcamento],
             "agregar_resultados": [self._act_agregar_resultados],
-            "resumir_para_par": [self._act_resumir_para_par, self._act_resumir_fallback],
         }
         self._collectors: list[MetricsCollector] = []
 
@@ -225,7 +228,6 @@ class SupervisorOrcamento(AgenteCoALA):
 
         if actions:
             actions.append({"goal": "agregar_resultados"})
-            actions.append({"goal": "resumir_para_par"})
         return actions
 
     # -- Ações ------------------------------------------------------------
@@ -297,70 +299,6 @@ class SupervisorOrcamento(AgenteCoALA):
         except Exception as exc:
             raise ActionFailure(action, str(exc)) from exc
 
-    def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
-
-        Mesmo mecanismo/regras do SupervisorSaude (ver docstring
-        equivalente lá): respeita `use_llm=False`, cai no fallback
-        determinístico se o LLM falhar.
-        """
-        if not self.working_memory.get("use_llm", True):
-            raise ActionFailure(action, "use_llm=False")
-
-        aggregated = self.working_memory.get("aggregated", {"despesas": [], "tendencias": {}})
-        despesas = aggregated.get("despesas", [])
-        date_from = self.working_memory.get("date_from")
-        date_to = self.working_memory.get("date_to")
-
-        prompt = (
-            "Resuma em no máximo 2 frases curtas, em português, o que foi "
-            "encontrado nesta consulta de execução orçamentária de saúde "
-            "de Sorocaba-SP, para um colega que vai usar esse resumo como "
-            "contexto (não invente números além dos fornecidos):\n"
-            f"- Período: {date_from}-{date_to}\n"
-            f"- {len(despesas)} registros de despesa encontrados"
-        )
-
-        try:
-            import core.llm_client as llm_client
-
-            raw = llm_client.generate(prompt, caller=f"{self.agent_id}:resumir_para_par")
-        except Exception as exc:
-            raise ActionFailure(action, str(exc)) from exc
-
-        if not raw or not raw.strip():
-            raise ActionFailure(action, "LLM retornou resposta vazia")
-
-        self.working_memory["resumo"] = raw.strip()
-        logger.info(
-            "SupervisorOrcamento %s: resumo lateral gerado via LLM: %r",
-            self.agent_id, self.working_memory["resumo"],
-        )
-
-    def _act_resumir_fallback(self, action: dict) -> None:
-        """Estratégia de fallback: LLM indisponível — resumo determinístico."""
-        aggregated = self.working_memory.get("aggregated", {"despesas": [], "tendencias": {}})
-        despesas = aggregated.get("despesas", [])
-
-        self.working_memory["resumo"] = (
-            f"Foram encontradas {len(despesas)} despesas relacionadas ao orçamento consultado."
-        )
-        logger.warning(
-            "SupervisorOrcamento %s: LLM indisponível — resumo lateral via fallback determinístico",
-            self.agent_id,
-        )
-
-    # -- Comunicação lateral ------------------------------------------------
-
-    def receive_from_peer(self, data: dict[str, Any]) -> None:
-        """Recebe dados de um supervisor par (ação externa de comunicação)."""
-        self.peer_data.update(data)
-        self.update_working_memory({"peer_data": self.peer_data})
-        logger.info(
-            "SupervisorOrcamento %s: received peer data with keys %s",
-            self.agent_id, list(data.keys()),
-        )
-
     # -- Interface pública chamada pelo CoordenadorGeral -------------------
 
     def run(
@@ -381,7 +319,7 @@ class SupervisorOrcamento(AgenteCoALA):
 
         Returns:
             Dicionário com "despesas", "tendencias" (por subfuncaoCodigo)
-            e "resumo".
+            e "agent_queries".
         """
         self._collectors = []
         self.update_working_memory({
@@ -400,7 +338,6 @@ class SupervisorOrcamento(AgenteCoALA):
         result = dict(
             self.working_memory.get("aggregated", {"despesas": [], "tendencias": {}})
         )
-        result["resumo"] = self.working_memory.get("resumo", "")
         result["agent_queries"] = self.working_memory.get("agent_queries", [])
         return result
 
@@ -408,34 +345,31 @@ class SupervisorOrcamento(AgenteCoALA):
 class SupervisorSaude(AgenteCoALA):
     """Supervisor de saúde — nível 1 da topologia hierárquica.
 
-    Coordena os 5 agentes de saúde (nível 2) — 1 por Sistema de
+    Coordena os 8 agentes de saúde (nível 2) — 1 por Sistema de
     Informação: `AgenteSINAN` (9 agravos), `AgenteSIH` (internações),
     `AgenteSIM` (mortalidade), `AgenteSIPNI` (cobertura vacinal, doses
-    aplicadas), `AgenteCOVID` (casos, óbitos).
+    aplicadas), `AgenteCOVID` (casos, óbitos), `AgenteSINASC` (nascidos
+    vivos), `AgenteSIA` (produção ambulatorial), `AgenteCNES` (12
+    subtipos da rede assistencial).
 
     Substitui o antigo `SupervisorDominio`, que também coordenava
     despesas — agora responsabilidade exclusiva de `SupervisorOrcamento`.
-    Nenhum dos 5 agentes de saúde consulta despesas (decomposição
-    completa — diferente da Fase 1, onde os agentes legados ainda
-    misturavam despesas+indicadores) — o campo "despesas" do agregado
-    fica sempre vazio aqui; o dedupe em `CoordenadorGeral._act_combinar_despesas`
-    permanece como salvaguarda estrutural, não porque haja sobreposição
-    real de origem.
+    Nenhum dos 8 agentes de saúde consulta despesas (decomposição
+    completa) — o campo "despesas" do agregado fica sempre vazio aqui;
+    o dedupe em `CoordenadorGeral._act_combinar_despesas` permanece como
+    salvaguarda estrutural, não porque haja sobreposição real de origem.
 
     Attributes:
         neo4j_client: Cliente Neo4j repassado aos agentes de saúde.
-        peer_data: Dados recebidos de supervisores pares via comunicação lateral.
     """
 
     def __init__(self, agent_id: str, neo4j_client: "Neo4jClient") -> None:
         super().__init__(agent_id)
         self.neo4j_client = neo4j_client
-        self.peer_data: dict[str, Any] = {}
         self.semantic_memory = {"indicador_to_agent": INDICADOR_TO_AGENT}
         self.procedural_memory = {
             "consultar_saude": [self._act_consultar_saude],
             "agregar_resultados": [self._act_agregar_resultados],
-            "resumir_para_par": [self._act_resumir_para_par, self._act_resumir_fallback],
         }
         self._collectors: list[MetricsCollector] = []
 
@@ -479,7 +413,6 @@ class SupervisorSaude(AgenteCoALA):
         )
 
         actions.append({"goal": "agregar_resultados"})
-        actions.append({"goal": "resumir_para_par"})
         return actions
 
     # -- Ações ------------------------------------------------------------
@@ -568,95 +501,6 @@ class SupervisorSaude(AgenteCoALA):
         except Exception as exc:
             raise ActionFailure(action, str(exc)) from exc
 
-    def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
-
-        Descreve em 1-2 frases o que este supervisor encontrou (cobertura
-        de dados, não uma conclusão analítica — isso é papel dos agentes
-        analíticos). Esse resumo acompanha os dados brutos quando
-        repassados lateralmente a SupervisorAnalitico (ver
-        CoordenadorGeral), dando conteúdo semântico à comunicação lateral
-        em vez de só transportar dicts (D4 do PLANO_REFATORACAO.md).
-        Se o LLM falhar, `_act_resumir_fallback` (próxima estratégia)
-        gera um resumo determinístico equivalente — a comunicação lateral
-        nunca fica sem resumo.
-
-        Respeita `use_llm=False` (mesma regra já aplicada a
-        `priorizar_achados`/`verificar_afirmacoes`): levanta ActionFailure
-        de propósito para cair direto no fallback determinístico, sem
-        gastar uma chamada LLM quando a análise pediu explicitamente para
-        não usar LLM em lugar nenhum.
-        """
-        if not self.working_memory.get("use_llm", True):
-            raise ActionFailure(action, "use_llm=False")
-
-        aggregated = self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
-        despesas = aggregated.get("despesas", [])
-        indicadores = aggregated.get("indicadores", [])
-        health_params = self.working_memory.get("health_params") or []
-        date_from = self.working_memory.get("date_from")
-        date_to = self.working_memory.get("date_to")
-
-        prompt = (
-            "Resuma em no máximo 2 frases curtas, em português, o que foi "
-            "encontrado nesta consulta de indicadores de saúde pública de "
-            "Sorocaba-SP, para um colega que vai usar esse resumo como "
-            "contexto (não invente números além dos fornecidos):\n"
-            f"- Período: {date_from}-{date_to}\n"
-            f"- Indicadores solicitados: {health_params}\n"
-            f"- {len(despesas)} registros de despesa encontrados\n"
-            f"- {len(indicadores)} registros de indicador encontrados"
-        )
-
-        try:
-            import core.llm_client as llm_client
-
-            raw = llm_client.generate(prompt, caller=f"{self.agent_id}:resumir_para_par")
-        except Exception as exc:
-            raise ActionFailure(action, str(exc)) from exc
-
-        if not raw or not raw.strip():
-            raise ActionFailure(action, "LLM retornou resposta vazia")
-
-        self.working_memory["resumo"] = raw.strip()
-        logger.info(
-            "SupervisorSaude %s: resumo lateral gerado via LLM: %r",
-            self.agent_id, self.working_memory["resumo"],
-        )
-
-    def _act_resumir_fallback(self, action: dict) -> None:
-        """Estratégia de fallback: LLM indisponível — resumo determinístico (Etapa 5)."""
-        aggregated = self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
-        despesas = aggregated.get("despesas", [])
-        indicadores = aggregated.get("indicadores", [])
-        health_params = self.working_memory.get("health_params") or []
-        labels = ", ".join(health_params) if health_params else "os indicadores solicitados"
-
-        self.working_memory["resumo"] = (
-            f"Foram encontradas {len(despesas)} despesas e {len(indicadores)} "
-            f"indicadores relacionados a {labels}."
-        )
-        logger.warning(
-            "SupervisorSaude %s: LLM indisponível — resumo lateral via fallback determinístico",
-            self.agent_id,
-        )
-
-    # -- Comunicação lateral (Req 10.5) ------------------------------------
-
-    def receive_from_peer(self, data: dict[str, Any]) -> None:
-        """Recebe dados de um supervisor par (ação externa de comunicação).
-
-        Args:
-            data: Dicionário com dados enviados pelo supervisor par.
-        """
-        self.peer_data.update(data)
-        self.update_working_memory({"peer_data": self.peer_data})
-        logger.info(
-            "SupervisorSaude %s: received peer data with keys %s",
-            self.agent_id,
-            list(data.keys()),
-        )
-
     # -- Interface pública chamada pelo CoordenadorGeral -------------------
 
     def run(
@@ -680,13 +524,13 @@ class SupervisorSaude(AgenteCoALA):
             health_params: Lista de tipos de indicador selecionados pelo usuário.
             intent_summary: Resumo da intenção do usuário — insumo da
                 deliberação de dimensão de `AgenteSINAN` (Fase 1).
-            use_llm: Se False, `resumir_para_par` e a deliberação de
-                dimensão de `AgenteSINAN` pulam direto para o
-                comportamento determinístico — nenhuma chamada LLM extra.
+            use_llm: Se False, a deliberação de dimensão dos agentes de
+                saúde pula direto para o comportamento determinístico —
+                nenhuma chamada LLM extra.
 
         Returns:
-            Dicionário com "despesas" (herdadas dos agentes legados ainda
-            não decompostos) e "indicadores" agregados.
+            Dicionário com "despesas" (sempre vazia — nenhum agente de
+            saúde retorna despesas) e "indicadores" agregados.
         """
         self._collectors = []
         self.update_working_memory({
@@ -705,7 +549,6 @@ class SupervisorSaude(AgenteCoALA):
         result = dict(
             self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
         )
-        result["resumo"] = self.working_memory.get("resumo", "")
         result["agent_queries"] = self.working_memory.get("agent_queries", [])
         return result
 
@@ -713,22 +556,21 @@ class SupervisorSaude(AgenteCoALA):
 class SupervisorAnalitico(AgenteCoALA):
     """Supervisor analítico — nível 1 da topologia hierárquica (Req 10.3).
 
-    Coordena 3 agentes analíticos (nível 2): AgenteCorrelacao,
-    AgenteAnomalias e TextSynthesizer.
+    Coordena os agentes analíticos (nível 2): `AgenteAnalitico`
+    (correlação Spearman + anomalias consolidadas), `AgentePriorizacaoAnalitica`
+    e `TextSynthesizer`.
 
-    Recebe dados de domínio e contexto orçamentário via
-    ``receive_from_peer`` (Reqs 10.5, 10.6), cruza dados usando
-    ``cross_domain_data()``, e executa o pipeline analítico via macro-ações
-    registradas em `procedural_memory`: cruzamento → gaps → correlação →
-    anomalias → sintetizador.
-
-    Attributes:
-        peer_data: Dados recebidos de supervisores pares via comunicação lateral.
+    Recebe despesas, indicadores e contexto orçamentário como parâmetros
+    diretos de `run()` (repassados pelo `CoordenadorGeral`, que os colheu
+    do retorno de `SupervisorOrcamento`/`SupervisorSaude`/`SupervisorContexto`
+    — árvore estrita, sem canal lateral entre supervisores), cruza os dados
+    usando ``cross_domain_data()``, e executa o pipeline analítico via
+    macro-ações registradas em `procedural_memory`: cruzamento → gaps →
+    correlação/anomalias → síntese.
     """
 
     def __init__(self, agent_id: str) -> None:
         super().__init__(agent_id)
-        self.peer_data: dict[str, Any] = {}
         self.procedural_memory = {
             "cruzar_dados": [self._act_cruzar_dados],
             "detectar_gaps": [self._act_detectar_gaps],
@@ -746,15 +588,8 @@ class SupervisorAnalitico(AgenteCoALA):
     # -- Ciclo CoALA ------------------------------------------------------
 
     def perceive(self) -> dict:
-        """Percebe dados disponíveis (recebidos dos peers ou já na working memory)."""
-        return {
-            "analysis_id": self.working_memory.get("analysis_id"),
-            "despesas": self.peer_data.get("despesas", []),
-            "indicadores": self.peer_data.get("indicadores", []),
-            "contexto_orcamentario": self.peer_data.get("contexto_orcamentario", {}),
-            "resumo_dominio": self.peer_data.get("resumo_dominio", ""),
-            "resumo_contexto": self.peer_data.get("resumo_contexto", ""),
-        }
+        """Percebe os dados recebidos diretamente de `run()` (já na working memory)."""
+        return {}
 
     def propose_actions(self) -> list[dict]:
         """Propõe o pipeline analítico, se há análise e fila WS configuradas.
@@ -781,34 +616,13 @@ class SupervisorAnalitico(AgenteCoALA):
             actions.append({"goal": "verificar_afirmacoes"})
         return actions
 
-    # -- Comunicação lateral (Reqs 10.5, 10.6) ------------------------------
-
-    def receive_from_peer(self, data: dict[str, Any]) -> None:
-        """Recebe dados de um supervisor par (ação externa de comunicação).
-
-        Tipicamente chamado pelo CoordenadorGeral para repassar despesas
-        (combinadas de SupervisorOrcamento + SupervisorSaude) e
-        indicadores (de SupervisorSaude), e do SupervisorContexto
-        (contexto_orcamentario).
-
-        Args:
-            data: Dicionário com dados enviados pelo supervisor par.
-        """
-        self.peer_data.update(data)
-        self.update_working_memory({"peer_data": self.peer_data})
-        logger.info(
-            "SupervisorAnalitico %s: received peer data with keys %s",
-            self.agent_id,
-            list(data.keys()),
-        )
-
     # -- Ações --------------------------------------------------------------
 
     def _act_cruzar_dados(self, action: dict) -> None:
-        """Ação interna (reasoning): cruza dados de domínio (Req 10.5)."""
+        """Ação interna (reasoning): cruza despesas × indicadores recebidos do coordenador."""
         try:
-            despesas = self.peer_data.get("despesas", [])
-            indicadores = self.peer_data.get("indicadores", [])
+            despesas = self.working_memory.get("despesas", [])
+            indicadores = self.working_memory.get("indicadores", [])
             dados_cruzados = cross_domain_data(despesas, indicadores)
             self.working_memory["dados_cruzados"] = dados_cruzados
         except Exception as exc:
@@ -817,11 +631,11 @@ class SupervisorAnalitico(AgenteCoALA):
     def _act_detectar_gaps(self, action: dict) -> None:
         """Ação interna (reasoning): detecta lacunas de dados para transparência."""
         try:
-            despesas = self.peer_data.get("despesas", [])
-            indicadores = self.peer_data.get("indicadores", [])
-            date_from = self.peer_data.get("date_from")
-            date_to = self.peer_data.get("date_to")
-            health_params = self.peer_data.get("health_params")
+            despesas = self.working_memory.get("despesas", [])
+            indicadores = self.working_memory.get("indicadores", [])
+            date_from = self.working_memory.get("date_from")
+            date_to = self.working_memory.get("date_to")
+            health_params = self.working_memory.get("health_params")
             data_coverage: dict = {}
             if date_from is not None and date_to is not None:
                 data_coverage = detect_data_gaps(
@@ -868,34 +682,12 @@ class SupervisorAnalitico(AgenteCoALA):
         """Ação interna (bookkeeping): marca o fim da parte determinística (antes do LLM)."""
         self._coala_leaf_end_time = time.time()
 
-    def _compor_intent_summary(self) -> str | None:
-        """Enriquece o intent_summary (Etapa 1) com os resumos laterais (Etapa 5).
-
-        Reaproveita a Etapa 3 sem alterar a assinatura de
-        `AgentePriorizacaoAnalitica.prioritize` — os resumos recebidos de
-        SupervisorOrcamento+SupervisorSaude (combinados em
-        "resumo_dominio" pelo CoordenadorGeral) e de SupervisorContexto
-        via `receive_from_peer` são concatenados como contexto adicional,
-        não substituem a intenção original do usuário.
-        """
-        intent_summary = self.peer_data.get("intent_summary")
-        resumo_dominio = self.peer_data.get("resumo_dominio", "")
-        resumo_contexto = self.peer_data.get("resumo_contexto", "")
-        partes = [p for p in (intent_summary, resumo_dominio, resumo_contexto) if p]
-        return " ".join(partes) if partes else None
-
     def _act_priorizar_achados(self, action: dict) -> None:
         """Ação interna (reasoning): delega a AgentePriorizacaoAnalitica (Etapa 3).
 
         Roda depois de `capturar_wallclock` — mesma lógica do sintetizador:
         seu tempo (inclui 1 chamada LLM) fica fora da métrica de tempo
         "determinística" do supervisor. Falha aqui nunca propaga.
-
-        `intent_summary` já vem enriquecido com os resumos laterais
-        recebidos de SupervisorOrcamento+SupervisorSaude/SupervisorContexto
-        (Etapa 5, ver `_compor_intent_summary`) — insumo adicional opcional para a
-        escolha do ângulo de ênfase, sem alterar o contrato de
-        `AgentePriorizacaoAnalitica.prioritize`.
         """
         prior_id = f"hier-priorizacao-{uuid.uuid4().hex[:8]}"
         agente_priorizacao = AgentePriorizacaoAnalitica(prior_id)
@@ -904,8 +696,8 @@ class SupervisorAnalitico(AgenteCoALA):
         try:
             correlacoes = self.working_memory.get("correlacoes", [])
             anomalias = self.working_memory.get("anomalias", [])
-            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
-            intent_summary = self._compor_intent_summary()
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
+            intent_summary = self.working_memory.get("intent_summary")
             use_llm = self.working_memory.get("use_llm", True)
 
             achados_priorizados = agente_priorizacao.prioritize(
@@ -939,9 +731,9 @@ class SupervisorAnalitico(AgenteCoALA):
             analysis_id = self.working_memory["analysis_id"]
             data_coverage = self.working_memory.get("data_coverage")
             use_llm = self.working_memory.get("use_llm", True)
-            date_from = self.peer_data.get("date_from")
-            date_to = self.peer_data.get("date_to")
-            pergunta_usuario = self.peer_data.get("intent_summary")
+            date_from = self.working_memory.get("date_from")
+            date_to = self.working_memory.get("date_to")
+            pergunta_usuario = self.working_memory.get("intent_summary")
 
             # Correlações/anomalias/ênfase priorizadas (Etapa 3), se
             # disponíveis — nunca substitui os dados brutos usados em Q1.
@@ -954,7 +746,7 @@ class SupervisorAnalitico(AgenteCoALA):
                 correlacoes = self.working_memory.get("correlacoes", [])
                 anomalias = self.working_memory.get("anomalias", [])
                 enfase = None
-            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
 
             adapter = StreamingAdapter(ws_queue, analysis_id, "hierarchical")
 
@@ -1029,7 +821,7 @@ class SupervisorAnalitico(AgenteCoALA):
         try:
             correlacoes = self.working_memory.get("correlacoes", [])
             anomalias = self.working_memory.get("anomalias", [])
-            contexto_orcamentario = self.peer_data.get("contexto_orcamentario", {})
+            contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
 
             resultado = claim_verifier.self_check(
                 texto_analise, correlacoes, anomalias, contexto_orcamentario, caller=verif_id,
@@ -1065,18 +857,34 @@ class SupervisorAnalitico(AgenteCoALA):
         self,
         analysis_id: str,
         ws_queue: Queue,
+        despesas: list[dict],
+        indicadores: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        date_from: int | None = None,
+        date_to: int | None = None,
+        health_params: list[str] | None = None,
+        intent_summary: str | None = None,
         use_llm: bool = True,
         use_self_check: bool = False,
     ) -> dict[str, Any]:
-        """Executa o pipeline analítico via 3 agentes subordinados.
+        """Executa o pipeline analítico via agentes subordinados.
 
-        Espera que ``receive_from_peer`` já tenha sido chamado com
-        despesas, indicadores e contexto_orcamentario. Configura a working
-        memory e delega ao ciclo CoALA (Req 10.3).
+        Recebe despesas, indicadores e contexto orçamentário como
+        parâmetros diretos — já colhidos pelo `CoordenadorGeral` do
+        retorno de `SupervisorOrcamento`/`SupervisorSaude`/`SupervisorContexto`
+        (árvore estrita, sem canal lateral). Configura a working memory e
+        delega ao ciclo CoALA (Req 10.3).
 
         Args:
             analysis_id: UUID da análise em andamento.
             ws_queue: Fila para streaming de eventos WebSocket.
+            despesas: Despesas combinadas (orçamento + saúde, deduplicadas).
+            indicadores: Indicadores agregados dos agentes de saúde.
+            contexto_orcamentario: Tendências já calculadas por `SupervisorContexto`.
+            date_from: Ano inicial do período.
+            date_to: Ano final do período.
+            health_params: Indicadores solicitados na análise.
+            intent_summary: Resumo da intenção do usuário (Etapa 1).
             use_llm: Se True, tenta gerar texto via LLM antes do fallback.
             use_self_check: Se True (e use_llm=True), roda a verificação
                 pós-síntese (Etapa 4) sobre o texto gerado.
@@ -1090,6 +898,13 @@ class SupervisorAnalitico(AgenteCoALA):
         self.update_working_memory({
             "analysis_id": analysis_id,
             "_ws_queue": ws_queue,
+            "despesas": despesas,
+            "indicadores": indicadores,
+            "contexto_orcamentario": contexto_orcamentario,
+            "date_from": date_from,
+            "date_to": date_to,
+            "health_params": health_params,
+            "intent_summary": intent_summary,
             "use_llm": use_llm,
             "use_self_check": use_self_check,
         })
@@ -1122,58 +937,28 @@ class SupervisorContexto(AgenteCoALA):
     Coordena o AgenteContextoOrcamentario (nível 2) para análise de
     tendências temporais de gasto orçamentário.
 
-    Recebe despesas combinadas (SupervisorOrcamento + SupervisorSaude,
-    já deduplicadas pelo CoordenadorGeral) via ``receive_from_peer``
-    (Req 10.6) e executa a análise de tendências via ciclo CoALA.
-
-    Attributes:
-        peer_data: Dados recebidos de supervisores pares via comunicação lateral.
+    Recebe despesas combinadas (SupervisorOrcamento + SupervisorSaude, já
+    deduplicadas pelo CoordenadorGeral) como parâmetro direto de `run()`.
     """
 
     def __init__(self, agent_id: str) -> None:
         super().__init__(agent_id)
-        self.peer_data: dict[str, Any] = {}
         self.procedural_memory = {
             "executar_contexto_orcamentario": [self._act_executar_contexto_orcamentario],
-            "resumir_para_par": [self._act_resumir_para_par, self._act_resumir_fallback],
         }
         self._collectors: list[MetricsCollector] = []
 
     # -- Ciclo CoALA ------------------------------------------------------
 
     def perceive(self) -> dict:
-        """Percebe dados disponíveis (recebidos dos peers)."""
-        return {
-            "despesas": self.peer_data.get("despesas", []),
-        }
+        """Percebe as despesas recebidas diretamente de `run()` (já na working memory)."""
+        return {}
 
     def propose_actions(self) -> list[dict]:
         """Propõe executar a análise de tendências se há despesas disponíveis."""
-        if self.peer_data.get("despesas"):
-            return [
-                {"goal": "executar_contexto_orcamentario"},
-                {"goal": "resumir_para_par"},
-            ]
+        if self.working_memory.get("despesas"):
+            return [{"goal": "executar_contexto_orcamentario"}]
         return []
-
-    # -- Comunicação lateral (Req 10.6) ------------------------------------
-
-    def receive_from_peer(self, data: dict[str, Any]) -> None:
-        """Recebe dados de um supervisor par (ação externa de comunicação).
-
-        Tipicamente chamado pelo CoordenadorGeral para repassar despesas
-        combinadas de SupervisorOrcamento + SupervisorSaude.
-
-        Args:
-            data: Dicionário com "despesas" do supervisor par.
-        """
-        self.peer_data.update(data)
-        self.update_working_memory({"peer_data": self.peer_data})
-        logger.info(
-            "SupervisorContexto %s: received peer data with keys %s",
-            self.agent_id,
-            list(data.keys()),
-        )
 
     # -- Ações --------------------------------------------------------------
 
@@ -1184,7 +969,7 @@ class SupervisorContexto(AgenteCoALA):
         mc = MetricsCollector(ctx_id, "contexto_orcamentario")
         mc.start()
         try:
-            despesas = self.peer_data.get("despesas", [])
+            despesas = self.working_memory.get("despesas", [])
             contexto_orcamentario = agente_contexto.analyze_trends(despesas)
             mc.stop()
             self.working_memory["contexto_orcamentario"] = contexto_orcamentario
@@ -1204,98 +989,28 @@ class SupervisorContexto(AgenteCoALA):
             self._collectors.append(mc)
             raise ActionFailure(action, str(exc)) from exc
 
-    def _act_resumir_para_par(self, action: dict) -> None:
-        """Ação interna (reasoning): gera um resumo textual curto via LLM (Etapa 5).
-
-        Descreve em 1-2 frases a tendência orçamentária mais relevante
-        (maior variação em módulo), para acompanhar o `contexto_orcamentario`
-        bruto quando repassado a SupervisorAnalitico — o mesmo tipo de
-        conteúdo semântico do exemplo do PLANO_REFATORACAO.md ("gasto em
-        Vigilância Epidemiológica caiu de forma consistente nos últimos
-        2 anos"). Se o LLM falhar, `_act_resumir_fallback` gera o
-        equivalente determinístico.
-
-        Respeita `use_llm=False` — ver docstring equivalente em
-        `SupervisorSaude._act_resumir_para_par`.
-        """
-        if not self.working_memory.get("use_llm", True):
-            raise ActionFailure(action, "use_llm=False")
-
-        contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
-        if not contexto_orcamentario:
-            self.working_memory["resumo"] = ""
-            return
-
-        prompt = (
-            "Resuma em no máximo 2 frases curtas, em português, a tendência "
-            "orçamentária mais relevante abaixo (maior variação, positiva ou "
-            "negativa), para um colega que vai usar esse resumo como "
-            "contexto — não invente números além dos fornecidos:\n"
-            f"{contexto_orcamentario}"
-        )
-
-        try:
-            import core.llm_client as llm_client
-
-            raw = llm_client.generate(prompt, caller=f"{self.agent_id}:resumir_para_par")
-        except Exception as exc:
-            raise ActionFailure(action, str(exc)) from exc
-
-        if not raw or not raw.strip():
-            raise ActionFailure(action, "LLM retornou resposta vazia")
-
-        self.working_memory["resumo"] = raw.strip()
-        logger.info(
-            "SupervisorContexto %s: resumo lateral gerado via LLM: %r",
-            self.agent_id, self.working_memory["resumo"],
-        )
-
-    def _act_resumir_fallback(self, action: dict) -> None:
-        """Estratégia de fallback: LLM indisponível — resumo determinístico (Etapa 5)."""
-        contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
-        if not contexto_orcamentario:
-            self.working_memory["resumo"] = ""
-            return
-
-        subfuncao_key, dados = max(
-            contexto_orcamentario.items(),
-            key=lambda item: abs(item[1].get("variacao_media_percentual", 0))
-            if isinstance(item[1], dict) else 0,
-        )
-        variacao = dados.get("variacao_media_percentual", 0) if isinstance(dados, dict) else 0
-        tendencia = dados.get("tendencia", "estável") if isinstance(dados, dict) else "estável"
-        self.working_memory["resumo"] = (
-            f"A subfunção {subfuncao_key} apresentou a maior variação orçamentária "
-            f"do período, com tendência de {tendencia} ({variacao:.1f}% em média)."
-        )
-        logger.warning(
-            "SupervisorContexto %s: LLM indisponível — resumo lateral via fallback determinístico",
-            self.agent_id,
-        )
-
     # -- Interface pública chamada pelo CoordenadorGeral -------------------
 
-    def run(self, use_llm: bool = True) -> dict[str, Any]:
-        """Executa a análise de contexto orçamentário via subordinado.
-
-        Espera que ``receive_from_peer`` já tenha sido chamado com as
-        despesas combinadas (SupervisorOrcamento + SupervisorSaude).
-        Delega ao ciclo CoALA (Req 10.4).
+    def run(self, despesas: list[dict], use_llm: bool = True) -> dict[str, Any]:
+        """Executa a análise de tendências orçamentárias via subordinado.
 
         Args:
-            use_llm: Se False, `resumir_para_par` (Etapa 5) pula direto
-                para o fallback determinístico.
+            despesas: Despesas combinadas (orçamento + saúde, deduplicadas
+                pelo CoordenadorGeral), repassadas como parâmetro direto —
+                sem canal lateral entre supervisores.
+            use_llm: Aceito por simetria de assinatura com os demais
+                supervisores; esta análise nunca chama o LLM (cálculo
+                determinístico, ver `AgenteContextoOrcamentario`).
 
         Returns:
-            Dicionário com "contexto_orcamentario" e "resumo".
+            Dicionário com "contexto_orcamentario".
         """
         self._collectors = []
-        self.update_working_memory({"use_llm": use_llm})
+        self.update_working_memory({"despesas": despesas, "use_llm": use_llm})
         self.run_coala_cycle()
 
         result = {
             "contexto_orcamentario": self.working_memory.get("contexto_orcamentario", {}),
-            "resumo": self.working_memory.get("resumo", ""),
         }
 
         self.working_memory["aggregated"] = result
