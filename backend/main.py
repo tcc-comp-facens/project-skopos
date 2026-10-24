@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -48,7 +49,24 @@ logging.getLogger(__name__).info(
     "configurada" if llm_client.has_api_key(_llm_provider) else f"AUSENTE ({_llm_provider.api_key_env})",
 )
 
-app = FastAPI(title="Multiagent Architecture Comparison")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Garante as constraints dos nós gravados pela aplicação (Analise/MetricaExecucao).
+
+    Melhor esforço: o banco indisponível no startup não impede a API de subir.
+    """
+    try:
+        client = _get_neo4j_client()
+        try:
+            client.ensure_schema()
+        finally:
+            client.close()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Neo4j: esquema não verificado no startup — %s", exc)
+    yield
+
+
+app = FastAPI(title="Multiagent Architecture Comparison", lifespan=_lifespan)
 
 # CORS (Req 10.4)
 origins = os.getenv("CORS_ORIGINS", "*").split(",")

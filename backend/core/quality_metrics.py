@@ -65,14 +65,11 @@ FASE_DOMINIO = {
 }
 FASE_ANALITICO = {"analitico", "priorizacao", "sintetizador", "verificacao"}
 FASE_CONTEXTO = {"contexto_orcamentario"}
-FASE_SUPERVISORES = {
-    "supervisor_orcamento",
-    "supervisor_saude",
-    "supervisor_analitico",
-    "supervisor_contexto",
-    "orquestrador_estrela",
-    "coordenador_geral",
-}
+# Entradas-raiz de coordenação: o `executionTimeMs` delas já é o overhead (relógio
+# determinístico menos a soma dos agentes folha), calculado igual nas duas
+# topologias. Os `supervisor_*` da hierárquica NÃO entram aqui: o tempo de cada
+# um engloba o dos seus subordinados e só serve para exibição.
+NOS_RAIZ = {"orquestrador_estrela", "coordenador_geral"}
 
 
 # =========================================================================
@@ -83,9 +80,11 @@ FASE_SUPERVISORES = {
 def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     """E1 — Calcula o overhead de coordenação da topologia.
 
-    Para a arquitetura hierárquica, mede quanto tempo é gasto em
-    supervisores vs. agentes de trabalho. Para a estrela, o overhead
-    é zero (orquestrador não aparece nas métricas de agentes).
+    Overhead = relógio determinístico da topologia menos a soma dos agentes
+    folha, já calculado pelo orquestrador/coordenador e exposto na entrada
+    `orquestrador_estrela`/`coordenador_geral`. A mesma definição vale para as
+    duas topologias. Os `supervisor_*` da hierárquica são ignorados porque
+    seu tempo já contém o dos subordinados (somá-los dobraria a contagem).
 
     Args:
         agent_metrics: Lista de dicts com agentName e executionTimeMs.
@@ -100,8 +99,10 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     for m in agent_metrics:
         name = m.get("agentName", "")
         time_ms = m.get("executionTimeMs", 0)
-        if name in FASE_SUPERVISORES:
+        if name in NOS_RAIZ:
             supervisor_time += time_ms
+        elif name.startswith("supervisor_"):
+            continue
         else:
             worker_time += time_ms
 
@@ -145,7 +146,7 @@ def compute_latency_breakdown(agent_metrics: list[dict]) -> dict[str, Any]:
             phases["analitico"] += time_ms
         elif name in FASE_CONTEXTO:
             phases["contexto"] += time_ms
-        elif name in FASE_SUPERVISORES:
+        elif name in NOS_RAIZ:
             phases["supervisores"] += time_ms
 
     total = sum(phases.values())

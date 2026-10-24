@@ -134,8 +134,8 @@ def _tokens_for_agent(agent_key: str) -> set[str]:
 # que INDICADOR_TO_AGENT já era duplicado entre os dois módulos).
 _SUBFUNCAO_TOKENS: dict[int, set[str]] = {
     122: _tokens_for_agent("cnes"),
-    301: _tokens_for_agent("sipni"),
-    302: _tokens_for_agent("sih"),
+    301: _tokens_for_agent("sipni") | _tokens_for_agent("sinasc"),
+    302: _tokens_for_agent("sih") | _tokens_for_agent("sia"),
     303: _tokens_for_agent("sinan"),
     304: {"estabelecimentos_vigilancia_epidemiologica"} | _tokens_for_agent("sinan"),
     305: _tokens_for_agent("sinan") | _tokens_for_agent("covid"),
