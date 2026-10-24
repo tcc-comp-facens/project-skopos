@@ -1,5 +1,7 @@
 # Changelog — Migração para o novo modelo de dados + reparticionamento de agentes CoALA
 
+> **Documento histórico** — changelog do diff que virou o commit `f4838d2` (2026-08-07): reparticionamento dos agentes por sistema DATASUS/subfunção e migração para o novo modelo de dados. O estado vigente está em [docs/](../).
+
 > Documenta o diff atualmente em stage/working tree (não commitado ainda), gerado a partir de
 > `git diff` + arquivos novos. Contexto e racional completos em
 > [PLANO_NOVO_MODELO_DADOS.md](PLANO_NOVO_MODELO_DADOS.md) e

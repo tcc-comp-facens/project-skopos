@@ -5,7 +5,7 @@ Especializado em dados de mortalidade. Consulta
 `IndicadorSaude(sistema="sim")` no Neo4j via `neo4j_client`.
 
 Substitui `AgenteMortalidade` (migração mínima da Fase 1) — decisão de
-particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde por
+particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde por
 Sistema de Informação). Diferente do legado, que retornava despesas de
 TODAS as subfunções (visão transversal), este agente NÃO consulta
 despesas — orçamento é responsabilidade de `AgenteOrcamentoSubfuncao`,

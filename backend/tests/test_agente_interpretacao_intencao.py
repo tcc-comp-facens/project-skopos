@@ -446,7 +446,7 @@ class TestFormatoCompartilhadoEntreArquiteturas:
 
 
 class TestMemoriaEpisodicaReal:
-    """Fase 1 (PLANO_NOVO_MODELO_DADOS.md §6 item 4) — retrieval real de
+    """Fase 1 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §6 item 4) — retrieval real de
     análises anteriores via neo4j_client.get_past_analises, gravado em
     episodic_memory (não só working_memory)."""
 

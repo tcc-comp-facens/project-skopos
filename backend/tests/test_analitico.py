@@ -1,7 +1,7 @@
 """Tests for AgenteAnalitico.analisar() — correlação + anomalias consolidadas.
 
 Migrado 1:1 de test_correlacao.py + test_anomalias.py (agentes agora
-consolidados em AgenteAnalitico — PLANO_NOVO_MODELO_DADOS.md §7 item 6).
+consolidados em AgenteAnalitico — docs/historico/PLANO_NOVO_MODELO_DADOS.md §7 item 6).
 """
 
 import pytest

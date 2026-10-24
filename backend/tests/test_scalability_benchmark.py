@@ -1,4 +1,4 @@
-"""Harness de escalabilidade — Etapa 6 do PLANO_REFATORACAO.md.
+"""Harness de escalabilidade — Etapa 6 do docs/historico/PLANO_REFATORACAO.md.
 
 Roda a comparação estrela-vs-hierárquica variando artificialmente o
 volume de dados (nº de anos / registros de despesa e indicador) e mede
@@ -8,7 +8,7 @@ todo o harness (determinístico, sem custo/latência de rede) — o objetivo
 aqui é medir como a *estrutura* das duas topologias escala com o volume
 de dados, não a latência de uma API externa (essa parte, variação de
 custo de tokens com N, exigiria chamadas reais e fica fora do escopo de
-um harness automatizado em CI; ver nota no PLANO_REFATORACAO.md).
+um harness automatizado em CI; ver nota no docs/historico/PLANO_REFATORACAO.md).
 
 Produz ao menos 2 pontos de comparação (N pequeno vs. N maior), como
 pede o critério de aceite da Etapa 6. Sem thresholds fixos/arbitrários
@@ -38,7 +38,7 @@ from core.quality_metrics import (
 logger = logging.getLogger(__name__)
 
 ALL_HEALTH_PARAMS = ["dengue", "covid", "internacoes", "vacinacao", "mortalidade"]
-# Fase 2 (PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — nenhum
+# Fase 2 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — nenhum
 # agente de saúde consulta despesas, só AgenteOrcamentoSubfuncao. Com
 # ALL_HEALTH_PARAMS, 5 subfunções são ativadas: 301 (vacinacao->sipni),
 # 302 (internacoes->sih), 303/304 (dengue->sinan, "qualquer agravo

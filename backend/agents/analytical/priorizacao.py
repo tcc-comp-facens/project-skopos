@@ -1,5 +1,5 @@
 """
-Agente Analítico — Priorização de Achados (Etapa 3 do PLANO_REFATORACAO.md).
+Agente Analítico — Priorização de Achados (Etapa 3 do docs/historico/PLANO_REFATORACAO.md).
 
 Recebe as correlações, anomalias e o contexto orçamentário já calculados
 (dados determinísticos, inalterados por este agente) e decide qual ângulo

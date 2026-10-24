@@ -1,5 +1,7 @@
 # Plano — Novo Modelo de Dados e ETL (Skopos)
 
+> **Documento histórico** — plano de 2026-08-02 para a migração do modelo de dados (implementado em `b40e328` e `f4838d2`). Registra o raciocínio das decisões; nomes de agentes e detalhes podem divergir do código atual. O estado vigente do ETL e do Neo4j está em [docs/03-DADOS-ETL.md](../03-DADOS-ETL.md).
+
 > Documento gerado em 2026-08-02 a partir de uma sessão de planejamento (Claude Code). Registra o raciocínio e as decisões sobre a migração da fonte de dados do projeto — de PySUS/FTP DataSUS + planilhas FNS para arquivos locais já extraídos em `Dados/` — e o redesenho do modelo de entidades/relacionamentos no Neo4j. **Nenhum código foi alterado nesta sessão** — é só planejamento. Destinado a orientar quem for implementar o ETL/banco e, em paralelo, a migração da arquitetura de agentes de BDI para CoALA.
 >
 > Ver também [`CONTEXTO_PROJETO.md`](CONTEXTO_PROJETO.md) para o panorama geral do projeto (arquitetura de agentes atual, API, stack).

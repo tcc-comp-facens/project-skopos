@@ -1,4 +1,4 @@
-"""Testes do AgentePriorizacaoAnalitica (Etapa 3 do PLANO_REFATORACAO.md)."""
+"""Testes do AgentePriorizacaoAnalitica (Etapa 3 do docs/historico/PLANO_REFATORACAO.md)."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ class TestReordenacaoNaoAlteraOsDados:
 class TestCriterioDeAceite:
     """O texto final muda de ênfase quando os dados de entrada mudam de
     magnitude relativa ou quando intent_summary muda — critério de aceite
-    da Etapa 3 no PLANO_REFATORACAO.md."""
+    da Etapa 3 no docs/historico/PLANO_REFATORACAO.md."""
 
     def test_changing_which_anomaly_is_more_extreme_changes_angulo(self):
         agente1 = _agente()

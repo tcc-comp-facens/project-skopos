@@ -13,7 +13,7 @@ Organização:
 # Base
 from agents.base import AgenteCoALA, ActionFailure
 
-# Intent agent (PLANO_REFATORACAO.md, Etapa 1)
+# Intent agent (docs/historico/PLANO_REFATORACAO.md, Etapa 1)
 from agents.intent import AgenteInterpretacaoIntencao, AnalysisIntent, IntentResult
 
 # Domain agents (Req 14.1)

@@ -7,7 +7,7 @@ Especializado em cobertura vacinal e doses aplicadas. Consulta
 
 Substitui `AgenteAtencaoPrimaria` (migração mínima da Fase 1, que
 relabelava "cobertura_vacinal" para o tipo legado "vacinacao") — decisão
-de particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
+de particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
 por Sistema de Informação). Este agente cobre os dois subtipos nativos
 do SI-PNI (`cobertura_vacinal`, `doses_aplicadas`) sem relabeling — o
 vocabulário do chat (`agente_interpretacao_intencao.py`) é estendido

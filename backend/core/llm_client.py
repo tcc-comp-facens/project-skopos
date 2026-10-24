@@ -281,7 +281,7 @@ _token_usage: dict[str, int] = {
     "call_count": 0,
 }
 
-# Contabilização por análise/segmento (Etapa 6 do PLANO_REFATORACAO.md) —
+# Contabilização por análise/segmento (Etapa 6 do docs/historico/PLANO_REFATORACAO.md) —
 # pré-requisito para compute_token_cost(). Estrela e hierárquica rodam em
 # threads concorrentes (api/runners.py), então um contador global não
 # distingue qual topologia gastou quais tokens. Em vez de thread-local
@@ -650,7 +650,7 @@ def _stream_response(
     suportado pelo DeepSeek) faz a API emitir um chunk final só com
     `usage` populado (sem `choices`) — capturado em `usage_out` (dict
     mutável passado pelo caller) para alimentar a contabilização de
-    tokens por bucket (Etapa 6 do PLANO_REFATORACAO.md), que antes desta
+    tokens por bucket (Etapa 6 do docs/historico/PLANO_REFATORACAO.md), que antes desta
     mudança ficava sempre zerada em chamadas de streaming (só
     `call_count` era incrementado). Se o provedor não enviar esse chunk
     (API mudar/não suportar), `usage_out` simplesmente permanece vazio —

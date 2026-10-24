@@ -5,7 +5,7 @@ Especializado em internações hospitalares. Consulta
 `IndicadorSaude(sistema="sih")` no Neo4j via `neo4j_client`.
 
 Substitui `AgenteSaudeHospitalar` (migração mínima da Fase 1) — decisão
-de particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
+de particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
 por Sistema de Informação).
 
 Segundo agente a replicar o padrão de referência de `agente_sinan.py`

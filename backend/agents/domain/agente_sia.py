@@ -5,7 +5,7 @@ Especializado em produção ambulatorial. Consulta
 `IndicadorSaude(sistema="sia")` no Neo4j via `neo4j_client`.
 
 Cobertura nova (Fase 2) — sem agente legado equivalente a substituir,
-decisão de particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de
+decisão de particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de
 saúde por Sistema de Informação). `sistema="sia"` não tem dimensões
 válidas (`SISTEMA_DIMENSOES["sia"] == []`), então este agente não
 delibera entre candidatos — sempre consulta sem quebra dimensional,

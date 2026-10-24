@@ -3,12 +3,12 @@ Agente de Domínio — Orçamento por Subfunção.
 
 Classe parametrizada por subfunção (`subfuncao_codigo`/`subfuncao_nome`)
 — base reutilizável para os 7 agentes orçamentários alvo de
-PLANO_NOVO_MODELO_DADOS.md §5 (1 por subfunção: 122, 301-306).
+docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 por subfunção: 122, 301-306).
 
 Consulta `DespesaAnual(subfuncaoCodigo=<código>)` no Neo4j via
 `neo4j_client.get_despesas_por_subfuncao` (campo `valorProcessado`).
 Absorve o cálculo de tendência ano-a-ano — decisão tomada em
-PLANO_NOVO_MODELO_DADOS.md §5 ("`AgenteContextoOrcamentario` eliminado
+docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 ("`AgenteContextoOrcamentario` eliminado
 como agente separado — cada agente orçamentário absorve a
 responsabilidade de calcular sua própria tendência") — reaproveitando
 `AgenteContextoOrcamentario.analyze_trends` em vez de duplicar a lógica
@@ -29,7 +29,7 @@ de candidatos (`consultar_despesas` — com deliberação —,
 únicas) — `evaluate_and_select` precisa particionar por goal antes de
 arbitrar, só o primeiro grupo é candidato a arbitragem real.
 
-`consultar_variacao_anual` (Fase 3, PLANO_NOVO_MODELO_DADOS.md §3.1) lê
+`consultar_variacao_anual` (Fase 3, docs/historico/PLANO_NOVO_MODELO_DADOS.md §3.1) lê
 `VARIACAO_ANUAL` — a variação percentual ano-a-ano pré-computada uma
 vez no ETL (`etl/orcamento_loader.py`, reaproveitando literalmente
 `agents.context.contexto_orcamentario.compute_yoy_variation`/

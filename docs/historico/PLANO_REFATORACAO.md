@@ -1,5 +1,7 @@
 # Plano de Refatoração — Agentes e Métricas de Avaliação
 
+> **Documento histórico** — plano de refatoração CoALA/LLM executado entre `19473b0` e `4505fd0` (agosto/2026). Todas as etapas foram concluídas, mas a **Etapa 5 (comunicação lateral semântica) foi revertida em `38df7be`**: a hierárquica hoje é uma árvore estrita. A seção 3 (justificativa acadêmica, citações D1–D16) continua sendo citada pelos documentos de [docs/arquitetura/](../arquitetura/). O estado vigente está em [docs/](../).
+
 > Documento de planejamento, derivado do diagnóstico repositório-vs-literatura (ver histórico da conversa) e da leitura do survey `s44336-024-00009-2.pdf` (Li et al., 2024) + pesquisa acadêmica complementar. Também serve como checklist de execução — atualizado conforme cada etapa é implementada.
 
 ## Status atual (última atualização: sessão que implementou a Etapa 6 — plano completo)

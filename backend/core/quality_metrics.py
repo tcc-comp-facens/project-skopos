@@ -51,7 +51,7 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 # Tipos de agente por fase (para latency breakdown). Os 4 agentes de
 # saúde legados (Fase 1) foram decompostos e aposentados na Fase 2 — os
 # 7 agentes de saúde atuais (1 por Sistema de Informação) substituem a
-# lista antiga — ver PLANO_NOVO_MODELO_DADOS.md §5.
+# lista antiga — ver docs/historico/PLANO_NOVO_MODELO_DADOS.md §5.
 FASE_DOMINIO = {
     "sinan",
     "sih",
@@ -376,7 +376,7 @@ def compute_partial_result_coverage(result: dict[str, Any]) -> dict[str, Any]:
 
 
 # =========================================================================
-# D. Custo e Comunicação (Etapa 6 do PLANO_REFATORACAO.md)
+# D. Custo e Comunicação (Etapa 6 do docs/historico/PLANO_REFATORACAO.md)
 # =========================================================================
 
 
@@ -387,7 +387,7 @@ def compute_token_cost(token_usage: dict[str, int] | None) -> dict[str, Any]:
 
     Não lê `core.llm_client.get_token_usage()` (contador global cumulativo
     do processo inteiro) como o plano original sugeria — ver "Desvios" no
-    topo do PLANO_REFATORACAO.md: o pré-requisito de contabilização
+    topo do docs/historico/PLANO_REFATORACAO.md: o pré-requisito de contabilização
     por-análise/por-topologia foi resolvido com `TokenBucket`
     (ContextVar), e o snapshot já vem pronto e corretamente escopado de
     quem chamou `with TokenBucket(): ...` (ver `api/runners.py`,
@@ -455,7 +455,7 @@ def compute_communication_volume(
 
 
 # =========================================================================
-# E. Outcome agregado (Etapa 6 do PLANO_REFATORACAO.md)
+# E. Outcome agregado (Etapa 6 do docs/historico/PLANO_REFATORACAO.md)
 # =========================================================================
 
 DEFAULT_TIME_BUDGET_MS = 60_000.0

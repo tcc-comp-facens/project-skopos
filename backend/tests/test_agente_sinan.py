@@ -1,7 +1,7 @@
 """Tests for AgenteSINAN — agente de referência de saúde da Fase 1.
 
 Cobre a deliberação real de dimensão (propose_actions/evaluate_and_select
-com candidatos concorrentes de verdade — PLANO_NOVO_MODELO_DADOS.md §5) e
+com candidatos concorrentes de verdade — docs/historico/PLANO_NOVO_MODELO_DADOS.md §5) e
 a consulta a IndicadorSaude(sistema="sinan") via neo4j_client.
 """
 

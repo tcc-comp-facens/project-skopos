@@ -7,7 +7,7 @@ recebidos (planilhas FNS), este loader lê a despesa municipal efetivamente
 EXECUTADA — inclui recurso próprio municipal, transferências estaduais,
 operações de crédito e emendas parlamentares, não só repasse federal.
 
-Fontes (ver PLANO_NOVO_MODELO_DADOS.md):
+Fontes (ver docs/historico/PLANO_NOVO_MODELO_DADOS.md):
     Dados/orcamento/{2015-2019,2020-2022,2023-2025}/*_empenhado_*.csv
         → nós Empenho (granular, 1 nó por linha) + dimensões
         → agregado DespesaAnual (subfuncao x ano), calculado ao final
@@ -78,7 +78,7 @@ SUBFUNCAO_MAP: dict[str, tuple[int, str]] = {
 # "Emendas Parlamentares Individuais" fica em categoria própria
 # ('emenda_parlamentar'), não forçada em proprio/federal/estadual — decisão
 # tomada por incerteza genuína sobre a origem (federal vs. municipal) entre
-# períodos (ver PLANO_NOVO_MODELO_DADOS.md, §7 item 3).
+# períodos (ver docs/historico/PLANO_NOVO_MODELO_DADOS.md, §7 item 3).
 FONTE_RECURSO_TIPO: dict[str, str] = {
     "TESOURO": "proprio",
     "REC.PROP.DE FDOS ESPECIAIS DE DESPESA-VINC.-EX.ANT": "proprio",
@@ -426,7 +426,7 @@ RETURN count(d) AS total
 
 # NOTA: o relacionamento VARIACAO_ANUAL (encadeamento de DespesaAnual entre
 # anos consecutivos com a variação percentual já calculada) foi desenhado e
-# aprovado, mas fica para uma execução futura — ver PLANO_NOVO_MODELO_DADOS.md
+# aprovado, mas fica para uma execução futura — ver docs/historico/PLANO_NOVO_MODELO_DADOS.md
 # §3.1 e §5. Não implementado neste loader.
 
 
@@ -490,7 +490,7 @@ def _compute_despesa_por_natureza(session) -> int:
 
 # ---------------------------------------------------------------------------
 # Agregação — VARIACAO_ANUAL (desenhada e aprovada em
-# PLANO_NOVO_MODELO_DADOS.md §3.1, implementada agora)
+# docs/historico/PLANO_NOVO_MODELO_DADOS.md §3.1, implementada agora)
 #
 # (:DespesaAnual {subfuncaoCodigo, ano})-[:VARIACAO_ANUAL {percentual, classificacao}]->
 # (:DespesaAnual {subfuncaoCodigo, ano_anterior})

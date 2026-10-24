@@ -5,7 +5,7 @@ Especializado em dados de nascidos vivos. Consulta
 `IndicadorSaude(sistema="sinasc")` no Neo4j via `neo4j_client`.
 
 Cobertura nova (Fase 2) — sem agente legado equivalente a substituir,
-decisão de particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de
+decisão de particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de
 saúde por Sistema de Informação).
 
 Replica o padrão de referência de `agente_sinan.py`.

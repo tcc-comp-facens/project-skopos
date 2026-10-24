@@ -1,6 +1,6 @@
 """
 Contadores agregados do guardrail de escopo (Etapa 1) — Etapa 6 do
-PLANO_REFATORACAO.md.
+docs/historico/PLANO_REFATORACAO.md.
 
 Diferente das demais métricas novas da Etapa 6 (custo de tokens, volume
 de comunicação, sucesso da análise), a taxa de rejeição do guardrail não

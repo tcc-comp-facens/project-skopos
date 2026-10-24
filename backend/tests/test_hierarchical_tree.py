@@ -1,6 +1,6 @@
 """Testes da árvore estrita da hierárquica (substitui test_lateral_summaries.py).
 
-A comunicação lateral entre supervisores (Etapa 5 do PLANO_REFATORACAO.md
+A comunicação lateral entre supervisores (Etapa 5 do docs/historico/PLANO_REFATORACAO.md
 — `receive_from_peer`/`peer_data`, com resumos textuais via LLM) foi
 removida: o modelo de hierárquica deste projeto precisa ser uma árvore
 estrita, sem par-a-par nem mediado pela raiz. Hoje `CoordenadorGeral`

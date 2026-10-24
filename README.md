@@ -224,7 +224,7 @@ Documentação detalhada em [`docs/`](docs/):
 | [04-BACKEND-API.md](docs/04-BACKEND-API.md) | API REST, WebSocket, chat, LLM, métricas de qualidade, erros |
 | [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, chat, hooks WS, tipos, acessibilidade |
 
-Também há o [PLANO_REFATORACAO.md](PLANO_REFATORACAO.md), com o plano (em andamento) de amadurecimento do uso de LLM nos agentes e de novas métricas de avaliação, fundamentado em literatura acadêmica.
+Também há o [PLANO_REFATORACAO.md](docs/historico/PLANO_REFATORACAO.md), com o plano (concluído, documento histórico) de amadurecimento do uso de LLM nos agentes e de novas métricas de avaliação, fundamentado em literatura acadêmica.
 
 ---
 

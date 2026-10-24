@@ -1,4 +1,4 @@
-"""Testes de core/claim_verifier.py (Etapa 4 do PLANO_REFATORACAO.md)."""
+"""Testes de core/claim_verifier.py (Etapa 4 do docs/historico/PLANO_REFATORACAO.md)."""
 
 from __future__ import annotations
 

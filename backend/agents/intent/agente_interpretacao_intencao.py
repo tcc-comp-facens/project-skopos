@@ -36,7 +36,7 @@ Ciclo CoALA (duas ações, uma chamada LLM):
        `precisa_analise=true`. Mantida como ação própria (e não fundida
        com a anterior) para que o guardrail apareça como um passo
        auditável e independente em episodic_memory — ver
-       PLANO_REFATORACAO.md, Etapa 1, decisões D14/D15.
+       docs/historico/PLANO_REFATORACAO.md, Etapa 1, decisões D14/D15.
 
     Se o escopo for "fora" ou `precisa_analise=false`, nenhum parâmetro é
     extraído e `parse()` retorna `resposta_direta` sem sucesso — nenhuma
@@ -70,7 +70,7 @@ VALID_HEALTH_PARAMS: list[str] = [
     "vacinacao",
     "internacoes",
     "mortalidade",
-    # Fase 1 (PLANO_NOVO_MODELO_DADOS.md §5) — os outros 8 subtipos do
+    # Fase 1 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §5) — os outros 8 subtipos do
     # SINAN, cobertos por AgenteSINAN (dengue já estava na lista acima,
     # agora migrado do antigo AgenteVigilanciaEpidemiologica).
     "chikungunya",
@@ -81,7 +81,7 @@ VALID_HEALTH_PARAMS: list[str] = [
     "hepatites_virais",
     "tuberculose",
     "hanseniase",
-    # Fase 2 (PLANO_NOVO_MODELO_DADOS.md §5) — cobertura nova: SINASC,
+    # Fase 2 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §5) — cobertura nova: SINASC,
     # SIA e os 12 subtipos do CNES (o mais heterogêneo dos 8 sistemas).
     # "covid" já cobre casos+óbitos e "vacinacao" já cobre
     # cobertura_vacinal+doses_aplicadas (AgenteCOVID/AgenteSIPNI sempre

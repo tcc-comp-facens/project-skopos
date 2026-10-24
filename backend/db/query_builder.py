@@ -23,7 +23,7 @@ class DimensaoInvalida(ValueError):
 
 
 # Allowlist: sistema -> relacionamentos de dimensão válidos (nome exato do
-# reltype no grafo). Fonte: DOCUMENTACAO_ETL_MODELO_DADOS.md e
+# reltype no grafo). Fonte: docs/historico/DOCUMENTACAO_ETL_MODELO_DADOS.md e
 # backend/etl/saude_indicadores_loader.py.
 SISTEMA_DIMENSOES: dict[str, list[str]] = {
     "sim": ["POR_FAIXA_ETARIA", "POR_CAPITULO_CID"],

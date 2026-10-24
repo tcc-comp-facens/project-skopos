@@ -7,7 +7,7 @@ os dois subtipos nativos (`casos`, `obitos`).
 
 Substitui a metade "covid" de `AgenteVigilanciaEpidemiologica` (migração
 mínima da Fase 1, que só consultava `casos` e nunca `obitos`) — decisão
-de particionamento em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
+de particionamento em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde
 por Sistema de Informação). `sistema="covid"` não tem dimensões válidas
 (`SISTEMA_DIMENSOES["covid"] == []`), então este agente não delibera
 entre candidatos — sempre consulta sem quebra dimensional, mesma

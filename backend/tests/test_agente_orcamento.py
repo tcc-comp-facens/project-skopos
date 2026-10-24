@@ -1,5 +1,5 @@
 """Tests for AgenteOrcamentoSubfuncao — agente de referência de orçamento
-(PLANO_NOVO_MODELO_DADOS.md §5).
+(docs/historico/PLANO_NOVO_MODELO_DADOS.md §5).
 
 Classe parametrizada por subfunção — testada aqui instanciada para 305
 (Vigilância Epidemiológica), o par usado com AgenteSINAN.
@@ -183,7 +183,7 @@ class TestConsultarDespesas:
 
 
 class TestConsultarVariacaoAnual:
-    """Fase 3 (PLANO_NOVO_MODELO_DADOS.md §3.1): VARIACAO_ANUAL
+    """Fase 3 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §3.1): VARIACAO_ANUAL
     pré-computada no ETL, lida via neo4j_client.get_variacao_anual —
     sempre o mesmo reltype fixo, sem deliberação de dimensão (diferente
     de consultar_despesas)."""

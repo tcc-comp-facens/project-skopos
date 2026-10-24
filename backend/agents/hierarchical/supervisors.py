@@ -4,7 +4,7 @@ Supervisores da arquitetura hierárquica (Nível 1).
 Quatro supervisores especializados coordenam os agentes de nível 2:
 
 - **SupervisorOrcamento** coordena agentes `AgenteOrcamentoSubfuncao`
-  (1 por subfunção, 7 no total — PLANO_NOVO_MODELO_DADOS.md §5).
+  (1 por subfunção, 7 no total — docs/historico/PLANO_NOVO_MODELO_DADOS.md §5).
 - **SupervisorSaude** coordena os 8 agentes de saúde (SINAN, SIH, SIM,
   SI-PNI, COVID, SINASC, SIA, CNES — 1 por Sistema de Informação).
   Substitui o antigo `SupervisorDominio`, que combinava despesas+
@@ -158,7 +158,7 @@ def _subfuncao_ativa(codigo: int, health_params: set[str]) -> bool:
     return False
 
 
-# As 7 subfunções orçamentárias alvo de PLANO_NOVO_MODELO_DADOS.md §5 —
+# As 7 subfunções orçamentárias alvo de docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 —
 # todas instanciadas via AgenteOrcamentoSubfuncao (classe parametrizada,
 # nenhum arquivo novo por subfunção).
 _ORCAMENTO_SUBFUNCOES: list[tuple[int, str]] = [
@@ -176,7 +176,7 @@ class SupervisorOrcamento(AgenteCoALA):
     """Supervisor de orçamento — nível 1 da topologia hierárquica.
 
     Coordena agentes `AgenteOrcamentoSubfuncao` (nível 2) — 1 por
-    subfunção (`_ORCAMENTO_SUBFUNCOES`, PLANO_NOVO_MODELO_DADOS.md §5),
+    subfunção (`_ORCAMENTO_SUBFUNCOES`, docs/historico/PLANO_NOVO_MODELO_DADOS.md §5),
     7 no total, cada uma ativada condicionalmente conforme os
     health_params selecionados (ver `_SUBFUNCAO_TOKENS`).
 
@@ -654,7 +654,7 @@ class SupervisorAnalitico(AgenteCoALA):
     def _act_analisar(self, action: dict) -> None:
         """Ação externa: delega a AgenteAnalitico — correlação Spearman +
         detecção de anomalias consolidadas num único agente
-        (PLANO_NOVO_MODELO_DADOS.md §7 item 6)."""
+        (docs/historico/PLANO_NOVO_MODELO_DADOS.md §7 item 6)."""
         an_id = f"hier-analitico-{uuid.uuid4().hex[:8]}"
         agente_analitico = AgenteAnalitico(an_id)
         mc = MetricsCollector(an_id, "analitico")

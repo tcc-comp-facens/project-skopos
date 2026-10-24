@@ -1,5 +1,7 @@
 # Contexto do Projeto — Skopos (TCC)
 
+> **Documento histórico** — snapshot do projeto gerado em 2026-08-02, ainda sob o **modelo BDI** (anterior à migração para CoALA). Agentes, API e fontes de dados descritos aqui não correspondem mais ao código. O estado vigente está em [docs/](../) e no [README](../../README.md).
+
 > Arquivo gerado por exploração automatizada do repositório em 2026-08-02. Serve como documento de referência rápida sobre objetivo, arquitetura e estado do projeto.
 
 ## 1. O que é

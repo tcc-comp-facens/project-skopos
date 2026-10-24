@@ -95,7 +95,7 @@ class TestAnalyzeTrendsCagrNotSkewedByOneYearSpike:
         """Regressão: um único salto de base baixa (ex.: subfunção que
         passa a existir e cresce muito no primeiro ano com dado, como o
         122/Administração Geral real, documentado em
-        PLANO_NOVO_MODELO_DADOS.md §7.2) não deve inflar a "variação
+        docs/historico/PLANO_NOVO_MODELO_DADOS.md §7.2) não deve inflar a "variação
         média ao ano" para muito acima do que a série sustenta — a
         média aritmética simples das variações ano-a-ano fazia isso
         (~192%/ano em produção); CAGR ponta a ponta não."""

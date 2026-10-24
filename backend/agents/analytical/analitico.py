@@ -3,7 +3,7 @@ Agente Analítico — Correlação Estatística (Spearman) + Detecção de Anoma
 
 Consolida os antigos `AgenteCorrelacao` e `AgenteAnomalias` num único
 agente CoALA com 2 ações de reasoning (`calcular_correlacao`,
-`detectar_anomalia`) — decisão tomada em PLANO_NOVO_MODELO_DADOS.md §7
+`detectar_anomalia`) — decisão tomada em docs/historico/PLANO_NOVO_MODELO_DADOS.md §7
 item 6, relevante justamente para o reforço CoALA da Fase 1: os dois
 cálculos sempre operaram sobre o mesmo `dados_cruzados`, com
 `propose_actions`/`evaluate_and_select` idênticos (passthrough — nenhum
@@ -13,7 +13,7 @@ ganho real de modularidade.
 
 Nenhum dos dois cálculos muda: cada `_act_*` é a migração 1:1 dos
 métodos originais. Ambos continuam raciocínio simbólico/determinístico
-— nunca LLM (PLANO_NOVO_MODELO_DADOS.md §6 item 2: "correlação/
+— nunca LLM (docs/historico/PLANO_NOVO_MODELO_DADOS.md §6 item 2: "correlação/
 estatística deve continuar sendo ferramenta determinística, nunca
 calculada pelo LLM").
 """

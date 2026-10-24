@@ -187,7 +187,7 @@ def _subfuncao_ativa(codigo: int, health_params: set[str]) -> bool:
     return False
 
 
-# As 7 subfunções orçamentárias alvo de PLANO_NOVO_MODELO_DADOS.md §5 —
+# As 7 subfunções orçamentárias alvo de docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 —
 # todas instanciadas via AgenteOrcamentoSubfuncao (classe parametrizada,
 # nenhum arquivo novo por subfunção).
 _ORCAMENTO_SUBFUNCOES: list[tuple[int, str]] = [
@@ -383,7 +383,7 @@ class OrquestradorEstrela(AgenteCoALA):
 
     def _act_consultar_orcamento(self, action: dict) -> None:
         """Ação externa: consulta um agente orçamentário
-        (`AgenteOrcamentoSubfuncao`, Fase 1 — PLANO_NOVO_MODELO_DADOS.md §5)."""
+        (`AgenteOrcamentoSubfuncao`, Fase 1 — docs/historico/PLANO_NOVO_MODELO_DADOS.md §5)."""
         codigo = action["subfuncao_codigo"]
         nome = action["subfuncao_nome"]
         agent_id_str = f"star-orcamento-{codigo}-{uuid.uuid4().hex[:8]}"
@@ -508,7 +508,7 @@ class OrquestradorEstrela(AgenteCoALA):
     def _act_analisar(self, action: dict) -> None:
         """Ação externa: delega a AgenteAnalitico — correlação Spearman +
         detecção de anomalias consolidadas num único agente
-        (PLANO_NOVO_MODELO_DADOS.md §7 item 6, Req 9.4, 9.5)."""
+        (docs/historico/PLANO_NOVO_MODELO_DADOS.md §7 item 6, Req 9.4, 9.5)."""
         an_id = f"star-analitico-{uuid.uuid4().hex[:8]}"
         agente_analitico = AgenteAnalitico(an_id)
         logger.info(

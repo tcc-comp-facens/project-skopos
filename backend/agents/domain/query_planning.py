@@ -1,7 +1,7 @@
 """
 Planejamento de consulta via LLM para agentes de domínio.
 
-Preparação arquitetural (Etapa 2 do PLANO_REFATORACAO.md) para quando a
+Preparação arquitetural (Etapa 2 do docs/historico/PLANO_REFATORACAO.md) para quando a
 base de dados crescer com novas fontes/indicadores — a base atual tem
 mapeamento 1:1 fixo (subfunção -> indicador) e NÃO exige LLM para isso
 hoje. Por isso, por padrão (`USE_LLM_QUERY_PLANNING` ausente ou "false"),
@@ -40,7 +40,7 @@ def _sem_acentos(texto: str) -> str:
 # limpo apenas via reset_cache() (usado nos testes).
 _cache: dict[tuple[str, str, tuple[str, ...]], dict[str, Any]] = {}
 
-# Contadores de origem do plano (Etapa 6 do PLANO_REFATORACAO.md) —
+# Contadores de origem do plano (Etapa 6 do docs/historico/PLANO_REFATORACAO.md) —
 # process-wide, alimenta compute_cache_hit_rate(). Não é por análise (o
 # volume é baixo demais por análise — no máximo 4 chamadas — para uma
 # taxa fazer sentido isolada; o valor é acompanhar a tendência ao longo

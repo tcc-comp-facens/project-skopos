@@ -1,4 +1,4 @@
-"""Testes de core/guardrail_stats.py (Etapa 6 do PLANO_REFATORACAO.md)."""
+"""Testes de core/guardrail_stats.py (Etapa 6 do docs/historico/PLANO_REFATORACAO.md)."""
 
 from __future__ import annotations
 

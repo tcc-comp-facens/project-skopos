@@ -1,7 +1,7 @@
 """
 Agente de Domínio — CNES (Cadastro Nacional de Estabelecimentos de Saúde).
 
-O sistema mais heterogêneo dos 8 (DOCUMENTACAO_ETL_MODELO_DADOS.md §6.4):
+O sistema mais heterogêneo dos 8 (docs/historico/DOCUMENTACAO_ETL_MODELO_DADOS.md §6.4):
 12 subtipos, de fontes/formatos de planilha diferentes — 2 fatos de valor
 único (leitos, profissionais), 6 com quebra dimensional própria (1
 dimensão cada — estabelecimentos_por_tipo/ocupacoes/equipes_saude/

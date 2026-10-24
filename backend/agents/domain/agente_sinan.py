@@ -9,7 +9,7 @@ coqueluche, hepatites virais, tuberculose, hanseníase). Consulta
 Substitui a metade "dengue" do antigo `AgenteVigilanciaEpidemiologica`
 (a metade "covid" migra separadamente — ver
 `agents/domain/vigilancia_epidemiologica.py`) — decisão de particionamento
-em PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde por Sistema de
+em docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 (1 agente de saúde por Sistema de
 Informação).
 
 Agente de referência da Fase 1: implementa o padrão completo de

@@ -12,7 +12,7 @@ raciocínio simbólico/determinístico — não depende de LLM (Req 8.1-8.5).
 `compute_yoy_variation`/`classify_trend` (funções-módulo, sem estado)
 são reaproveitadas por `etl/orcamento_loader.py` para calcular
 `VARIACAO_ANUAL` — o relacionamento entre `DespesaAnual` de anos
-consecutivos, pré-computado uma vez no ETL (PLANO_NOVO_MODELO_DADOS.md
+consecutivos, pré-computado uma vez no ETL (docs/historico/PLANO_NOVO_MODELO_DADOS.md
 §3.1), usando exatamente a mesma fórmula/limiares deste módulo, para
 não haver duas lógicas de classificação divergentes no sistema.
 """
@@ -62,7 +62,7 @@ def compute_cagr(valor_inicial: float, valor_final: float, anos: int) -> float:
     Usada como resumo de tendência ("variação média ao ano") em vez da
     média aritmética simples das variações ano-a-ano: a média simples é
     dominada por um único ano de salto de base baixa/zero (achado real
-    documentado em PLANO_NOVO_MODELO_DADOS.md §7.2 — subfunção 122 não
+    documentado em docs/historico/PLANO_NOVO_MODELO_DADOS.md §7.2 — subfunção 122 não
     existe nos empenhos antes de 2020, e parte da folha de pagamento
     migra de 301→122 nessa transição), inflando a "média anual" para
     muito acima do que qualquer ano isolado da série sustenta. CAGR

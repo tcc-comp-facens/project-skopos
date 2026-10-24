@@ -10,7 +10,7 @@ Delega para 4 supervisores especializados de nível 1:
 - SupervisorContexto (1 agente de contexto orçamentário)
 
 SupervisorOrcamento e SupervisorSaude substituem o antigo
-SupervisorDominio (Fase 1 — PLANO_NOVO_MODELO_DADOS.md §5 e decisão
+SupervisorDominio (Fase 1 — docs/historico/PLANO_NOVO_MODELO_DADOS.md §5 e decisão
 tomada com o usuário: separar orçamento e saúde em dois supervisores
 distintos em vez de um único supervisor de domínio combinado). Desde a
 decomposição completa (Fase 2), nenhum agente de SupervisorSaude

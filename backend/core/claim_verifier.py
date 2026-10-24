@@ -1,5 +1,5 @@
 """
-Verificação pós-síntese (self-check) — Etapa 4 do PLANO_REFATORACAO.md.
+Verificação pós-síntese (self-check) — Etapa 4 do docs/historico/PLANO_REFATORACAO.md.
 
 Implementa o padrão Chain-of-Verification (CoVe, Dhuliawala et al., citado
 em Li et al. 2024, Seção 5.1) em 3 passos, cada um uma chamada LLM

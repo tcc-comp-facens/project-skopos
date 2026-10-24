@@ -1,5 +1,7 @@
 # Documentação — ETL e Modelo de Dados Neo4j (Skopos)
 
+> **Documento histórico** — documentação "as-built" do ETL e do modelo Neo4j gerada em 2026-08-04. Seu conteúdo foi consolidado e atualizado em [docs/03-DADOS-ETL.md](../03-DADOS-ETL.md), que é a referência vigente.
+
 > Documento gerado em 2026-08-04. Descreve, em detalhe técnico, o que foi **efetivamente implementado e validado** nesta sessão: a estrutura final do banco Neo4j, os dois módulos de ETL que a populam, e os dados reais carregados. Complementa o [`PLANO_NOVO_MODELO_DADOS.md`](PLANO_NOVO_MODELO_DADOS.md), que registra o *raciocínio* e as *decisões* tomadas durante o design — este documento aqui é a referência do *resultado* (estado "as-built"), com números reais extraídos de um banco Neo4j populado e validado.
 >
 > Contexto: outro desenvolvedor está migrando a arquitetura de agentes de BDI para CoALA em paralelo. **Nada em `backend/agents/`, `backend/api/` ou no frontend foi alterado nesta sessão** — só ETL (`backend/etl/`), schema Neo4j, e a infraestrutura estritamente necessária para o ETL rodar (`docker-compose.yml`, `entrypoint.sh`, `run_etl.py`, `requirements.txt`).

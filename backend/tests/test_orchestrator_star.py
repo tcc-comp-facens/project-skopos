@@ -1,6 +1,6 @@
 """Tests for OrquestradorEstrela.run() with mocked agents.
 
-Fase 2 (PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — os 5
+Fase 2 (docs/historico/PLANO_NOVO_MODELO_DADOS.md §5): decomposição completa — os 5
 agentes de saúde (SINAN, SIH, SIM, SI-PNI, COVID) nunca consultam
 despesas, só indicadores; despesas vêm exclusivamente de
 AgenteOrcamentoSubfuncao (1 por subfunção, até 7), cada uma ativada

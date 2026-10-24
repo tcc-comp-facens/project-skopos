@@ -7,7 +7,7 @@ já prontas (sem FTP, sem .dbc, sem PySUS), com granularidade dimensional
 (faixa etária, capítulo CID-10, vacina, tipo de estabelecimento etc.) que o
 pipeline antigo não tinha — só extraía um total por (sistema, tipo, ano).
 
-Fonte: Dados/Sorocaba_DATASUS_2015-2025/*.xlsx (ver PLANO_NOVO_MODELO_DADOS.md)
+Fonte: Dados/Sorocaba_DATASUS_2015-2025/*.xlsx (ver docs/historico/PLANO_NOVO_MODELO_DADOS.md)
 
 8 sistemas, 1 função de carga por sistema (`_load_sim`, `_load_sih`, ...),
 mapeando para os 8 agentes de saúde definidos na arquitetura (1 agente por
@@ -17,7 +17,7 @@ carregado — contém só notas sobre cubos TabNet descontinuados, não dado.
 Janela temporal: 01/01/2016-31/12/2025 (10 anos) — qualquer ano fora disso é
 descartado no ETL (mesma regra do orcamento_loader.py).
 
-Decisões de modelagem (ver PLANO_NOVO_MODELO_DADOS.md §7.1/§7):
+Decisões de modelagem (ver docs/historico/PLANO_NOVO_MODELO_DADOS.md §7.1/§7):
   - FaixaEtaria NÃO é unificada entre sistemas — cada sistema tem seu próprio
     espaço de faixas (chave = "{sistema}:{nome}"), porque os bins não batem
     entre si e SINASC mede idade da mãe, não da pessoa do registro.

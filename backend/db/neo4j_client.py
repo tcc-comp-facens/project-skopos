@@ -3,7 +3,7 @@ Cliente Neo4j para o sistema de comparação de arquiteturas multiagente.
 
 Gerencia conexão com o banco de dados Neo4j e expõe queries Cypher para o
 modelo de dados novo (Empenho/DespesaAnual, IndicadorSaude + nós de
-dimensão — ver PLANO_NOVO_MODELO_DADOS.md e DOCUMENTACAO_ETL_MODELO_DADOS.md)
+dimensão — ver docs/historico/PLANO_NOVO_MODELO_DADOS.md e docs/historico/DOCUMENTACAO_ETL_MODELO_DADOS.md)
 e para os nós Analise/MetricaExecucao.
 
 Diferente do schema antigo, Empenho/DespesaAnual/IndicadorSaude não têm
@@ -80,7 +80,7 @@ class Neo4jClient:
 
         Usa `valorProcessado` como valor "oficial" — é o campo que a
         própria validação do ETL confirma como soma exata do breakdown
-        por `tipoRecurso` (DOCUMENTACAO_ETL_MODELO_DADOS.md), e o que a
+        por `tipoRecurso` (docs/historico/DOCUMENTACAO_ETL_MODELO_DADOS.md), e o que a
         query de correlação-exemplo do projeto usa.
 
         `dimensao` (opcional, Fase 3) é o nome de um relacionamento
@@ -122,7 +122,7 @@ class Neo4jClient:
     ) -> list[dict]:
         """
         Retorna a variação percentual ano-a-ano pré-computada no ETL
-        (`VARIACAO_ANUAL`, PLANO_NOVO_MODELO_DADOS.md §3.1) para as
+        (`VARIACAO_ANUAL`, docs/historico/PLANO_NOVO_MODELO_DADOS.md §3.1) para as
         subfunções e período dados.
 
         Diferente de `POR_NATUREZA`/`POR_APLICACAO`, não é uma dimensão
