@@ -1,175 +1,155 @@
 # Arquitetura Hierárquica — Ciclo Completo
 
-> Este documento cobre o pipeline interno da topologia hierárquica, do momento em que `CoordenadorGeral.run()` é chamado até o resultado final ser retornado. Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md). Para o fluxo de ponta a ponta que antecede/sucede este pipeline (chat, disparo de análise, WebSocket de resultados), ver [ciclo-completo.md](ciclo-completo.md).
+> Este documento cobre o pipeline interno da topologia hierárquica, do momento em que `CoordenadorGeral.run()` é chamado até o resultado final ser retornado. Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md). Para o fluxo de ponta a ponta antes e depois deste pipeline (chat, disparo da análise, WebSocket de resultados), ver [ciclo-completo.md](ciclo-completo.md).
 
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `backend/agents/hierarchical/supervisors.py`
 
 ## Visão geral
 
-Os agentes são organizados em **3 níveis**: um coordenador geral (nível 0), três supervisores intermediários (nível 1), e os agentes-folha (nível 2) — os mesmos agentes de domínio/analíticos/contexto usados na estrela, só que agrupados sob supervisores em vez de reportar direto a um hub único. A diferença estrutural central em relação à estrela: os supervisores podem trocar dados **lateralmente** entre si, sem passar pelo coordenador.
+Os agentes ficam em **3 níveis**: um coordenador geral (nível 0), quatro supervisores (nível 1) e os agentes-folha (nível 2). Os agentes-folha são os mesmos da estrela, só que agrupados sob supervisores em vez de reportarem a um hub único.
+
+A estrutura é uma **árvore estrita**: cada supervisor só troca dados com o `CoordenadorGeral`, seu pai, e nunca com outro supervisor. O coordenador colhe o retorno de cada supervisor e repassa o necessário ao próximo como **parâmetro direto** de `run()`.
 
 ```
-                    CoordenadorGeral
-                      (Nível 0)
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-    SupervisorDominio  SupervisorContexto  SupervisorAnalitico
-      (Nível 1)         (Nível 1)           (Nível 1)
-          │                │                    │
-    ┌─────┼─────┐         │              ┌─────┼──────┐
-    ▼     ▼     ▼    ▼    ▼              ▼     ▼      ▼
-  Vigil. Hosp. Prim. Mort. CtxOrç.     Corr. Anom.  Prior.+Sintet.
-  (Nível 2)                (Nível 2)    (Nível 2)    (serviços)
-
-
-  Comunicação lateral (sem passar pelo Coordenador):
-  ─────────────────────────────────────────────────
-  SupervisorDominio ───────► SupervisorAnalitico
-                              (despesas + indicadores + intent_summary + health_params)
-  SupervisorDominio ───────► SupervisorContexto
-                              (despesas)
-  SupervisorContexto ──────► SupervisorAnalitico
-                              (contexto orçamentário)
+                                  CoordenadorGeral (nível 0)
+                                            │
+       ┌────────────────────┬───────────────┴────┬─────────────────────────┐
+       ▼                    ▼                    ▼                         ▼
+SupervisorOrcamento   SupervisorSaude     SupervisorContexto       SupervisorAnalitico    (nível 1)
+       │                    │                    │                         │
+AgenteOrcamento-      agentes de saúde    AgenteContexto-          AgenteAnalitico,
+Subfuncao (≤ 7)       (≤ 8)               Orcamentario             AgentePriorizacao,       (nível 2)
+                                                                   TextSynthesizer (serviço),
+                                                                   verificação (opcional)
 ```
 
-`CoordenadorGeral` e os 3 supervisores herdam de `AgenteCoALA`. Assim como na estrela, `evaluate_and_select()` é passthrough em todos eles — a ordem das macro-ações é imposta por dependência de dados entre supervisores, não por arbitragem.
+`CoordenadorGeral` e os 4 supervisores herdam de `AgenteCoALA`. Como na estrela, `evaluate_and_select()` é passthrough neles: a ordem é imposta pela dependência de dados. A deliberação real fica nos agentes-folha.
 
 ## O pipeline do `CoordenadorGeral`
+
+`run()` instancia os 4 supervisores (`hier-sup-orcamento-…`, `hier-sup-saude-…`, `hier-sup-analitico-…`, `hier-sup-contexto-…`), configura a working memory e delega ao ciclo CoALA:
 
 ```python
 def propose_actions(self) -> list[dict]:
     if not self.working_memory.get("analysis_id"):
         return []
     return [
-        {"goal": "delegar_dominio"},
-        {"goal": "comunicar_dominio_analitico"},   # comunicação lateral
-        {"goal": "comunicar_dominio_contexto"},    # comunicação lateral
+        {"goal": "delegar_orcamento"},
+        {"goal": "delegar_saude"},
+        {"goal": "combinar_despesas"},
         {"goal": "delegar_contexto"},
-        {"goal": "comunicar_contexto_analitico"},  # comunicação lateral
         {"goal": "delegar_analitico"},
         {"goal": "persistir_metricas"},
     ]
 ```
 
-### 1. `delegar_dominio` → `SupervisorDominio.run()`
+### 1. `delegar_orcamento` → `SupervisorOrcamento.run()`
 
-O supervisor de domínio roda seu próprio ciclo CoALA: ativa condicionalmente os agentes de domínio relevantes aos `health_params` (mesmo mapeamento `INDICADOR_TO_AGENT` da estrela), chama `agent.query(..., intent_summary=..., health_params=...)` para cada um — cada consulta passa pela ação `planejar_consulta` de cada agente de domínio (ver `agents/domain/query_planning.py`, fast-path por padrão) — e agrega despesas/indicadores (deduplicando, já que `AgenteMortalidade` é transversal).
+O supervisor ativa as subfunções relevantes aos `health_params` (mesmos critérios da estrela, ver [arquitetura-estrela.md](arquitetura-estrela.md#ativação-condicional)), roda um `AgenteOrcamentoSubfuncao` por subfunção (`consultar_orcamento` × M) e agrega (`agregar_resultados`). Retorna `{despesas, tendencias, agent_queries}`.
 
-### 2–3. Comunicação lateral: Domínio → Analítico / Domínio → Contexto
+### 2. `delegar_saude` → `SupervisorSaude.run()`
 
-```python
-def _act_comunicar_dominio_analitico(self, action: dict) -> None:
-    sup_analitico.receive_from_peer({
-        "despesas": dominio_data.get("despesas", []),
-        "indicadores": dominio_data.get("indicadores", []),
-        "date_from": ..., "date_to": ..., "health_params": ...,
-        "intent_summary": self.working_memory.get("intent_summary"),
-    })
-```
+Ativa os agentes de saúde pelo mesmo `INDICADOR_TO_AGENT` da estrela (`consultar_saude` × N) e agrega os indicadores. Com `health_params` vazio ativaria todos, mas o agente de intenção nunca envia vazio. Retorna `{indicadores, agent_queries}`. Cada agente faz a sua própria deliberação de dimensão.
 
-`receive_from_peer()` é uma ação externa de comunicação — escreve numa região nomeada da `working_memory`/`peer_data` de quem recebe, sem passar pelo `propose_actions`/`execute` do receptor (é o par que empurra o dado, não o receptor que o busca). O coordenador loga ambos os lados do hop (o que está enviando, e cada supervisor loga o que recebeu).
+### 3. `combinar_despesas`
 
-### 4. `delegar_contexto` → `SupervisorContexto.run()`
+`deduplicate_despesas(orçamento + saúde)`. Desde a decomposição por sistema, o `SupervisorSaude` nunca retorna despesas, então isto é só uma salvaguarda estrutural.
 
-Delega a `AgenteContextoOrcamentario` usando as despesas recebidas lateralmente do `SupervisorDominio`. Cálculo determinístico, sem LLM.
+### 4. `delegar_contexto` → `SupervisorContexto.run(despesas=<combinadas>)`
 
-### 5. Comunicação lateral: Contexto → Analítico
+Delega ao `AgenteContextoOrcamentario` (tendência + CAGR de todas as subfunções presentes). Cálculo determinístico, sem LLM.
 
-Repassa o `contexto_orcamentario` calculado para o `SupervisorAnalitico`.
+### 5. `delegar_analitico` → `SupervisorAnalitico.run(...)`
 
-### 6. `delegar_analitico` → `SupervisorAnalitico.run()`
+Recebe como parâmetros diretos as despesas combinadas, os indicadores do `SupervisorSaude`, o contexto orçamentário do `SupervisorContexto`, o período, os `health_params`, o `intent_summary` e as flags `use_llm`/`use_self_check`. Ver a seção dedicada abaixo.
 
-Ver seção dedicada abaixo — é aqui que corre o pipeline analítico completo, incluindo as duas etapas que envolvem LLM (priorização e síntese).
+### 6. `persistir_metricas`
 
-### 7. `persistir_metricas`
-
-Persiste métricas de 8 agentes-folha + 3 supervisores (11 entidades). Ver [seção de contabilização](#contabilização-de-métricas-e-overhead) abaixo.
+Persiste as métricas dos agentes-folha e dos 4 supervisores e emite os eventos `metric` e `agent_data`. Ver [Contabilização](#contabilização-de-métricas-e-overhead).
 
 ## O pipeline do `SupervisorAnalitico`
 
 ```python
 def propose_actions(self) -> list[dict]:
-    if not (self.working_memory.get("analysis_id") and self.working_memory.get("_ws_queue")):
-        return []
-    return [
+    actions = [
         {"goal": "cruzar_dados"},
         {"goal": "detectar_gaps"},
-        {"goal": "calcular_correlacoes"},
-        {"goal": "detectar_anomalias"},
-        {"goal": "capturar_wallclock"},      # ← marca _coala_leaf_end_time
-        {"goal": "priorizar_achados"},        # ← chama LLM (Etapa 3)
-        {"goal": "sintetizar_texto"},         # ← chama LLM
+        {"goal": "analisar"},              # AgenteAnalitico: Spearman + anomalias
+        {"goal": "capturar_wallclock"},    # ← marca _coala_leaf_end_time
+        {"goal": "priorizar_achados"},     # ← LLM opcional
+        {"goal": "sintetizar_texto"},      # ← LLM, streaming
     ]
+    if use_self_check and use_llm:
+        actions.append({"goal": "verificar_afirmacoes"})
+    return actions
 ```
 
-Estrutura idêntica à fase analítica da estrela (`cruzar_dados` usa os dados recebidos lateralmente via `peer_data`; `calcular_correlacoes`/`detectar_anomalias` delegam a `AgenteCorrelacao`/`AgenteAnomalias`, sem LLM). As duas particularidades desta topologia:
+O mecanismo de cada ação é o mesmo da estrela (ver [arquitetura-estrela.md](arquitetura-estrela.md#o-pipeline-passo-a-passo)). As particularidades desta topologia:
 
-- **`capturar_wallclock`** marca `self._coala_leaf_end_time` — usado pelo `CoordenadorGeral` para medir o supervisor analítico **sem** incluir o tempo do que roda depois (priorização + síntese, ambos com LLM).
-- **`priorizar_achados`** lê `intent_summary` de `self.peer_data` (repassado lateralmente pelo `SupervisorDominio`, não da própria `working_memory` como na estrela) — reflexo direto da estrutura em camadas: o dado precisa atravessar coordenador → supervisor → comunicação lateral antes de chegar aqui.
-
-O restante — delega a `AgentePriorizacaoAnalitica`, depois a `TextSynthesizer` usando `achados_priorizados` se disponível — é o mesmo mecanismo documentado em [arquitetura-estrela.md](arquitetura-estrela.md#5-priorizar_achados--decide-ênfase-etapa-3).
+- **`capturar_wallclock`** grava `self._coala_leaf_end_time`. O coordenador usa esse marco como fim da medição do `SupervisorAnalitico`, sem incluir priorização, síntese e verificação.
+- **`priorizar_achados`** recebe o `intent_summary` como parâmetro de `run()`, repassado pelo coordenador. O dado atravessa a árvore de cima para baixo, sem canal entre supervisores.
 
 ## Contabilização de métricas e overhead
 
-Esta é a parte que mais difere da estrela — aqui existe uma camada real de supervisores cujo custo precisa ser isolado do trabalho de fato.
+É a parte que mais difere da estrela: existe uma camada real de supervisores, cujo custo precisa ser separado do trabalho de fato.
 
 ```python
 overhead = wall_clock - soma dos agentes FOLHA (nível 2)
 ```
 
-- Supervisores aparecem no breakdown de métricas **para exibição**, mas **não** são somados em `workers_time_ms` — o tempo de um supervisor já engloba o de seus subordinados; somar ambos causaria dupla contagem.
-- `overhead_ms` captura: tempo dos supervisores fora dos subordinados + comunicação lateral (`receive_from_peer`) + instanciação — é a métrica que quantifica o "custo real" de ter uma camada extra de coordenação, em contraste com a estrela (onde esse overhead é ~0 por design).
-- Os agentes-folha `"sintetizador"` e `"priorizacao"` são excluídos tanto de `workers_time_ms` quanto do wall-clock do coordenador (mesma lógica da estrela, mas aqui a subtração é explícita porque o coordenador captura seu próprio `time.time()` **depois** de tudo já ter rodado):
+- Supervisores aparecem no breakdown **para exibição**, mas **não** são somados em `workers_time_ms`. O tempo de um supervisor já engloba o dos subordinados, e somar os dois contaria o mesmo tempo duas vezes.
+- `overhead_ms` (no breakdown como `coordenador_geral`) captura o tempo dos supervisores fora dos subordinados e a instanciação. É a métrica que quantifica o custo de ter uma camada extra de coordenação.
+- `sintetizador`, `priorizacao` e `verificacao` ficam fora de `workers_time_ms` e são **subtraídos** do wall-clock. A subtração é explícita porque o coordenador só captura o próprio `time.time()` depois que tudo já rodou:
 
 ```python
 # CoordenadorGeral._act_persistir_metricas
-sint_time_ms = 0.0
-prior_time_ms = 0.0
 for agent_mc in sup_analitico._collectors:
     m = agent_mc.collect()
-    if m["agentType"] == "sintetizador":
-        sint_time_ms = m["executionTimeMs"]
-    elif m["agentType"] == "priorizacao":
-        prior_time_ms = m["executionTimeMs"]
+    if m["agentType"] == "sintetizador":   sint_time_ms  = m["executionTimeMs"]
+    elif m["agentType"] == "priorizacao":  prior_time_ms = m["executionTimeMs"]
+    elif m["agentType"] == "verificacao":  verif_time_ms = m["executionTimeMs"]
 
-wall_clock_ms = max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms)
-overhead_ms = max(0, wall_clock_ms - workers_time_ms)
+wall_clock_ms = max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms - verif_time_ms)
+overhead_ms   = max(0, wall_clock_ms - workers_time_ms)
 ```
 
 ## Degradação graciosa
 
-Diferente da estrela (ponto único de falha no orquestrador), aqui cada supervisor pode falhar independentemente e o coordenador continua com dados parciais para os demais:
+Cada supervisor pode falhar sozinho, e o coordenador continua com dados parciais para os demais:
 
 ```
-    SupervisorDominio falha!
+    SupervisorSaude falha!
               │
               ▼
     CoordenadorGeral:
-    ├── Captura exceção, envia evento "error" via WebSocket
-    ├── Define dominio_data = {despesas: [], indicadores: []}
-    └── CONTINUA com SupervisorContexto e SupervisorAnalitico
+    ├── Captura a exceção e envia evento "error" pelo WebSocket
+    ├── saude_data = {despesas: [], indicadores: []}
+    └── CONTINUA com combinar_despesas, SupervisorContexto e SupervisorAnalitico
               │
               ▼
     Resultado final: parcial mas válido
-    (correlações e anomalias vazias, texto gerado com fallback)
+    (sem indicadores → sem correlações/anomalias; texto gerado mesmo assim)
 ```
+
+Os valores vazios usados por supervisor são `{"despesas": [], "tendencias": {}}` (orçamento), `{"despesas": [], "indicadores": []}` (saúde), `{"contexto_orcamentario": {}}` (contexto) e `{"correlacoes": [], "anomalias": [], "texto_analise": ""}` (analítico).
 
 ## Retorno
 
 ```python
-result = dict(analitico_data)  # correlacoes, anomalias, texto_analise, data_coverage, dados_cruzados
-result["despesas"] = dominio_data.get("despesas", [])
-result["indicadores"] = dominio_data.get("indicadores", [])
-result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
+result = dict(analitico_data)   # correlacoes, anomalias, texto_analise, data_coverage, dados_cruzados, self_check
+result["despesas"]              = <despesas combinadas>
+result["indicadores"]           = saude_data["indicadores"]
+result["contexto_orcamentario"] = contexto_data["contexto_orcamentario"]
+result["agent_queries"]         = orcamento_data["agent_queries"] + saude_data["agent_queries"]
 ```
 
-Mesma garantia da estrela: `correlacoes`/`anomalias` no retorno são sempre os dados brutos do `AgenteCorrelacao`/`AgenteAnomalias`, nunca a versão reordenada pela priorização — Q1 compara números idênticos entre as duas topologias independente de qual ângulo de ênfase cada uma escolheu.
+Mesma garantia da estrela: `correlacoes`/`anomalias` no retorno são os dados brutos do `AgenteAnalitico`, nunca a versão reordenada pela priorização. Assim, Q1 compara números idênticos entre as topologias.
 
 ## Características-chave desta topologia
 
-- **Degradação graciosa por camada** — falha de um supervisor não derruba os demais (mais resiliente que a estrela nesse aspecto).
-- **Comunicação lateral real** — supervisores trocam dados diretamente entre si, sem intermediação do coordenador.
-- **Overhead de coordenação mensurável** — ao contrário da estrela, aqui existe uma métrica dedicada (`overhead_ms`) para o custo real de ter a camada extra de supervisores.
-- **Mais mensagens** — ~24+ trocas (agentes + supervisores + comunicação lateral), contra o modelo simples "ida+volta" da estrela.
-- **Mais entidades monitoradas** — 11 (8 agentes-folha + 3 supervisores) contra 8 na estrela.
+- **Árvore estrita**: toda troca de dados passa pela relação pai–filho. Nenhum supervisor conhece ou escreve no estado de outro.
+- **Degradação graciosa por camada**: a falha de um supervisor não derruba os demais.
+- **Overhead de coordenação mensurável**: `overhead_ms` isola o custo da camada de supervisores.
+- **Mais entidades monitoradas**: agentes-folha + 4 supervisores, contra só os agentes-folha na estrela.
+
+> **Histórico — comunicação lateral removida.** Até o commit `38df7be`, os supervisores trocavam dados diretamente entre si (`receive_from_peer`/`peer_data`, inclusive com resumos textuais gerados por LLM, Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md)). Mesmo mediada pelo coordenador, essa troca entre nós do mesmo nível fazia a hierárquica deixar de ser uma árvore no sentido estrito, que é o modelo documentado na literatura e usado como referência no TCC. A troca foi substituída pela passagem de parâmetros pelo coordenador, descrita acima, e a cobertura de testes correspondente está em `backend/tests/test_hierarchical_tree.py`.

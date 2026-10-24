@@ -23,7 +23,7 @@ Todo agente do sistema — agentes de domínio, analíticos, de contexto, o agen
 
 ```python
 class AgenteCoALA:
-    agent_id: str                                              # ID único (ex: "star-vigilancia-a1b2c3d4")
+    agent_id: str                                              # ID único (ex: "star-sinan-a1b2c3d4")
     working_memory: dict[str, Any]                             # Buffer de curto prazo
     semantic_memory: dict[str, Any]                             # Fatos/regras de domínio
     episodic_memory: list[dict]                                 # Histórico de ações (sucesso/falha)
@@ -39,15 +39,15 @@ Nenhum agente concreto reimplementa essas quatro estruturas do zero — todos he
 
 | Memória | O que guarda | Exemplo real no código |
 |---|---|---|
-| **`working_memory`** | Buffer ativo de curto prazo — parâmetros da análise em andamento, resultados parciais de outros agentes. Equivalente às antigas "beliefs" de um design BDI. | `AgenteVigilanciaEpidemiologica.working_memory["despesas"]` — despesas retornadas pela última consulta ao Neo4j |
-| **`semantic_memory`** | Fatos/regras declarativas de domínio, lidos via *retrieval* explícito — nunca hardcoded direto do módulo no meio da lógica de decisão. | `AgenteCorrelacao.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4}` |
+| **`working_memory`** | Buffer ativo de curto prazo — parâmetros da análise em andamento, resultados parciais de outros agentes. Equivalente às antigas "beliefs" de um design BDI. | `AgenteSINAN.working_memory["indicadores"]` — indicadores retornados pela consulta ao Neo4j |
+| **`semantic_memory`** | Fatos/regras declarativas de domínio, lidos via *retrieval* explícito — nunca hardcoded direto do módulo no meio da lógica de decisão. | `AgenteAnalitico.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4, "indicadores_negativos": {...}, ...}` |
 | **`episodic_memory`** | Histórico de ações executadas nesta instância (sucesso e falha), gravado automaticamente pela classe base a cada tentativa. Só em memória — descartado ao fim do processo. | Cada entrada: `{"action": goal, "status": "completed"/"failed", "detail": ..., "timestamp": ...}` |
-| **`procedural_memory`** | "Como fazer" — lista ordenada de estratégias (métodos `_act_*`) por `goal`. A primeira é a estratégia primária; as demais são fallbacks tentados em ordem se a anterior falhar. | `{"consultar_despesas": [self._act_consultar_despesas, self._act_fallback_despesas]}` |
+| **`procedural_memory`** | "Como fazer" — lista ordenada de estratégias (métodos `_act_*`) por `goal`. A primeira é a estratégia primária; as demais são fallbacks tentados em ordem se a anterior falhar. | `{"consultar_indicadores": [self._act_consultar_indicadores, self._act_fallback_indicadores]}` |
 
 O espaço de ações de um agente é dividido em duas categorias (terminologia do próprio CoALA):
 
 - **Internas** (*reasoning*/*retrieval*/*learning*) — processamento sobre a `working_memory`, leitura de `semantic_memory`, gravação em `episodic_memory`. Inclui chamadas ao LLM para raciocinar sobre o estado atual — o LLM é parte da procedural memory implícita do agente, não do ambiente (terminologia do próprio CoALA). Ex.: calcular Spearman, cruzar dados, classificar tendência, reordenar achados, `core.llm_client.generate(...)`.
-- **Externas** (*grounding*) — interação com o ambiente fora da cognição do agente: Neo4j, o WebSocket, comunicação lateral entre agentes. Ex.: `neo4j_client.get_despesas(...)`.
+- **Externas** (*grounding*) — interação com o ambiente fora da cognição do agente: Neo4j, o WebSocket, a delegação a outro agente. Ex.: `neo4j_client.get_indicadores_por_sistema(...)`.
 
 ---
 
@@ -93,12 +93,12 @@ def run_coala_cycle(self) -> None:
 **Instrumentação de log (observabilidade):** `run_coala_cycle()` loga início/fim do ciclo com timing e a lista de goals propostos; `execute()` loga início/fim de cada ação individual, também com timing. Isso é herdado automaticamente por todo agente — nenhuma subclasse precisa adicionar logging próprio para ter essa visibilidade. Exemplo real de saída (nível `INFO`):
 
 ```
-Agent star-vigilancia-a1b2c3: iniciando ciclo CoALA
-Agent star-vigilancia-a1b2c3: 3 ação(ões) propostas: ['planejar_consulta', 'consultar_despesas', 'consultar_indicadores']
-Agent star-vigilancia-a1b2c3: iniciando ação 'planejar_consulta' (estratégia 1/1: _act_planejar_consulta)
-Agent star-vigilancia-a1b2c3: ação 'planejar_consulta' concluída em 0.1ms
-...
-Agent star-vigilancia-a1b2c3: ciclo CoALA concluído em 1.0ms (3 ações, 0 falha(s) nesta rodada)
+Agent star-sinan-a1b2c3d4 (AgenteSINAN): iniciando ciclo CoALA
+Agent star-sinan-a1b2c3d4 (AgenteSINAN): 3 ação(ões) propostas: ['consultar_indicadores', 'consultar_indicadores', 'consultar_indicadores']
+Agent star-sinan-a1b2c3d4: dimensão de consulta escolhida via llm: POR_FAIXA_ETARIA
+Agent star-sinan-a1b2c3d4 (AgenteSINAN): iniciando ação 'consultar_indicadores' (estratégia 1/2: _act_consultar_indicadores)
+Agent star-sinan-a1b2c3d4 (AgenteSINAN): ação 'consultar_indicadores' concluída em 42.3ms
+Agent star-sinan-a1b2c3d4 (AgenteSINAN): ciclo CoALA concluído em 900.5ms (1 ações, 0 falha(s) nesta rodada)
 ```
 
 ### Os 4 hooks que uma subclasse sobrescreve
@@ -106,8 +106,8 @@ Agent star-vigilancia-a1b2c3: ciclo CoALA concluído em 1.0ms (3 ações, 0 falh
 | Método | Implementação padrão (na base) | O que uma subclasse tipicamente faz |
 |---|---|---|
 | `perceive()` | Retorna `{}` | Lê parâmetros já colocados na `working_memory` pelo caller |
-| `propose_actions()` | Retorna `[]` | Decide quais goals propor, com base no estado da `working_memory` — normalmente 1 candidato por goal aplicável; só `AgentePriorizacaoAnalitica` propõe **múltiplos** candidatos concorrentes para o mesmo goal |
-| `evaluate_and_select(candidates)` | `[dict(c, status="pending") for c in candidates]` — passthrough | Na maioria dos agentes, permanece passthrough (não há candidatos concorrentes a arbitrar — decisão intencional documentada no código, não omissão). Só `AgentePriorizacaoAnalitica` faz arbitragem de verdade aqui |
+| `propose_actions()` | Retorna `[]` | Decide quais goals propor, com base no estado da `working_memory`. Propõem **múltiplos** candidatos concorrentes para o mesmo goal: os agentes de saúde com dimensões válidas e o `AgenteOrcamentoSubfuncao` (um candidato por dimensão de consulta) e o `AgentePriorizacaoAnalitica` (um por ângulo de ênfase) |
+| `evaluate_and_select(candidates)` | `[dict(c, status="pending") for c in candidates]` — passthrough | Os mesmos agentes acima fazem arbitragem de verdade: score determinístico + LLM opcional, com fallback ao maior score (`query_planning.arbitrar_dimensao` / `AgentePriorizacaoAnalitica`). Nos demais (analítico, contexto, intenção, orquestrador, coordenador, supervisores) permanece passthrough, por decisão intencional documentada no código |
 | `execute(actions)` | Já implementado na base (ver abaixo) — normalmente **não** é sobrescrito | — |
 
 ---
@@ -139,16 +139,16 @@ def execute(self, actions: list[dict]) -> None:
 Cada estratégia é um método `_act_*(self, action: dict) -> None` da própria subclasse, registrado explicitamente no `__init__`:
 
 ```python
-# Exemplo — agente de domínio
+# Exemplo — AgenteOrcamentoSubfuncao
 self.procedural_memory = {
-    "planejar_consulta": [self._act_planejar_consulta],
     "consultar_despesas": [
         self._act_consultar_despesas,   # estratégia primária
         self._act_fallback_despesas,     # fallback: lista vazia
     ],
-    "consultar_indicadores": [
-        self._act_consultar_indicadores,
-        self._act_fallback_indicadores,
+    "analisar_tendencia": [self._act_analisar_tendencia],
+    "consultar_variacao_anual": [
+        self._act_consultar_variacao_anual,
+        self._act_fallback_variacao_anual,
     ],
 }
 ```
@@ -183,7 +183,7 @@ class ActionFailure(Exception):
 
 Se **todas** as estratégias registradas falharem, a ação é marcada `"failed"` e o laço segue para a próxima ação — o erro fica registrado em `_failed_actions` e `episodic_memory`, e é reportado ao orquestrador/supervisor, que decide como continuar (tipicamente: degradação graciosa, continuar com dados parciais).
 
-Alguns agentes (ex.: `AgenteInterpretacaoIntencao`, os agentes de domínio na ação `planejar_consulta`) optam por **não** registrar uma segunda estratégia e em vez disso capturam a exceção internamente dentro da própria função — quando o objetivo é "nunca deixar essa etapa quebrar o pipeline, mesmo que o resultado seja só usar um valor padrão", sem precisar do aparato de `ActionFailure`/fallback registrado.
+Alguns pontos (ex.: a arbitragem de dimensão em `query_planning.arbitrar_dimensao`, a priorização de achados, a verificação pós-síntese) optam por **não** registrar uma segunda estratégia e em vez disso capturam a exceção internamente dentro da própria função — quando o objetivo é "nunca deixar essa etapa quebrar o pipeline, mesmo que o resultado seja só usar um valor padrão", sem precisar do aparato de `ActionFailure`/fallback registrado.
 
 ---
 
@@ -212,6 +212,8 @@ Qual provedor responde é decidido pela variável `LLM_PROVIDER` — lida a cada
 | Override de modelo | `DEEPSEEK_MODEL` | `OPENAI_MODEL` |
 | `thinking` | Desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) — resposta direta, sem chain-of-thought | Não enviado — é parâmetro proprietário do DeepSeek e a OpenAI responde 400 a parâmetro desconhecido |
 | Limite de saída | `max_tokens` | `max_completion_tokens` (sem `temperature`) nos modelos de raciocínio (`gpt-5*`, série `o*`), que rejeitam a forma clássica; `max_tokens` nos demais |
+| Esforço de raciocínio | — | `OPENAI_REASONING_EFFORT` (default `low`) e `OPENAI_MAX_COMPLETION_TOKENS` (default 16384) — com esforço alto e teto apertado, o modelo gasta o orçamento pensando e devolve resposta vazia |
+| Opcionais | — | `OPENAI_BASE_URL` (proxy/gateway compatível), `OPENAI_STORE_LOGS=true` (retém as chamadas na aba Logs da OpenAI, filtráveis por `caller`) |
 
 Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e hierárquica) correm em paralelo de verdade.
 
@@ -239,10 +241,11 @@ O `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_int
 
 ```python
 class AgenteInterpretacaoIntencao(AgenteCoALA):
-    def __init__(self, agent_id, min_year=None, max_year=None):
+    def __init__(self, agent_id, min_year=None, max_year=None, neo4j_client=None):
         super().__init__(agent_id)
         self.semantic_memory = {"valid_health_params": VALID_HEALTH_PARAMS}
         self.procedural_memory = {
+            "buscar_memoria_episodica": [self._act_buscar_memoria_episodica],
             "classificar_escopo": [
                 self._act_classificar_escopo,
                 self._act_fallback_classificar_escopo,
@@ -253,10 +256,12 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
     def propose_actions(self) -> list[dict]:
         if not self.working_memory.get("texto_usuario", "").strip():
             return []
-        return [
-            {"goal": "classificar_escopo"},
-            {"goal": "extrair_parametros"},
-        ]
+        actions = []
+        if self.neo4j_client is not None:
+            actions.append({"goal": "buscar_memoria_episodica"})   # análises passadas
+        actions.append({"goal": "classificar_escopo"})
+        actions.append({"goal": "extrair_parametros"})
+        return actions
 
     def _act_classificar_escopo(self, action: dict) -> None:
         texto = self.working_memory["texto_usuario"]
@@ -287,14 +292,14 @@ class AgenteInterpretacaoIntencao(AgenteCoALA):
 
 Percorrendo o ciclo com esse exemplo:
 
-1. **`propose_actions()`** — como há texto do usuário, propõe **duas** ações juntas: `classificar_escopo` e `extrair_parametros`.
-2. **`evaluate_and_select`** — passthrough (não há candidatos concorrentes aqui — as duas ações sempre rodam juntas, uma depois da outra).
+1. **`propose_actions()`** — como há texto do usuário, propõe `classificar_escopo` e `extrair_parametros` (precedidas de `buscar_memoria_episodica` quando há cliente Neo4j, que recupera as últimas análises como contexto).
+2. **`evaluate_and_select`** — passthrough (não há candidatos concorrentes aqui — as ações sempre rodam juntas, em sequência).
 3. **`execute()`** roda as duas ações **em sequência, na mesma passada**:
    - `classificar_escopo` chama o LLM (única chamada do ciclo — decisão de custo: classifica escopo E extrai parâmetros na mesma resposta JSON) e grava o resultado em `working_memory`.
    - `extrair_parametros` **não chama o LLM de novo** — só lê o que a ação anterior já deixou em `working_memory["_llm_parsed"]` e copia os campos relevantes. Existe como ação própria (não fundida com a primeira) para aparecer como um passo auditável e independente em `episodic_memory`.
 4. Se o LLM falhar, `_act_fallback_classificar_escopo` (2ª estratégia registrada) assume, marcando `escopo = "indisponivel"` — o agente segue em estado válido, sem levantar exceção para o caller.
 
-Esse mesmo padrão — uma ação chama o LLM via `core.llm_client.generate(..., caller=...)`, com uma estratégia de fallback registrada (ou um `try/except` interno) para quando o LLM falhar — se repete em todo outro ponto do sistema que usa LLM: `agents/domain/query_planning.py` (planejamento de consulta dos agentes de domínio) e `agents/analytical/priorizacao.py` (`AgentePriorizacaoAnalitica`, na escolha de ângulo de ênfase).
+Esse mesmo padrão — uma ação chama o LLM via `core.llm_client.generate(..., caller=...)`, com uma estratégia de fallback registrada (ou um `try/except` interno) para quando o LLM falhar — se repete em todo outro ponto do sistema que usa LLM: `agents/domain/query_planning.py::arbitrar_dimensao` (escolha de dimensão dos agentes de saúde e de orçamento), `agents/analytical/priorizacao.py` (`AgentePriorizacaoAnalitica`, na escolha de ângulo de ênfase) e `core/claim_verifier.py` (verificação pós-síntese).
 
 ---
 
@@ -303,9 +308,11 @@ Esse mesmo padrão — uma ação chama o LLM via `core.llm_client.generate(...,
 | Agente | Chama o LLM? | Arquivo |
 |---|---|---|
 | `AgenteInterpretacaoIntencao` | **Sim** — sempre (guardrail + extração) | `agents/intent/agente_interpretacao_intencao.py` |
-| `AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade` | Condicional — só se `USE_LLM_QUERY_PLANNING` estiver ligada **e** o mapeamento estático não for mais trivial (fast-path por padrão) | `agents/domain/*.py` + `agents/domain/query_planning.py` |
-| `AgenteCorrelacao`, `AgenteAnomalias`, `AgenteContextoOrcamentario` | **Não** — cálculo 100% determinístico, decisão intencional | `agents/analytical/correlacao.py`, `anomalias.py`, `agents/context/contexto_orcamentario.py` |
+| `AgenteSINAN`, `AgenteSIM`, `AgenteSIH`, `AgenteSIPNI`, `AgenteSINASC`, `AgenteCNES` | Condicional — só se `use_llm=True`, para arbitrar a dimensão de consulta (sem LLM, maior score determinístico) | `agents/domain/agente_*.py` + `agents/domain/query_planning.py` |
+| `AgenteSIA`, `AgenteCOVID` | **Não** — sem dimensões válidas, consulta única | `agents/domain/agente_sia.py`, `agente_covid.py` |
+| `AgenteOrcamentoSubfuncao` | Condicional — só se `use_llm=True`, para arbitrar a dimensão das despesas | `agents/domain/agente_orcamento.py` |
+| `AgenteAnalitico`, `AgenteContextoOrcamentario` | **Não** — cálculo 100% determinístico, decisão intencional | `agents/analytical/analitico.py`, `agents/context/contexto_orcamentario.py` |
 | `AgentePriorizacaoAnalitica` | Condicional — só se `use_llm=True` na análise | `agents/analytical/priorizacao.py` |
-| `OrquestradorEstrela`, `CoordenadorGeral`, `SupervisorDominio`, `SupervisorAnalitico`, `SupervisorContexto` | Não diretamente — delegam a agentes/serviços que chamam | `agents/star/orchestrator.py`, `agents/hierarchical/*.py` |
+| `OrquestradorEstrela`, `CoordenadorGeral`, `SupervisorOrcamento`, `SupervisorSaude`, `SupervisorAnalitico`, `SupervisorContexto` | Não diretamente — delegam a agentes/serviços que chamam | `agents/star/orchestrator.py`, `agents/hierarchical/*.py` |
 
 `TextSynthesizer` (`agents/analytical/sintetizador.py`) também chama o LLM, mas **não** herda de `AgenteCoALA` — é modelado como serviço comum porque não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas (quem decide isso é o caller). Ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md) para onde ele entra no pipeline.

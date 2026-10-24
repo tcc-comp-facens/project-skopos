@@ -11,12 +11,12 @@
               │  WS /ws/chat/{session_id}
               ▼
  2. AgenteInterpretacaoIntencao.parse(texto)
-    ├── fora do escopo → esclarecimento, encerra o turno
-    └── dentro do escopo → AnalysisIntent (params + intent_summary)
+    ├── fora do escopo / conversa sem análise → resposta direta, encerra o turno
+    └── pergunta de dados → AnalysisIntent (params + intent_summary)
               │
               ▼
  3. dispatch_analysis()
-    ├── persiste Analise no Neo4j (relaciona despesas/indicadores do período)
+    ├── persiste o nó Analise no Neo4j
     └── dispara 2 threads paralelas
               │
        ┌──────┴──────┐
@@ -28,31 +28,33 @@
               │  ambas escrevem na mesma ws_queue
               ▼
  5. WS /ws/{analysisId} — streaming
-    ├── eventos chunk/metric/done de cada arquitetura
-    ├── quando as duas terminam: compute_all_quality_metrics()
-    ├── avaliação RAGAS (core/ragas_metrics.evaluate_architecture)
-    └── generate_comparative_report() (streaming) — veredito já com o RAGAS
+    ├── eventos chunk/metric/agent_data/error/done de cada arquitetura
+    ├── quando as duas terminam: compute_all_quality_metrics()   → evento quality_metrics
+    ├── avaliação RAGAS (core/ragas_metrics.evaluate_architecture) → eventos ragas/ragas_done
+    └── generate_comparative_report() (streaming)                 → eventos chunk/done ("both")
 ```
 
 Duas conexões WebSocket distintas cobrem o ciclo: `/ws/chat/{session_id}` (turno de conversa — 1 pergunta, 1 confirmação) e `/ws/{analysisId}` (streaming dos resultados da análise disparada). São desacopladas de propósito: o chat só inicia a análise e devolve o `analysisId`; quem efetivamente consome os eventos de progresso é o segundo WebSocket, aberto pelo frontend logo em seguida.
 
 ## 1–2. Interpretação de intenção (guardrail de escopo)
 
-`chat_websocket.py` recebe `{"type": "user_message", "payload": {"text"}}`, valida tamanho e uma rodada por vez por sessão, e delega a interpretação a `AgenteInterpretacaoIntencao.parse(texto)` — único ponto do sistema que decide se uma mensagem está dentro do escopo (dados de saúde/orçamento de Sorocaba) antes de qualquer outro processamento acontecer. Se fora do escopo, o usuário recebe uma mensagem de esclarecimento e nenhuma análise é disparada. O mecanismo de classificação, extração de parâmetros e chamada ao LLM está detalhado em [agente-coala-e-llm.md](agente-coala-e-llm.md#exemplo-completo-agenteinterpretacaointencao).
+`chat_websocket.py` recebe `{"type": "user_message", "payload": {"text"}}`, valida tamanho e uma rodada por vez por sessão, e delega a interpretação a `AgenteInterpretacaoIntencao.parse(texto)` — único ponto do sistema que decide se uma mensagem está dentro do escopo (dados de saúde/orçamento de Sorocaba) antes de qualquer outro processamento acontecer. A classificação tem 3 vias: fora do escopo (recusa), dentro do escopo mas sem necessidade de análise (saudação, "o que você faz?" — resposta direta) e pergunta de dados. Nas duas primeiras, o próprio LLM escreve a resposta e nenhuma análise é disparada. O mecanismo de classificação, extração de parâmetros e chamada ao LLM está detalhado em [agente-coala-e-llm.md](agente-coala-e-llm.md#exemplo-completo-de-ponta-a-ponta).
 
-Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_analysis()` chama `dispatch_analysis()` (mesma função usada pelo endpoint REST legado `POST /api/analysis`, garantindo que os dois caminhos de entrada produzam análises idênticas em estrutura).
+Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_analysis()` chama `dispatch_analysis()`. O chat é hoje o **único** caminho de entrada: o endpoint REST de formulário (`POST /api/analysis`) foi removido em `f4838d2`.
 
 ## 3. `dispatch_analysis()` — ponto de entrada compartilhado
 
 ```python
 # backend/api/dispatch.py
 def dispatch_analysis(date_from, date_to, health_params, use_llm,
-                       source_question=None, interpreted_via=None, intent_summary=None) -> str:
+                       source_question=None, interpreted_via=None, intent_summary=None,
+                       use_self_check=False, intent_token_usage=None) -> str:
     analysis_id = str(uuid.uuid4())
-    # persiste Analise + relaciona DespesaSIOPS/IndicadorDataSUS do período no Neo4j
+    neo4j_client.save_analise({...})          # nó Analise (período, params, pergunta original)
     ws_queue = Queue()
     active_queues[analysis_id] = ws_queue
-    params = {date_from, date_to, health_params, use_llm, intent_summary}
+    params = {date_from, date_to, health_params, use_llm, intent_summary, use_self_check}
+    active_results[analysis_id] = {use_llm, intent_token_usage, source_question, date_from, date_to, ...}
     threading.Thread(target=run_star, args=(analysis_id, params, ws_queue), daemon=True).start()
     threading.Thread(target=run_hierarchical, args=(analysis_id, params, ws_queue), daemon=True).start()
     return analysis_id
@@ -68,7 +70,7 @@ O que acontece **dentro** de cada `.run()` é o pipeline específico de cada top
 
 ## 5. `/ws/{analysisId}` — streaming e pós-processamento
 
-`api/websocket.py` consome a `ws_queue` compartilhada e repassa cada evento (`chunk`, `metric`, `done`, `error`) ao cliente em tempo real, contando quantas arquiteturas já enviaram `done` (encerra quando `done_count == 2`). Durante o streaming, captura de cada evento `metric` o `agentMetrics`/`totalExecutionTimeMs` de cada arquitetura — dados que alimentam a etapa seguinte.
+`api/websocket.py` consome a `ws_queue` compartilhada e repassa cada evento (`chunk`, `metric`, `agent_data`, `done`, `error`) ao cliente em tempo real, contando quantas arquiteturas já enviaram `done` (encerra quando `done_count == 2`). Durante o streaming, captura de cada evento `metric` o `agentMetrics`/`totalExecutionTimeMs` de cada arquitetura — dados que alimentam a etapa seguinte.
 
 ### Cálculo de métricas de qualidade
 
@@ -78,27 +80,29 @@ Assim que ambas terminam, com os resultados completos (`star_result`/`hier_resul
 quality = compute_all_quality_metrics(
     star_result, hier_result, star_agent_metrics, hier_agent_metrics,
     star_wall_clock_ms=..., hier_wall_clock_ms=...,
+    star_token_usage=..., hier_token_usage=..., intent_token_usage=...,
 )
 ```
 
 Enviado ao cliente como um evento `quality_metrics`. Internamente calcula E1 (overhead de coordenação), E2 (breakdown de latência por fase), Q1 (consistência determinística — compara `correlacoes`/`anomalias` **brutas**, não reordenadas pela priorização), Q3 (completude), R1 (cobertura de resultado parcial), custo de tokens e volume de comunicação. **Nenhuma dessas métricas chama o LLM** — a função é inteiramente determinística e gratuita, e por isso pode rodar sempre, antes do relatório. A avaliação que custa LLM (RAGAS) roda depois, separadamente.
 
+### Avaliação RAGAS (sempre, antes do relatório)
+
+Roda em toda análise — não há toggle. Vem **antes** do relatório porque o veredito do relatório depende da fidelidade que ela mede. O servidor chama `evaluate_architecture()` uma vez para cada arquitetura (concorrentes, cada uma com seu `TokenBucket`) — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e precisão do contexto entregue ao sintetizador. O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` (o custo em `quality_metrics["cost"]["ragas"]`) e transmitido em chunks de 80 caracteres pelos eventos `ragas`/`ragas_done`. Sem a chave de `RAGAS_PROVIDER`, a avaliação devolve `available=false` com o motivo e o resto segue normalmente. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
+
 ### Relatório comparativo
 
-`generate_comparative_report()` monta o texto final (estrela vs. hierárquica lado a lado) a partir das métricas de qualidade + métricas de agente + cobertura de dados, e é transmitido em chunks de 80 caracteres via eventos `chunk` com `architecture: "both"`, seguido de um `done` final.
-
-### Avaliação RAGAS (opcional, pós-relatório)
-
-O servidor envia um evento `ragas` (sinaliza ao frontend que uma avaliação adicional está em andamento) e chama `evaluate_architecture()` uma vez para cada arquitetura — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e precisão do contexto entregue ao sintetizador. O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` e transmitido em chunks pelos eventos `ragas`/`ragas_done`, do mesmo jeito que o relatório comparativo. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
+`generate_comparative_report()` monta o texto final (estrela vs. hierárquica lado a lado) a partir das métricas de qualidade, das métricas de agente, da cobertura de dados e do RAGAS, e o transmite em chunks de 80 caracteres via eventos `chunk` com `architecture: "both"`, seguido de um `done` final.
 
 ## Onde o LLM entra, em ordem cronológica de uma análise via chat
 
 | # | Etapa | Componente | Obrigatório? |
 |---|-------|------------|---------------|
 | 1 | Classificação de escopo + extração de parâmetros | `AgenteInterpretacaoIntencao` | Sempre (é a única via de interpretação — sem fallback regex) |
-| 2 | Planejamento de consulta (busca) | Agentes de domínio (`planejar_consulta`) | Só se `USE_LLM_QUERY_PLANNING=true` **e** a base tiver crescido além do mapeamento estático conhecido — fast-path determinístico por padrão |
+| 2 | Escolha da dimensão de consulta | Agentes de saúde com dimensões válidas e `AgenteOrcamentoSubfuncao` (`query_planning.arbitrar_dimensao`) | Só se `use_llm=True`; senão vence o score determinístico |
 | 3 | Escolha do ângulo de ênfase | `AgentePriorizacaoAnalitica` | Só se `use_llm=True` na análise |
 | 4 | Geração do texto de análise | `TextSynthesizer` | Só se `use_llm=True`; senão usa `generate_fallback()` determinístico |
-| 5 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (exige a chave de `RAGAS_PROVIDER`; sem ela reporta indisponível) |
+| 5 | Verificação pós-síntese | `core/claim_verifier.py` | Só se `use_self_check=True` (e `use_llm=True`) |
+| 6 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (exige a chave de `RAGAS_PROVIDER`; sem ela reporta indisponível) |
 
-Etapas 1 e 5 rodam uma única vez por análise (a interpretação de intenção acontece antes de qualquer topologia começar); etapas 2–4 rodam **duas vezes** — uma para a execução estrela, outra para a hierárquica — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.
+Pelo chat, `use_llm` é sempre `True`. A etapa 1 roda uma única vez por mensagem (antes de qualquer topologia começar) e a 6 uma vez por arquitetura, depois das duas terminarem; as etapas 2–5 rodam **dentro** de cada topologia — uma vez na estrela, outra na hierárquica — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.

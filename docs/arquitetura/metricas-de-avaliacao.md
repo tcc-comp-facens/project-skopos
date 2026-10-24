@@ -296,22 +296,21 @@ with token_bucket:
 active_results[analysis_id]["star_token_usage"] = token_bucket.snapshot()
 ```
 
-O resultado final no payload separa 4 segmentos: `cost.star`, `cost.hierarchical`, `cost.intent_interpretation` (1x por mensagem de chat, anterior à bifurcação das topologias) e `cost.ragas` (só quando o usuário liga a avaliação RAGAS — um bucket por arquitetura, sequenciais, incluindo o consumo dos embeddings).
+O resultado final no payload separa 4 segmentos: `cost.star`, `cost.hierarchical`, `cost.intent_interpretation` (1x por mensagem de chat, anterior à bifurcação das topologias) e `cost.ragas` (a avaliação RAGAS roda em toda análise — um bucket por arquitetura, incluindo o consumo dos embeddings).
 
 ### Volume de comunicação
 
 ```python
 def compute_communication_volume(architecture, agent_metrics, despesas_count=0, indicadores_count=0):
     n_agents = len(agent_metrics)
-    lateral_hops = 3 if architecture == "hierarchical" else 0
-    lateral_summaries = 2 if architecture == "hierarchical" else 0
-    message_count = n_agents * 2 + lateral_hops
-    return {"agent_invocations": n_agents, "lateral_hops": lateral_hops,
-            "lateral_summaries": lateral_summaries, "message_count": message_count,
+    message_count = n_agents * 2
+    return {"agent_invocations": n_agents, "message_count": message_count,
             "payload_records": despesas_count + indicadores_count}
 ```
 
-O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente efetivamente invocado (contado como 1 chamada + 1 retorno = 2 mensagens). A hierárquica soma os 3 hops de comunicação lateral fixos entre supervisores (Etapa 5 — `Dominio→Analitico`, `Dominio→Contexto`, `Contexto→Analitico`, sempre propostos por `CoordenadorGeral.propose_actions()` independente de falha upstream) e os 2 resumos textuais semânticos que os acompanham. A estrela nunca tem comunicação lateral (hub-and-spoke por definição), então ambos ficam em 0 — o harness de escalabilidade (ver seção própria abaixo) confirma que esse overhead lateral é **fixo**, não cresce com o volume de dados.
+O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente (ou supervisor, na hierárquica) efetivamente invocado, contado como 1 chamada + 1 retorno = 2 mensagens. Como a hierárquica é uma **árvore estrita** — supervisores só trocam dados com o `CoordenadorGeral`, nunca entre si —, o proxy é o mesmo para as duas topologias; a diferença real de volume aparece em `agent_invocations`, porque a hierárquica invoca também os 4 supervisores além dos agentes-folha.
+
+> Até `38df7be`, a hierárquica somava 3 "hops laterais" fixos entre supervisores (`lateral_hops`) e 2 resumos textuais via LLM (`lateral_summaries`), da Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md). Ambos saíram do payload junto com a comunicação lateral.
 
 ---
 
@@ -353,7 +352,7 @@ def compute_guardrail_rejection_rate() -> dict[str, float | int]:
 
 `chat_websocket.py` registra cada decisão do guardrail da Etapa 1 (dentro/fora de escopo) via `record_guardrail_decision()`, excluindo mensagens vazias e falhas técnicas do LLM (que não são decisões de escopo de verdade). Pensada para calibrar o prompt de classificação ao longo do tempo — o risco de falso positivo/negativo do guardrail estava registrado como não resolvido na Etapa 1; esta métrica é a instrumentação que permite monitorá-lo, não a solução em si.
 
-### Taxa de acerto do cache de planejamento de consulta
+### Taxa de acerto do cache de planejamento de consulta (inativa)
 
 ```python
 # agents/domain/query_planning.py
@@ -365,16 +364,18 @@ def compute_cache_hit_rate() -> dict[str, Any]:
             "llm_failed_fallback": ..., "cache_or_fastpath_rate": round(rate, 4)}
 ```
 
-`plan_query()` (Etapa 2) já retorna a origem de cada plano (`"fast_path" | "cache" | "llm" | "llm_failed_fallback"`); esta métrica só acumula essas origens num contador. Evidencia diretamente o trade-off da Etapa 2: enquanto a base tiver mapeamento trivial e/ou a flag `USE_LLM_QUERY_PLANNING` estiver desligada, a taxa fica em 100% — nenhuma chamada LLM acontece, exatamente o comportamento pretendido hoje.
+`plan_query()` (Etapa 2) retorna a origem de cada plano (`"fast_path" | "cache" | "llm" | "llm_failed_fallback"`); esta métrica só acumula essas origens num contador, exposto em `GET /api/metrics/query-planning-cache`.
+
+**Estado atual:** desde a migração do modelo de dados (`f4838d2`), nenhum agente chama `plan_query()` — os agentes de saúde e de orçamento escolhem a dimensão de consulta por `arbitrar_dimensao()` (ver [02-AGENTES.md](../02-AGENTES.md#deliberação-de-dimensão)). O contador portanto permanece em `total = 0` (`cache_or_fastpath_rate = 1.0` por convenção), e a flag `USE_LLM_QUERY_PLANNING` não tem efeito.
 
 ---
 
 ## Harness de escalabilidade
 
-`backend/tests/test_scalability_benchmark.py` roda as duas topologias com dados sintéticos em dois volumes (N=3 e N=10 anos, todos os 4 subfunções/tipos de indicador ativos), `use_llm=False` (determinístico, sem custo real de API — a variação do custo de tokens com N exigiria chamadas reais, fora do escopo de um harness automatizado de CI). Produz os 2 pontos de comparação exigidos pelo critério de aceite da Etapa 6 e valida invariantes estruturais em vez de comparar contra um limiar fixo (mesma filosofia de D12):
+`backend/tests/test_scalability_benchmark.py` roda as duas topologias com dados sintéticos em dois volumes (N=3 e N=10 anos, com os `health_params` `dengue`, `covid`, `internacoes`, `vacinacao` e `mortalidade` ativos), `use_llm=False` (determinístico, sem custo real de API — a variação do custo de tokens com N exigiria chamadas reais, fora do escopo de um harness automatizado de CI). Produz os 2 pontos de comparação exigidos pelo critério de aceite da Etapa 6 e valida invariantes estruturais em vez de comparar contra um limiar fixo (mesma filosofia de D12):
 
 - Q1 continua consistente em qualquer N (nenhuma divergência introduzida pelo crescimento da base).
-- O overhead lateral da hierárquica (`lateral_hops`, `lateral_summaries`) é fixo em qualquer N — só o `payload_records` cresce.
+- Em qualquer N e nas duas topologias, `message_count == agent_invocations × 2` (árvore estrita, sem mensagens extras entre supervisores) — só o `payload_records` cresce.
 - Todos os despesas/indicadores sintéticos são processados sem perda silenciosa, em ambas as escalas.
 
 ---
@@ -386,7 +387,7 @@ Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às dec
 | ID | Métrica/Decisão | Fonte | Trecho/resumo do argumento |
 |---|---|---|---|
 | D6 | Custo de tokens por topologia (`compute_token_cost`) | Achados de busca sobre frameworks de avaliação 2025 (REALM-Bench, CLEAR) e o catálogo AGENT 2026 | "New 2025 frameworks like REALM-Bench and CLEAR prioritize real-world complexity, adding cost, latency, efficiency, assurance, and reliability metrics to production evaluation"; AGENT 2026 classifica custo na categoria "Framework". **Ressalva:** acesso só a resumos de busca, não ao texto completo. O mecanismo de captura (`TokenBucket`/`ContextVar`) é decisão de engenharia própria — a fonte motiva medir custo, não como implementar a contabilização sob concorrência. |
-| D7 | Volume de comunicação (`compute_communication_volume`) | Li et al. (2024), Seção 3.4.1 ("Message delivery"); complementar: *"Beyond Self-Talk: A Communication-Centric Survey of LLM-Based Multi-Agent Systems"* (arXiv:2502.14321) | "message delivery must account for supplementary overhead, including transmission efficiency, bandwidth, and the timeliness of message delivery"; "current leaderboards remain agent-centric and rarely capture system-level properties, including coordination efficiency, communication bandwidth and latency". **Ressalva:** o proxy usado (contagem de invocações + hops laterais fixos, não um log de mensagens brutas) é decisão de engenharia própria. |
+| D7 | Volume de comunicação (`compute_communication_volume`) | Li et al. (2024), Seção 3.4.1 ("Message delivery"); complementar: *"Beyond Self-Talk: A Communication-Centric Survey of LLM-Based Multi-Agent Systems"* (arXiv:2502.14321) | "message delivery must account for supplementary overhead, including transmission efficiency, bandwidth, and the timeliness of message delivery"; "current leaderboards remain agent-centric and rarely capture system-level properties, including coordination efficiency, communication bandwidth and latency". **Ressalva:** o proxy usado (contagem de invocações, não um log de mensagens brutas) é decisão de engenharia própria. |
 | D8 | Adoção da **biblioteca** RAGAS (`core/ragas_metrics.py`) no lugar de toda métrica caseira de fidelidade | Es, S., James, J., Espinosa-Anke, L., Schockaert, S. (2024). *"RAGAS: Automated Evaluation of Retrieval Augmented Generation"*. Proceedings of the 18th Conference of the EACL: System Demonstrations, pp. 150–158. Biblioteca: `ragas` 0.4.x | O paper define três aspectos reference-free: faithfulness (`F = \|V\|/\|S\|`, afirmações suportadas sobre total de afirmações), answer relevance (média das similaridades de cosseno entre `n` perguntas geradas a partir da resposta e a pergunta original) e context relevance. A versão anterior desta linha citava a *metodologia* e implementava uma aproximação própria; agora a implementação **é** a da referência. **Ressalva:** o pipeline não é um RAG clássico — o mapeamento da tripla `(user_input, response, retrieved_contexts)` para achados determinísticos está documentado na seção do Eixo B e é decisão de engenharia própria. |
 | D17 | Remoção do LLM-as-judge de nota 1–5 (`compute_faithfulness_llm`) | Es et al. (2024), Tabela 4 e Seção 5 | O paper mede exatamente essa abordagem como baseline ("we ask ChatGPT to assign a score between 0 and 10 for the three quality dimensions") e reporta a concordância com anotadores humanos em faithfulness: **RAGAS 0.95, GPT Score 0.72, GPT Ranking 0.54**. Manter a nota holística ao lado da métrica do RAGAS seria manter, ao lado do instrumento validado, o instrumento que a mesma fonte demonstra ser pior — sem nenhuma pergunta que só ele responda. Citação direta, não decisão de engenharia. |
 | D18 | Juiz fixo (`RAGAS_PROVIDER`), independente do `LLM_PROVIDER` do pipeline | Es et al. (2024), Seção 5.1 ("Reproducibility") | "Obtaining reproducible results with (large) language models is challenging... several runs of the same experiment under the same configuration might yield different results". A fonte motiva controlar as fontes de variação da medida; deixar o juiz seguir o provedor do sistema avaliado acrescentaria uma variação a mais, e os scores de execuções com provedores diferentes deixariam de ser comparáveis entre si. **Ressalva:** a escolha do provedor específico (OpenAI) é decisão de engenharia — motivada por `answer_relevancy` exigir embeddings, que o DeepSeek não oferece. |
