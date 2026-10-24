@@ -3,107 +3,135 @@
 ## Sumário
 
 1. [Visão Geral](#visão-geral)
-2. [Componentes — Chat (aba Usuário)](#componentes--chat-aba-usuário)
-3. [Componentes — Aba Técnica](#componentes--aba-técnica)
-4. [Componentes Compartilhados](#componentes-compartilhados)
-5. [Hooks WebSocket](#hooks-websocket)
-6. [Tipos TypeScript](#tipos-typescript)
-7. [Configuração](#configuração)
-8. [Estilização](#estilização)
-9. [Acessibilidade](#acessibilidade)
+2. [Estrutura de Arquivos](#estrutura-de-arquivos)
+3. [App e Rodadas](#app-e-rodadas)
+4. [Aba Saúde (chat)](#aba-saúde-chat)
+5. [Aba Agentes (técnica)](#aba-agentes-técnica)
+6. [Componentes Compartilhados](#componentes-compartilhados)
+7. [Hooks WebSocket](#hooks-websocket)
+8. [Utilitários](#utilitários)
+9. [Tipos TypeScript](#tipos-typescript)
+10. [Configuração](#configuração)
+11. [Estilização](#estilização)
+12. [Acessibilidade](#acessibilidade)
+13. [Testes](#testes)
+14. [Docker](#docker)
 
 ---
 
 ## Visão Geral
 
-SPA (Single Page Application) em React 18 com TypeScript, usando Vite como bundler. A interface é organizada em **duas abas** — Usuário e Técnica — que compartilham o mesmo estado de rodadas de chat. A aba Usuário é um **chat de texto livre** (`ChatInterface`) que interpreta a intenção do usuário e dispara análises — não há mais formulário estruturado nessa aba (o antigo `AnalysisControls` foi removido). A aba Técnica preserva toda a profundidade técnica, com painéis lado a lado, métricas de qualidade e relatório comparativo, agora **navegável por rodada** — cada pergunta do chat vira uma "rodada" que pode ser revisitada.
+SPA em **React 18 + TypeScript (strict) + Vite**, com CSS puro (paleta "Sophia") e **Recharts** para os gráficos da aba técnica. A interface tem **duas abas**, que compartilham o estado de rodadas:
 
-**Tecnologias:**
-- React 18.3.1 (hooks funcionais, sem classes — exceto `ErrorBoundary`, que exige classe em React)
-- TypeScript 5.5.3 (strict mode)
-- Vite 5.3.4 (bundler + HMR)
-- CSS puro (sem framework de estilização) com paleta Sophia
+| Aba | Rótulo | Público | Conteúdo |
+|-----|--------|---------|----------|
+| `user` | **Saúde** | Público geral / servidores | Chat em linguagem natural. A resposta é o texto da arquitetura que respondeu primeiro, em streaming |
+| `tech` | **Agentes** | Avaliadores do TCC | Panorama de todas as rodadas: painéis das duas arquiteturas, métricas, consultas Cypher por agente, RAGAS e relatório comparativo |
+
+Cada pergunta que dispara uma análise vira uma **rodada**. As duas abas ficam montadas no DOM e a troca de aba só alterna `display`, então trocar de aba não interrompe uma análise em andamento.
+
+Não há formulário estruturado, toggle de LLM nem toggle de RAGAS. A análise é sempre disparada pelo chat, e a síntese via LLM e o RAGAS são incondicionais.
 
 ---
 
-## Componentes — Chat (aba Usuário)
+## Estrutura de Arquivos
 
-### App (`src/App.tsx`)
+```
+frontend/src/
+├── App.tsx                      # Estado de rodadas, abas, useWebSocket
+├── main.tsx                     # Ponto de entrada React
+├── config.ts                    # API_URL / WS_URL
+├── styles.css                   # Tema e layout
+├── assets/brasao-sorocaba.svg
+├── components/
+│   ├── Header.tsx               # Identidade visual Sophia
+│   ├── TabNav.tsx               # Abas Saúde / Agentes
+│   ├── ErrorBoundary.tsx        # Isola crashes da aba técnica
+│   ├── UserTab.tsx              # Aba Saúde → ChatInterface
+│   ├── ChatInterface.tsx        # Chat, com useChatWebSocket próprio
+│   ├── MessageBubble.tsx        # Bolha (Markdown básico, badge de vencedor)
+│   ├── TypingIndicator.tsx      # Pontinhos animados (CSS)
+│   ├── TechTab.tsx              # Aba Agentes → RoundOverview
+│   ├── RoundOverview.tsx        # Lista de rodadas
+│   ├── RoundCard.tsx            # Cabeçalho expansível de uma rodada
+│   ├── RoundDetail.tsx          # Conteúdo técnico de uma rodada
+│   ├── ArchitecturePanel.tsx    # Texto + benchmarks + dados por agente
+│   ├── AgentDataCard.tsx        # Consulta Cypher, gráfico e linhas de um agente
+│   ├── QualityMetricsSection.tsx# Cards E1/E2/Q1/Q3/R1
+│   ├── ScoreCard.tsx            # Card de uma métrica (estrela × hierárquica)
+│   └── ComparativeSection.tsx   # RAGAS + relatório comparativo
+├── hooks/
+│   ├── useWebSocket.ts          # WS de resultados (/ws/{analysisId})
+│   └── useChatWebSocket.ts      # WS de chat (/ws/chat/{sessionId})
+├── types/index.ts
+└── utils/
+    ├── buildAgentChartData.ts   # Linhas de consulta → pontos {ano, valor}
+    ├── formatRoundSummary.ts    # Texto de fallback da bolha de resposta
+    ├── parseWinner.ts           # Vencedor a partir do relatório
+    ├── renderFormattedText.tsx  # Markdown básico sem dangerouslySetInnerHTML
+    └── validateMessage.ts       # Limites da mensagem de chat
+```
 
-Componente principal. Gerencia o estado de **rodadas de chat** (`rounds: ChatRound[]`) — cada pergunta que dispara uma análise vira uma rodada:
+---
 
-- `analysisId` — id da análise ativa (rodada mais recente em andamento)
-- `rounds` — histórico de rodadas, cada uma com `{ id, question, startedAt, snapshot }`
-- `activeTab` (`'user'` | `'tech'`), iniciando em `'user'`
-- Deriva `winner` via `useMemo(() => parseWinner(ws.comparativeReport))`
-- `ws = useWebSocket(analysisId)` — um único hook de resultados, cujo estado é espelhado a cada atualização na rodada correspondente de `rounds` (via `useEffect`); quando a próxima rodada começa, `analysisId` muda, `useWebSocket` reseta sozinho, e o último snapshot espelhado fica **congelado** no array `rounds` — única fonte de verdade para rodadas passadas (a fila do backend é de consumidor único e é descartada ao terminar, então uma rodada antiga não pode ser "re-conectada")
-- Envolve `TechTab` num `<ErrorBoundary>` (chat fica fora — crash na aba técnica não deve derrubar o chat)
+## App e Rodadas
+
+**Arquivo:** `src/App.tsx`
+
+- `analysisId`: análise ativa (rodada mais recente).
+- `rounds: ChatRound[]`: histórico, cada um com `{ id, question, startedAt, snapshot }`.
+- `activeTab`: `'user'` | `'tech'`, começando em `'user'`.
+- `ws = useWebSocket(analysisId)`: **um único** hook de resultados. Um `useEffect` espelha o estado ao vivo no `snapshot` da rodada ativa. Quando a próxima rodada começa, `analysisId` muda, o hook reseta e o último snapshot fica **congelado** em `rounds`. Esse snapshot é a única fonte de verdade de rodadas passadas: a fila do backend tem consumidor único e é descartada ao terminar, então uma rodada antiga não pode ser reconectada.
+- `TechTab` fica dentro de um `<ErrorBoundary>`. O chat fica fora, para que um crash na aba técnica não derrube a conversa.
 
 **Fluxo:**
-1. Usuário digita uma pergunta no `ChatInterface` (aba Usuário)
-2. `ChatInterface` dispara sua própria conexão de intenção (`useChatWebSocket`) e, quando a análise começa, chama `onAnalysisStarted(analysisId, question)` — `App` cria uma nova rodada e atualiza `analysisId`
-3. `useWebSocket(analysisId)` conecta e começa a receber eventos de resultado (mesmo hook que já existia, sem mudança de protocolo)
-4. Aba Usuário exibe o resultado da rodada ativa via `WinnerPanel`, abaixo da conversa
-5. Aba Técnica exibe qualquer rodada (mais recente por padrão, ou selecionada manualmente via `RoundSelector`) com ambas as arquiteturas lado a lado, métricas e relatório comparativo
-6. Troca de aba não interrompe a análise em andamento (ambas as abas permanecem montadas no DOM; a visibilidade é controlada via `display: none/block`)
+1. O usuário envia uma pergunta no `ChatInterface`, que usa sua própria conexão `useChatWebSocket`.
+2. Quando o backend responde `analysis_started`, o `ChatInterface` chama `onAnalysisStarted(analysisId, question)`, e o `App` cria a rodada e atualiza `analysisId`.
+3. `useWebSocket(analysisId)` conecta em `/ws/{analysisId}` e recebe os eventos das duas topologias.
+4. A aba Saúde mostra a resposta na conversa. A aba Agentes mostra todos os detalhes de todas as rodadas.
 
-### ChatInterface (`src/components/ChatInterface.tsx`)
+---
 
-Chat de texto livre — autocontido, com sua própria conexão WebSocket (`useChatWebSocket`) para o turno de intenção. O resultado da análise disparada é acompanhado via `activeRoundWs` (o mesmo estado que alimenta a aba técnica), evitando duplicar o streaming de resultados.
-
-- Mensagem de boas-vindas busca `GET /api/data-range` para informar o intervalo de anos realmente disponível (best-effort — se falhar, mantém texto genérico)
-- `handleSend`: valida (`isBlank`/`isTooLong`), adiciona a mensagem do usuário e uma bolha de sistema vazia em streaming, chama `chat.sendMessage(text)`
-- Callbacks do `useChatWebSocket`: `onChunk` (acrescenta token à bolha em streaming), `onDone` (marca fim do streaming), `onError` (bolha de erro), `onAnalysisStarted` (propaga para `App` via `onAnalysisStarted` prop)
-- Assim que a rodada ativa termina de carregar (`activeRoundWs` para de estar em loading), acrescenta uma bolha de **resumo** gerada por `formatRoundSummary` — cada `analysisId` só gera um resumo (guard via ref, evita duplicar em re-renders)
-- Indicador de status de conexão (`connectionStatus`) quando não está `'connected'`
-- Enter envia a mensagem (Shift+Enter quebra linha); textarea desabilitada enquanto aguarda resposta
-- Contador de caracteres exibido quando o input não está vazio
-
-### MessageBubble (`src/components/MessageBubble.tsx`)
-
-Bolha de mensagem (usuário à direita, sistema à esquerda). Renderiza sempre como texto puro (nunca `dangerouslySetInnerHTML`), mesmo para conteúdo vindo do LLM, para não abrir espaço a XSS. Mostra `<TypingIndicator>` quando `message.isStreaming`; `role="alert"` quando `message.isError`.
-
-### TypingIndicator (`src/components/TypingIndicator.tsx`)
-
-Pontinhos animados via CSS puro, sem `setInterval` em JS.
-
-### WinnerPanel (`src/components/WinnerPanel.tsx`)
-
-Exibe o resultado da rodada ativa em painel com borda dourada, abaixo da conversa:
-- Sem banner/badge — apenas o painel com destaque visual via borda `--sophia-gold`
-- Renderiza `<ArchitecturePanel>` com `benchmarks={null}` (sem métricas técnicas)
+## Aba Saúde (chat)
 
 ### UserTab (`src/components/UserTab.tsx`)
 
-Aba pública: `<ChatInterface>` sempre visível, mais (condicionalmente) um indicador de carregamento, o `<WinnerPanel>` da rodada ativa, ou uma mensagem de erro acessível se ambas as arquiteturas falharem.
+Contém apenas o `<ChatInterface>`. A resposta da análise aparece como uma bolha da própria conversa, sem card separado.
+
+### ChatInterface (`src/components/ChatInterface.tsx`)
+
+Chat autocontido, com conexão `useChatWebSocket` para o turno de intenção. Acompanha o resultado pelo `activeRoundWs`, o mesmo estado que alimenta a aba técnica, sem duplicar o streaming.
+
+- **Boas-vindas**: busca `GET /api/data-range` para informar o intervalo de anos disponível (best-effort).
+- **Envio** (`handleSend`): valida com `isBlank`/`isTooLong`, adiciona a bolha do usuário e chama `chat.sendMessage(text)`. Enter envia e Shift+Enter quebra linha. O input fica desabilitado enquanto aguarda resposta, e um contador de caracteres aparece quando há texto.
+- **Callbacks do chat**: `onChunk` (texto da resposta de intenção em streaming), `onDone`, `onError` (bolha de erro), `onAnalysisStarted` (propaga ao `App`).
+- **Resposta da análise**: uma bolha "Analisando os dados…" é criada e, por rodada, o chat **acompanha a primeira arquitetura que produzir texto** (normalmente a estrela). A bolha passa a mostrar o `starText`/`hierText` real crescendo chunk a chunk (`kind: 'architecture_answer'`) e é finalizada quando essa arquitetura termina, sem esperar a outra nem o relatório.
+- **Badge de vencedor**: se o relatório comparativo já tiver chegado e apontar a mesma arquitetura acompanhada (`parseWinner`), a bolha ganha um badge (⭐/🏛). No caso comum, o relatório ainda não chegou e a bolha fica sem badge.
+- **Falha**: se nenhuma arquitetura produzir texto e ambas pararem, a bolha recebe o texto de `formatRoundSummary`.
+- Indicador de `connectionStatus` quando a conexão não está `'connected'`.
+
+### MessageBubble (`src/components/MessageBubble.tsx`)
+
+Usuário à direita, sistema à esquerda. O conteúdo passa por `FormattedText` (Markdown básico construído como elementos React, **nunca** `dangerouslySetInnerHTML`). Mostra `<TypingIndicator>` em streaming, `role="alert"` em erro e o badge de arquitetura quando `message.architecture` está presente.
+
+### TypingIndicator (`src/components/TypingIndicator.tsx`)
+
+Pontinhos animados só com CSS.
 
 ---
 
-## Componentes — Aba Técnica
+## Aba Agentes (técnica)
 
-### TechTab (`src/components/TechTab.tsx`)
+### TechTab → RoundOverview → RoundCard → RoundDetail
 
-Destinada a avaliadores técnicos e pesquisadores do TCC — agora **navegável por rodada**, já que uma sessão de chat pode disparar várias análises:
-
-- `<RoundSelector>` — escolhe qual rodada inspecionar
-- A rodada mais recente é selecionada automaticamente assim que começa (`useEffect` que observa o tamanho de `rounds`); uma seleção manual do avaliador persiste até a próxima rodada começar
-- Dois `<ArchitecturePanel>` lado a lado, `<QualityMetricsSection>`, `<ComparativeSection>` — todos alimentados pelo `snapshot` da rodada selecionada (`INITIAL_STATE` se nenhuma rodada existe ainda)
-
-### RoundSelector (`src/components/RoundSelector.tsx`)
-
-Permite inspecionar, na aba técnica, os resultados de qualquer rodada de chat já disparada — não só a mais recente. Um `<select>` com uma opção por rodada (`"Rodada N — HH:MM — pergunta truncada"`); mostra mensagem vazia ("Nenhuma pergunta feita ainda") quando `rounds` está vazio.
+| Componente | Papel |
+|------------|-------|
+| `TechTab` | Contêiner da aba. Renderiza `<RoundOverview rounds={rounds} />` |
+| `RoundOverview` | Lista **todas** as rodadas da sessão. A mais recente começa expandida, e as anteriores mantêm seu próprio estado de expansão. Sem rodadas, mostra "Nenhuma pergunta feita ainda — use o chat na aba Saúde." |
+| `RoundCard` | Cabeçalho sempre visível (Rodada N, horário, pergunta truncada, vencedor via `parseWinner`, tempo total de cada topologia). O `RoundDetail` só monta quando expandido, para não pesar a página |
+| `RoundDetail` | Dois `ArchitecturePanel` (Hierárquica e Estrela), `QualityMetricsSection` e `ComparativeSection`, todos alimentados pelo `snapshot` da rodada |
 
 ### ArchitecturePanel (`src/components/ArchitecturePanel.tsx`)
-
-Painel de resultado para cada arquitetura (usado em `TechTab` com benchmarks, e em `WinnerPanel` sem benchmarks):
-
-| Elemento | Descrição |
-|----------|-----------|
-| Header | Ícone (🏛 hierárquica / ⭐ estrela) + título |
-| Erro | Mensagem de erro com `role="alert"` |
-| Caixa de texto | Streaming em tempo real com auto-scroll |
-| Loading cursor | `▍` piscando durante streaming |
-| Benchmarks | Tabela com tempo, CPU e memória por agente |
 
 ```typescript
 interface ArchitecturePanelProps {
@@ -112,40 +140,47 @@ interface ArchitecturePanelProps {
   benchmarks: BenchmarkMetrics | null;
   isLoading: boolean;
   error: string | null;
+  agentData?: AgentDataEntry[] | null;
 }
 ```
 
-### QualityMetricsSection (`src/components/QualityMetricsSection.tsx`)
+| Elemento | Descrição |
+|----------|-----------|
+| Cabeçalho | Ícone (🏛 hierárquica / ⭐ estrela) + título |
+| Erro | Mensagem com `role="alert"` |
+| Caixa de texto | Texto da análise com auto-scroll e `aria-live="polite"`. Spinner "Gerando análise..." enquanto carrega |
+| Benchmarks | Tempo total + tabela com tempo (ms) e CPU (%) por agente (do evento `metric`) |
+| Dados por agente | Um `AgentDataCard` por agente (do evento `agent_data`) |
 
-Cards de métricas de qualidade (via `ScoreCard`, `src/components/ScoreCard.tsx`) organizados em três grupos:
-- **Eficiência**: E1, E2
-- **Qualidade**: Q1, Q3
-- **Resiliência**: R1
+### AgentDataCard (`src/components/AgentDataCard.tsx`)
 
-Cada `ScoreCard` exibe valores de ambas as arquiteturas lado a lado. Não há card de fidelidade: ela agora vem do RAGAS, que é opcional, chega depois destes cards (eventos `ragas`/`ragas_done`) e é exibida no painel do relatório comparativo.
+Card expansível por agente de saúde ou de orçamento, com o total de registros no cabeçalho. Expandido, mostra para cada consulta executada:
+- um **gráfico de barras (Recharts)** ano × valor, quando `buildAgentChartData` reconhece as colunas;
+- a **consulta Cypher** (em `<details>`);
+- as **linhas brutas** em tabela (até 50).
+
+### QualityMetricsSection + ScoreCard
+
+`QualityMetricsSection` extrai o valor numérico principal de cada métrica do payload `quality_metrics` e renderiza `ScoreCard`s (estrela × hierárquica, 2 casas decimais, `—` quando ausente) em três grupos:
+- **Eficiência**: E1 (overhead de coordenação), E2 (breakdown de latência)
+- **Qualidade**: Q1 (consistência determinística), Q3 (completude)
+- **Resiliência**: R1 (cobertura de resultado parcial)
+
+Só exibe as métricas determinísticas. O RAGAS aparece na `ComparativeSection`, e custo, comunicação e outcome estão no payload, mas não têm card.
 
 ### ComparativeSection (`src/components/ComparativeSection.tsx`)
 
-Relatório comparativo e avaliação RAGAS:
-- Parsing linha a linha com formatação visual: títulos (`━━━`), vereditos (`→`), sucessos (`✓`), alertas (`✗`), bullets (`•`)
-- Painel RAGAS separado (`ragasText`/`ragasLoading`), com destaque para scores ≥ 0.80; um score ausente aparece como "não disponível", nunca como zero. O RAGAS chega **antes** do relatório (o veredito depende dele), então a seção aparece assim que o primeiro chunk de RAGAS chega, com o corpo do relatório ainda vazio
-- Loading cursor durante streaming
+Painel do RAGAS (`ragasText`/`ragasLoading`) e do relatório comparativo, com formatação linha a linha (títulos, vereditos `→`, `✓`, `✗`, bullets). O RAGAS chega **antes** do relatório, então a seção aparece assim que o primeiro chunk de RAGAS chega, mesmo com o relatório ainda vazio.
 
 ---
 
 ## Componentes Compartilhados
 
-### Header (`src/components/Header.tsx`)
-
-Identidade visual Sophia: barra superior com o brasão de Sorocaba (`src/assets/brasao-sorocaba.svg`), nome "Sophia" em destaque e subtítulo descritivo. Componente puramente visual, sem props.
-
-### TabNav (`src/components/TabNav.tsx`)
-
-Barra de navegação com duas abas: "Usuário" e "Técnica". Usa `role="tablist"`, `role="tab"`, `aria-selected` e `aria-controls` para acessibilidade.
-
-### ErrorBoundary (`src/components/ErrorBoundary.tsx`)
-
-Error boundary genérico (classe React — é o único jeito de implementar `componentDidCatch`/`getDerivedStateFromError`) para capturar crashes de componentes filhos e exibir uma mensagem de erro em vez de tela branca. Usado envolvendo `<TechTab>` em `App.tsx`.
+| Componente | Descrição |
+|------------|-----------|
+| `Header` | Barra "Sophia" com subtítulo e brasão de Sorocaba (`src/assets/brasao-sorocaba.svg`). Puramente visual |
+| `TabNav` | Abas **Saúde** e **Agentes**, com `role="tablist"`/`role="tab"`, `aria-selected`, `aria-controls` |
+| `ErrorBoundary` | Classe React (`getDerivedStateFromError`/`componentDidCatch`) que mostra uma mensagem de erro em vez de tela branca. Envolve a `TechTab` |
 
 ---
 
@@ -153,7 +188,7 @@ Error boundary genérico (classe React — é o único jeito de implementar `com
 
 ### useWebSocket (`src/hooks/useWebSocket.ts`)
 
-Streaming de **resultados** de uma análise (`/ws/{analysisId}`) — inalterado na essência desde antes do chat existir, mas o estado (`UseWebSocketState`) foi movido para `types/index.ts` (evita import circular com `ChatRound`, que também precisa desse tipo) e ganhou dois campos novos para a avaliação RAGAS (`ragasText`, `ragasLoading`, alimentados pelos eventos `ragas`/`ragas_done`).
+Streaming de **resultados** (`/ws/{analysisId}`). O estado (`UseWebSocketState`) fica em `types/index.ts` para ser reaproveitado por `ChatRound` sem import circular.
 
 ```typescript
 export const INITIAL_STATE: UseWebSocketState = {
@@ -163,19 +198,18 @@ export const INITIAL_STATE: UseWebSocketState = {
   starError: null, hierError: null,
   comparativeReport: '', comparativeLoading: false,
   qualityMetrics: null,
-  llmJudgeText: '', llmJudgeLoading: false,
+  ragasText: '', ragasLoading: false,
+  starAgentData: null, hierAgentData: null,
 };
 ```
 
-**Comportamento:**
-- Conecta automaticamente quando `analysisId` muda; reseta todo o estado (`INITIAL_STATE`) nessa troca
-- Auto-reconnect em desconexão inesperada (máximo 3 tentativas, delay **linear**: `1000 * tentativa` ms)
-- Não reconecta em close code 1000 (fechamento limpo)
-- Processa eventos por `architecture` (`star` / `hierarchical` / `both`), incluindo `ragas`/`ragas_done` (acumula `ragasText`, controla `ragasLoading`)
+- Conecta quando `analysisId` muda e reseta para `INITIAL_STATE`.
+- Processa eventos por `architecture`: `chunk`, `done`, `error`, `metric` e `agent_data` para `star`/`hierarchical`, e `chunk`, `done`, `quality_metrics`, `ragas` e `ragas_done` para `both`.
+- Reconexão automática em fechamento inesperado: até 3 tentativas, com atraso **linear** (`1000 × tentativa` ms). Não reconecta em close 1000.
 
 ### useChatWebSocket (`src/hooks/useChatWebSocket.ts`)
 
-Conexão com o **turno de intenção** do chat (`/ws/chat/{sessionId}`) — self-contained, gera seu próprio `sessionId` (`crypto.randomUUID()`, só em memória, sem persistência entre reloads).
+Conexão do **turno de intenção** (`/ws/chat/{sessionId}`). Gera o próprio `sessionId` com `crypto.randomUUID()`, só em memória.
 
 ```typescript
 export interface UseChatWebSocketCallbacks {
@@ -187,10 +221,22 @@ export interface UseChatWebSocketCallbacks {
 }
 ```
 
-**Comportamento:**
-- Reconexão com **backoff exponencial** (1s/2s/4s, máx. 3 tentativas) — diferente do backoff linear de `useWebSocket`
-- Fila de mensagens de saída (`outgoingQueueRef`) — se `sendMessage` é chamado antes da conexão abrir, a mensagem é enfileirada e entregue em ordem assim que a conexão volta (`flushQueue`)
-- `connectionStatus`: `'connected'` | `'disconnected'` | `'reconnecting'`, mais `hasEverConnected` (distingue "conectando pela primeira vez" de "conexão perdida depois de já ter funcionado")
+- Reconexão com backoff **exponencial** (1s/2s/4s, até 3 tentativas).
+- Fila de saída: se `sendMessage` é chamado antes da conexão abrir, a mensagem é entregue em ordem quando a conexão volta.
+- `connectionStatus` (`'connected'` | `'disconnected'` | `'reconnecting'`) e `hasEverConnected`.
+- Envia `{"type": "user_message", "payload": {"text"}}`. O backend aceita `useSelfCheck` no payload, mas **o frontend não envia esse campo**, então a verificação pós-síntese fica desligada nas análises disparadas pela interface.
+
+---
+
+## Utilitários
+
+| Arquivo | Função |
+|---------|--------|
+| `utils/buildAgentChartData.ts` | `buildAgentChartData(rows)`: converte linhas de consulta (`IndicadorSaude`, `DespesaAnual`, `VARIACAO_ANUAL`) em `{ano, valor}[]` usando chaves conhecidas (`ano`/`ano_atual`, `valor`/`valorTotal`/`percentual`). Retorna `null` quando não há dado plotável |
+| `utils/formatRoundSummary.ts` | Texto da bolha de resposta enquanto não há texto ("Analisando os dados…") ou quando as duas arquiteturas falham |
+| `utils/parseWinner.ts` | `parseWinner(report)`: lê a **última** linha `→` do relatório e devolve `'star'` \| `'hierarchical'` \| `null` |
+| `utils/renderFormattedText.tsx` | `FormattedText`: Markdown mínimo (negrito, itálico, cabeçalhos, listas) como elementos React, sem HTML injetável |
+| `utils/validateMessage.ts` | `MAX_CHAT_MESSAGE_LENGTH = 1000` (espelha o backend), `isBlank`, `isTooLong` |
 
 ---
 
@@ -203,65 +249,43 @@ export interface UseChatWebSocketCallbacks {
 interface WSEvent {
   analysisId: string;
   architecture: 'star' | 'hierarchical' | 'both';
-  type: 'chunk' | 'done' | 'error' | 'metric' | 'quality_metrics' | 'ragas' | 'ragas_done';
-  payload: string | BenchmarkMetrics | Record<string, unknown>;
+  type: 'chunk' | 'done' | 'error' | 'metric' | 'agent_data' | 'quality_metrics' | 'ragas' | 'ragas_done';
+  payload: string | BenchmarkMetrics | AgentDataPayload | Record<string, unknown>;
 }
 
-interface AgentMetric {
-  agentName: string;
-  executionTimeMs: number;
-  cpuPercent: number;
-}
+interface AgentMetric { agentName: string; executionTimeMs: number; cpuPercent: number; }
+interface BenchmarkMetrics { architecture: 'star' | 'hierarchical'; totalExecutionTimeMs: number; agentMetrics: AgentMetric[]; }
 
-interface BenchmarkMetrics {
-  architecture: 'star' | 'hierarchical';
-  totalExecutionTimeMs: number;
-  agentMetrics: AgentMetric[];
-}
+// Consultas por agente (evento agent_data, vindas de Neo4jClient.query_log)
+interface AgentQueryEntry { query: string; params: Record<string, unknown>; rowCount: number; rows: Record<string, unknown>[]; }
+interface AgentDataEntry { agentName: string; agentLabel: string; queries: AgentQueryEntry[]; }
+interface AgentDataPayload { architecture: 'star' | 'hierarchical'; agents: AgentDataEntry[]; }
 
 // Chat (WS /ws/chat/{sessionId})
 interface ChatMessage {
-  id: string;
-  role: 'user' | 'system';
-  content: string;
-  timestamp: string;
-  isStreaming?: boolean;
-  isError?: boolean;
+  id: string; role: 'user' | 'system'; content: string; timestamp: string;
+  isStreaming?: boolean; isError?: boolean;
+  kind?: 'text' | 'architecture_answer';     // bolha com o texto da arquitetura
+  architecture?: 'star' | 'hierarchical';    // badge de vencedor
 }
-
-interface ChatWSEvent {
-  type: 'user_ack' | 'system_chunk' | 'system_done' | 'error' | 'analysis_started';
-  payload: string;
-}
-
+interface ChatWSEvent { type: 'user_ack' | 'system_chunk' | 'system_done' | 'error' | 'analysis_started'; payload: string; }
 type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
 
-// Uma "rodada" = uma pergunta do chat que disparou uma análise.
-// snapshot é o estado do useWebSocket espelhado no momento mais recente,
-// congelado assim que a próxima rodada começa.
-interface ChatRound {
-  id: string; // analysisId
-  question: string;
-  startedAt: string;
-  snapshot: UseWebSocketState;
-}
-
+// Rodadas
+interface ChatRound { id: string; question: string; startedAt: string; snapshot: UseWebSocketState; }
 type ActiveTab = 'user' | 'tech';
 type WinnerArchitecture = 'star' | 'hierarchical' | null;
 
-// Métricas de qualidade tipadas (payload do evento quality_metrics)
-interface QualityMetrics {
-  star: ArchitectureQualityMetrics;
-  hierarchical: ArchitectureQualityMetrics;
-}
+// Métricas exibidas nos cards
 interface ArchitectureQualityMetrics {
   efficiency: { E1: number; E2: number };
   quality: { Q1: number; Q3: number };
   resilience: { R1: number };
 }
+interface QualityMetrics { star: ArchitectureQualityMetrics; hierarchical: ArchitectureQualityMetrics; }
 ```
 
-`UseWebSocketState` (ver [Hooks WebSocket](#hooks-websocket)) também vive neste arquivo, não em `useWebSocket.ts`, especificamente para ser reaproveitado por `ChatRound` sem import circular.
+`QualityMetrics` tipa só o que os cards exibem. O payload real de `quality_metrics` é mais rico (ver [04-BACKEND-API.md](04-BACKEND-API.md#métricas-de-qualidade--resumo)), e `QualityMetricsSection` extrai os números de forma defensiva.
 
 ---
 
@@ -274,37 +298,25 @@ export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 export const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000';
 ```
 
-Configurável via variáveis de ambiente Vite (prefixo `VITE_`).
-
-**Arquivo:** `src/utils/validateMessage.ts`
-
-```typescript
-export const MAX_CHAT_MESSAGE_LENGTH = 1000; // espelha o limite do backend (chat_websocket.py)
-export function isBlank(text: string): boolean;
-export function isTooLong(text: string): boolean;
-```
+`vite.config.ts` define `envDir: '..'`, ou seja, o frontend lê o **mesmo `.env` da raiz do repositório** (não existe `frontend/.env`). O servidor de desenvolvimento escuta em `0.0.0.0:5173`, e os testes usam `jsdom` com `src/test-setup.ts`.
 
 ---
 
 ## Estilização
 
-**Arquivo:** `src/styles.css`
+**Arquivo:** `src/styles.css`. Tema escuro em CSS puro, com tokens em `:root`:
 
-Tema dark com CSS puro e paleta Sophia:
+| Token | Cor | Uso |
+|-------|-----|-----|
+| `--sophia-dark` | `#2D3945` | Fundo principal |
+| `--sophia-mid` | `#295B75` | Fundo secundário, bordas |
+| `--sophia-vivid` | `#489ECD` | Destaque, aba ativa |
+| `--sophia-light` | `#7EA1C4` | Texto secundário |
+| `--sophia-gold` | `#C4AA7E` | Acento dourado (vencedor) |
+| `--sophia-gray` | `#767D85` | Texto terciário |
+| `--sophia-warm` | `#6F685C` | Separadores |
 
-| Aspecto | Implementação |
-|---------|---------------|
-| Fundo | `#2D3945` (azul escuro — `--sophia-dark`) |
-| Cards/Painéis | `--surface-base` (#1E2A35), bordas `--sophia-mid` |
-| Paleta | Variáveis CSS: `--sophia-dark`, `--sophia-mid`, `--sophia-vivid`, `--sophia-light`, `--sophia-gold`, `--sophia-gray`, `--sophia-warm` |
-| Abas | `.tab-nav` com destaque `--sophia-vivid` na aba ativa |
-| Chat | `.chat-container`, `.message-bubble` (`.user` / `.system` / `.error`), `.chat-input-row`, `.connection-status` |
-| Vencedor | `.winner-panel` com borda e badge `--sophia-gold` |
-| Score Cards | Grid responsivo com valores coloridos por arquitetura |
-| Scrollbar | Customizada (fina, escura) |
-| Loading | Cursor `▍` com animação de blink; `.typing-indicator` (pontinhos animados) |
-| Layout | Grid 2 colunas → 1 coluna em mobile |
-| Responsividade | Media queries para telas menores |
+Layout em grid de 2 colunas para os painéis, que vira 1 coluna abaixo de 768 px. Scrollbar customizada, cursor/spinner de carregamento e `.typing-indicator` animado.
 
 ---
 
@@ -312,35 +324,38 @@ Tema dark com CSS puro e paleta Sophia:
 
 | Recurso | Implementação |
 |---------|---------------|
-| Navegação por abas | `role="tablist"`, `role="tab"`, `aria-selected`, `aria-controls` |
-| Conteúdo dinâmico | `aria-live="polite"` nas caixas de texto e nas mensagens do chat |
-| Mensagens de erro | `role="alert"` (bolhas de erro, status de conexão, painel de erro) |
-| Chat | `<textarea>` com `maxLength`, `disabled` durante aguardo de resposta; botão "Enviar" desabilitado se vazio ou aguardando |
-| Seletor de rodada | `aria-label="Selecionar rodada de análise"` |
-| Labels | `<label htmlFor>` em inputs remanescentes |
-| Toggle buttons | `aria-pressed` |
-| data-testid | Em todos os elementos testáveis |
-| Semântica | `<header>`, `<table>` com `<thead>`/`<tbody>` |
-| Botão desabilitado | `disabled` quando aguardando resposta, mensagem vazia/muito longa, ou rodada ativa em andamento (toggles LLM) |
+| Abas | `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, `aria-controls`, `aria-labelledby` |
+| Conteúdo dinâmico | `aria-live="polite"` nos textos das arquiteturas e no relatório |
+| Erros | `role="alert"` (bolhas de erro, painel de erro, status de conexão) |
+| Expansíveis | `aria-expanded` em `RoundCard` e `AgentDataCard` |
+| Badge de vencedor | `aria-label` ("Arquitetura Estrela" / "Arquitetura Hierárquica") |
+| Imagens | `alt="Brasão de Sorocaba"` |
+| Chat | `<textarea>` com limite de tamanho, desabilitada enquanto aguarda. Botão de envio desabilitado com mensagem vazia ou longa demais |
+| Testes | `data-testid` nos elementos testáveis |
 
 ---
 
 ## Testes
 
-9 arquivos de teste (Vitest + @testing-library/react):
+Vitest + Testing Library (+ `fast-check` em `validateMessage.test.ts`, baseado em propriedades). Rodar com `npm test` (ou `npm run test:watch`).
 
 | Arquivo | Escopo |
 |---------|--------|
-| `src/App.integration.test.tsx` | Integração ponta a ponta (rodadas de chat, troca de aba) |
-| `src/components/ChatInterface.test.tsx` | Chat (envio, streaming, validação de mensagem) |
-| `src/components/TechTab.test.tsx` | Seleção de rodada, exibição de painéis |
-| `src/components/TabNav.test.tsx` | Navegação entre abas (acessibilidade) |
-| `src/components/WinnerPanel.test.tsx` | Painel do vencedor (texto, erro, título) |
-| `src/components/Header.test.tsx` | Identidade visual (Sophia, brasão) |
-| `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório comparativo |
-| `src/utils/validateMessage.test.ts` | Validação de mensagem (vazio, tamanho máximo) |
+| `src/App.integration.test.tsx` | Integração do modelo de rodadas (a segunda rodada não sobrescreve o snapshot da primeira) |
+| `src/components/ChatInterface.test.tsx` | Boas-vindas, envio e validação, streaming da arquitetura acompanhada, erros e fallback |
+| `src/components/TechTab.test.tsx` | Aba técnica com e sem rodadas |
+| `src/components/RoundOverview.test.tsx` | Lista de rodadas e expansão padrão |
+| `src/components/RoundCard.test.tsx` | Cabeçalho, vencedor, expansão |
+| `src/components/AgentDataCard.test.tsx` | Consulta, gráfico e linhas por agente |
+| `src/components/TabNav.test.tsx` | Navegação e acessibilidade das abas |
+| `src/components/Header.test.tsx` | Identidade visual |
+| `src/hooks/useWebSocket.raceCondition.test.tsx` | Troca de `analysisId` durante o streaming, sem vazamento entre rodadas |
+| `src/utils/buildAgentChartData.test.ts` | Conversão de linhas em pontos plotáveis |
+| `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório |
+| `src/utils/renderFormattedText.test.tsx` | Markdown básico e ausência de HTML injetável |
+| `src/utils/validateMessage.test.ts` | Mensagem vazia e tamanho máximo |
 
-Não há testes dedicados para `UserTab`, `RoundSelector`, `MessageBubble`, `TypingIndicator`, `ErrorBoundary`, `ScoreCard`, `QualityMetricsSection`, `ComparativeSection`, `useWebSocket` ou `useChatWebSocket` — cobertura desses fica a cargo do teste de integração (`App.integration.test.tsx`) e dos testes dos componentes que os consomem.
+`UserTab`, `MessageBubble`, `TypingIndicator`, `ErrorBoundary`, `ScoreCard`, `QualityMetricsSection`, `ComparativeSection` e `useChatWebSocket` não têm teste dedicado. São cobertos indiretamente pelos testes de integração e dos componentes que os usam.
 
 ---
 
@@ -358,4 +373,4 @@ EXPOSE 5173
 CMD ["npm", "run", "dev"]
 ```
 
-Em produção, o Vite serve na porta 5173. As variáveis `VITE_API_URL` e `VITE_WS_URL` são injetadas via environment no `docker-compose.yml`.
+O container roda o **servidor de desenvolvimento** do Vite na porta 5173. `VITE_API_URL` e `VITE_WS_URL` são injetadas pelo `docker-compose.yml`.
