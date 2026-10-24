@@ -86,7 +86,7 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     return {"supervisor_time_ms": ..., "worker_time_ms": ..., "overhead_ratio": ratio, "overhead_percent": ratio * 100}
 ```
 
-Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_dominio, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, o overhead tende a ~0% (o orquestrador não aparece como entrada separada de `agent_metrics` — ver [arquitetura-estrela.md](arquitetura-estrela.md#7-persistir_metricas)); na hierárquica, mede o custo real da camada de supervisores (ver [arquitetura-hierarquica.md](arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead)).
+Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, a única entrada de coordenação é `orquestrador_estrela`, que carrega o overhead `wall_clock − soma dos agentes` (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)) e tende a ser pequena. Na hierárquica entram os 4 supervisores, com o tempo total de cada um (que já engloba o dos subordinados), mais `coordenador_geral` com o overhead residual (ver [arquitetura-hierarquica.md](arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead)).
 
 ### E2 — Breakdown de latência por fase
 

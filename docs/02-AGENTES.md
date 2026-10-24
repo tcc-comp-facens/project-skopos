@@ -141,7 +141,7 @@ star-orcamento-305-e5f6g7h8    ← agente de orçamento da subfunção 305
 hier-coord-9z8y7x6w            ← CoordenadorGeral
 hier-sup-saude-m3n4o5p6        ← SupervisorSaude
 hier-analitico-q7r8s9t0        ← AgenteAnalitico na hierárquica
-intent-9f8e7d6c                ← agente de intenção (por turno de chat, fora das topologias)
+intent-9f8e7d6c                ← agente de intenção (um por sessão de chat, fora das topologias)
 ```
 
 ---
