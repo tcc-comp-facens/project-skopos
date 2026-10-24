@@ -6,11 +6,12 @@
 2. [Origens Institucionais dos Dados](#origens-institucionais-dos-dados)
 3. [Janela Temporal](#janela-temporal)
 4. [Pipeline ETL](#pipeline-etl)
-5. [Modelo de Dados Neo4j — Orçamento](#modelo-de-dados-neo4j--orçamento)
-6. [Modelo de Dados Neo4j — Indicadores de Saúde](#modelo-de-dados-neo4j--indicadores-de-saúde)
-7. [Nós de Execução e Consultas](#nós-de-execução-e-consultas)
-8. [Validações com Dado Real](#validações-com-dado-real)
-9. [Limitações Conhecidas](#limitações-conhecidas)
+5. [Diagrama do Modelo de Dados](#diagrama-do-modelo-de-dados)
+6. [Modelo de Dados Neo4j — Orçamento](#modelo-de-dados-neo4j--orçamento)
+7. [Modelo de Dados Neo4j — Indicadores de Saúde](#modelo-de-dados-neo4j--indicadores-de-saúde)
+8. [Nós de Execução e Consultas](#nós-de-execução-e-consultas)
+9. [Validações com Dado Real](#validações-com-dado-real)
+10. [Limitações Conhecidas](#limitações-conhecidas)
 
 ---
 
@@ -170,6 +171,88 @@ As planilhas TabNet seguem um padrão (linha 0 = título, linha 2 = cabeçalho, 
 COVID tem leitores próprios (`_read_covid_anual`, `_read_covid_mensal`), porque traz métricas emparelhadas com acumulados. Linhas cuja chave (ano ou ano/mês) não parseia são puladas, o que descarta rodapés, notas e linhas de totalização.
 
 Há uma função `_load_<sistema>` por sistema (`_load_sim`, `_load_sih`, `_load_sinasc`, `_load_sinan`, `_load_sipni`, `_load_sia`, `_load_covid`, `_load_cnes`). Cada uma persiste `IndicadorSaude` (`MERGE` por `chave`) e as quebras dimensionais em lotes de 2.000. Planilhas que descrevem o **mesmo** fato (ex.: óbitos por faixa etária e por capítulo CID) convergem para o mesmo nó, e cada uma só acrescenta o seu tipo de relacionamento.
+
+---
+
+## Diagrama do Modelo de Dados
+
+O banco é um grafo Neo4j, mas a modelagem é apresentada abaixo como diagrama entidade-relacionamento, com uma entidade por *label* de nó. As figuras ficam em [`docs/diagramas/`](diagramas/), em PNG (300 dpi) e SVG, e foram dimensionadas para a monografia, seguindo os exemplos do Manual de Textos Técnicos:
+
+- largura ≤ 16 cm;
+- altura ≤ 9 cm (a visão geral tem 11,3 cm);
+- todo o texto em Arial 12 pt, desde que a imagem seja inserida a 100%;
+- sem título, fonte ou legenda dentro da imagem, porque isso fica no texto do documento.
+
+Para regenerar depois de mudar o modelo, rode `python docs/diagramas/gerar_diagramas.py`.
+
+**Como ler:**
+- **Entidade** = label de nó, com propriedades e tipos. O atributo **sublinhado** é a chave do nó: constraint `UNIQUE` ou, em `DespesaAnual`/`OrcamentoPrograma`, chave lógica composta.
+- Os diagramas mostram **só os atributos principais**. Uma linha **"…"** indica atributos omitidos, e as dimensões aparecem só com a chave. A lista completa de propriedades está nas seções [Orçamento](#modelo-de-dados-neo4j--orçamento) e [Indicadores de Saúde](#modelo-de-dados-neo4j--indicadores-de-saúde) abaixo.
+- **Linha contínua** = relacionamento gravado no grafo, com o nome do tipo. **1**/**N** = cardinalidade.
+- **Linha tracejada** = vínculo lógico **sem** relacionamento no grafo.
+
+Os dois domínios **não são ligados por relacionamentos**. O cruzamento entre gasto e indicador acontece em memória, nos agentes (`agents/data_crossing.py`), por subfunção × subtipo e ano. Na visão geral, ele aparece como a linha tracejada "cruzamento em memória".
+
+### Visão geral
+
+![Visão geral do modelo de dados](diagramas/01-visao-geral.png)
+
+As 25 entidades, agrupadas por domínio. Na visão geral:
+- a linha tracejada entre `Empenho` e `DespesaAnual` indica que `DespesaAnual` é calculada a partir dos empenhos;
+- o laço em `DespesaAnual` é o relacionamento `VARIACAO_ANUAL`;
+- `OrcamentoPrograma` não tem relacionamentos.
+
+### Orçamento — Empenho e classificação
+
+![Empenho, Fornecedor, FonteRecurso, Subfuncao e UnidadeOrcamentaria](diagramas/02-orcamento-empenho-classificacao.png)
+
+Cada empenho tem exatamente um fornecedor, uma fonte de recurso, uma subfunção e uma unidade orçamentária. `FonteRecurso.tipoRecurso` (`proprio`, `federal`, `estadual`, `credito`, `emenda_parlamentar`, `outros`) é o que permite separar recurso próprio de repasse.
+
+### Orçamento — Empenho, aplicação e ação
+
+![Empenho, Aplicacao, Acao e ProgramaGoverno](diagramas/03-orcamento-empenho-acao.png)
+
+`ProgramaGoverno` não se liga ao empenho diretamente, e sim por meio da ação (`PARTE_DE`).
+
+### Orçamento — agregados
+
+![DespesaAnual, Empenho, Aplicacao e Natureza](diagramas/04-orcamento-agregados.png)
+
+`DespesaAnual` é calculada no fim do ETL a partir de `Empenho`, por subfunção e ano. A linha tracejada indica essa agregação, que não é gravada como relacionamento. `POR_APLICACAO` e `POR_NATUREZA` guardam a propriedade `valor`. O laço `VARIACAO_ANUAL` liga o ano atual ao anterior da mesma subfunção e guarda `percentual` e `classificacao`.
+
+### Orçamento — previsto × realizado
+
+![OrcamentoPrograma](diagramas/05-orcamento-previsto-realizado.png)
+
+`OrcamentoPrograma` fica isolado de propósito: os textos de programa e ação do CSV de previsto × realizado não batem com os de `Acao`/`ProgramaGoverno`.
+
+### Saúde — IndicadorSaude e dimensões
+
+![IndicadorSaude, FaixaEtaria, CapituloCID10, Sexo, FaixaPeso e Vacina](diagramas/06-saude-dimensoes.png)
+
+### Saúde — dimensões do CNES
+
+![IndicadorSaude, TipoEstabelecimento, OcupacaoProfissional e TipoEquipe](diagramas/07a-saude-cnes.png)
+
+![IndicadorSaude, TipoAtendimento, TipoLeitoConsultorio e TipoEquipamento](diagramas/07b-saude-cnes.png)
+
+Todos os relacionamentos de quebra do `IndicadorSaude` guardam a propriedade `valor`. As dimensões do CNES são exclusivas desse sistema. Quais quebras cada sistema usa:
+
+| Sistema | Relacionamentos |
+|---------|-----------------|
+| `sim` | `POR_FAIXA_ETARIA`, `POR_CAPITULO_CID` |
+| `sih` | `POR_CAPITULO_CID` |
+| `sinan` | `POR_FAIXA_ETARIA`, `POR_SEXO` |
+| `sipni` | `COBERTURA_VACINAL`, `DOSES_APLICADAS` |
+| `sinasc` | `POR_FAIXA_ETARIA`, `POR_FAIXA_PESO` |
+| `cnes` | `POR_TIPO_ESTABELECIMENTO`, `POR_OCUPACAO`, `POR_TIPO_EQUIPE`, `POR_TIPO_ATENDIMENTO`, `POR_TIPO_LEITO_CONSULTORIO`, `POR_TIPO_EQUIPAMENTO` |
+| `sia`, `covid` | Nenhum (só `valorTotal`/`valorAcumulado`) |
+
+### Execução das análises
+
+![Analise e MetricaExecucao](diagramas/08-execucao.png)
+
+Estes nós são gravados pelo backend a cada análise, e não pelo ETL.
 
 ---
 
