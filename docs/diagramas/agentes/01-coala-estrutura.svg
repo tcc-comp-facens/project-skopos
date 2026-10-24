@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="227pt" viewBox="0 0 453 227" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="227" fill="#FFFFFF"/>
+<rect x="0.00" y="0.00" width="450.50" height="140.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="14.30" text-anchor="start" fill="#000000" font-weight="bold">AgenteCoALA (agents/base.py)</text>
+<polygon points="320.44,63.00 314.44,66.20 314.44,59.80" fill="#000000" stroke="none"/>
+<polyline points="272.72,63.00 314.44,63.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="296.58" y="59.00" text-anchor="middle" fill="#000000">lê</text>
+<polygon points="272.72,89.00 278.72,85.80 278.72,92.20" fill="#000000" stroke="none"/>
+<polyline points="320.44,89.00 278.72,89.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="296.58" y="101.59" text-anchor="middle" fill="#000000">grava</text>
+<rect x="8.00" y="20.00" width="129.36" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="72.68" y="35.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória de trabalho</text>
+<text x="72.68" y="50.80" text-anchor="middle" fill="#000000">working_memory</text>
+<text x="72.68" y="65.80" text-anchor="middle" fill="#000000">estado da análise</text>
+<rect x="143.36" y="20.00" width="129.36" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="208.04" y="35.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória semântica</text>
+<text x="208.04" y="50.80" text-anchor="middle" fill="#000000">semantic_memory</text>
+<text x="208.04" y="65.80" text-anchor="middle" fill="#000000">fatos e limiares</text>
+<rect x="8.00" y="79.00" width="129.36" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="72.68" y="94.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória episódica</text>
+<text x="72.68" y="109.80" text-anchor="middle" fill="#000000">episodic_memory</text>
+<text x="72.68" y="124.80" text-anchor="middle" fill="#000000">histórico de ações</text>
+<rect x="143.36" y="79.00" width="129.36" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="208.04" y="94.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória procedural</text>
+<text x="208.04" y="109.80" text-anchor="middle" fill="#000000">procedural_memory</text>
+<text x="208.04" y="124.80" text-anchor="middle" fill="#000000">estratégias e LLM</text>
+<rect x="320.44" y="27.00" width="122.06" height="98.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="381.47" y="42.80" text-anchor="middle" fill="#000000" font-weight="bold">Ciclo de decisão</text>
+<text x="381.47" y="57.80" text-anchor="middle" fill="#000000">perceive</text>
+<text x="381.47" y="72.80" text-anchor="middle" fill="#000000">propose_actions</text>
+<text x="381.47" y="87.80" text-anchor="middle" fill="#000000">evaluate_and_select</text>
+<text x="381.47" y="102.80" text-anchor="middle" fill="#000000">execute</text>
+<text x="381.47" y="117.80" text-anchor="middle" fill="#000000">_observe_and_learn</text>
+<rect x="0.00" y="174.00" width="450.50" height="51.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="188.30" text-anchor="start" fill="#000000" font-weight="bold">Ambiente</text>
+<rect x="90.56" y="194.00" width="44.68" height="23.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="112.90" y="209.80" text-anchor="middle" fill="#000000" font-weight="bold">Neo4j</text>
+<rect x="159.24" y="194.00" width="76.68" height="23.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="197.58" y="209.80" text-anchor="middle" fill="#000000" font-weight="bold">WebSocket</text>
+<rect x="259.92" y="194.00" width="100.02" height="23.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="309.93" y="209.80" text-anchor="middle" fill="#000000" font-weight="bold">Outros agentes</text>
+<polygon points="381.47,174.00 378.27,168.00 384.67,168.00" fill="#000000" stroke="none"/>
+<polygon points="381.47,125.00 384.67,131.00 378.27,131.00" fill="#000000" stroke="none"/>
+<polyline points="381.47,131.00 381.47,168.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="375.47" y="161.30" text-anchor="end" fill="#000000">ações externas (grounding)</text>
+</svg>

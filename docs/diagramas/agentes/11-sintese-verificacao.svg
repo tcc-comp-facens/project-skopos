@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="219pt" viewBox="0 0 453 219" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="219" fill="#FFFFFF"/>
+<polygon points="142.71,26.50 136.71,29.70 136.71,23.30" fill="#000000" stroke="none"/>
+<polyline points="122.71,26.50 136.71,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="276.71,26.50 270.71,29.70 270.71,23.30" fill="#000000" stroke="none"/>
+<polyline points="256.71,26.50 270.71,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="341.73,83.00 338.53,77.00 344.93,77.00" fill="#000000" stroke="none"/>
+<polyline points="341.73,45.50 341.73,77.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="199.71,83.00 196.51,77.00 202.91,77.00" fill="#000000" stroke="none"/>
+<polyline points="199.71,45.50 199.71,77.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="193.71" y="68.55" text-anchor="end" fill="#000000">LLM indisponível</text>
+<polygon points="276.71,102.00 270.71,105.20 270.71,98.80" fill="#000000" stroke="none"/>
+<polyline points="256.71,102.00 270.71,102.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="151.00" width="450.50" height="66.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="165.30" text-anchor="start" fill="#000000" font-weight="bold">Verificação pós-síntese (opcional)</text>
+<polygon points="160.22,190.00 154.22,193.20 154.22,186.80" fill="#000000" stroke="none"/>
+<polyline points="140.22,190.00 154.22,190.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="310.28,190.00 304.28,193.20 304.28,186.80" fill="#000000" stroke="none"/>
+<polyline points="290.28,190.00 304.28,190.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="341.73,151.00 338.53,145.00 344.93,145.00" fill="#000000" stroke="none"/>
+<polyline points="341.73,121.00 341.73,145.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="335.73" y="140.30" text-anchor="end" fill="#000000">texto final</text>
+<rect x="0.00" y="0.00" width="122.71" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="61.36" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Entrada</text>
+<text x="61.36" y="30.80" text-anchor="middle" fill="#000000">achados priorizados,</text>
+<text x="61.36" y="45.80" text-anchor="middle" fill="#000000">contexto e lacunas</text>
+<rect x="142.71" y="7.50" width="114.00" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="199.71" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">TextSynthesizer</text>
+<text x="199.71" y="38.30" text-anchor="middle" fill="#000000">monta o prompt</text>
+<rect x="276.71" y="7.50" width="130.04" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="341.73" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">LLM</text>
+<text x="341.73" y="38.30" text-anchor="middle" fill="#000000">generate_stream</text>
+<rect x="142.71" y="83.00" width="114.00" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="199.71" y="98.80" text-anchor="middle" fill="#000000" font-weight="bold">Texto estruturado</text>
+<text x="199.71" y="113.80" text-anchor="middle" fill="#000000">fallback sem LLM</text>
+<rect x="276.71" y="83.00" width="130.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="341.73" y="98.80" text-anchor="middle" fill="#000000" font-weight="bold">StreamingAdapter</text>
+<text x="341.73" y="113.80" text-anchor="middle" fill="#000000">chunks → WebSocket</text>
+<rect x="10.17" y="171.00" width="130.06" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="10.17,171.00 140.22,171.00 140.22,209.00 10.17,209.00 10.17,171.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="75.19" y="186.80" text-anchor="middle" fill="#000000" font-weight="bold">extract_claims</text>
+<text x="75.19" y="201.80" text-anchor="middle" fill="#000000">extrai afirmações</text>
+<rect x="160.22" y="171.00" width="130.06" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="160.22,171.00 290.28,171.00 290.28,209.00 160.22,209.00 160.22,171.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="225.25" y="186.80" text-anchor="middle" fill="#000000" font-weight="bold">verify_claims</text>
+<text x="225.25" y="201.80" text-anchor="middle" fill="#000000">confere com os dados</text>
+<rect x="310.28" y="171.00" width="130.06" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="310.28,171.00 440.33,171.00 440.33,209.00 310.28,209.00 310.28,171.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="375.31" y="186.80" text-anchor="middle" fill="#000000" font-weight="bold">revise_text</text>
+<text x="375.31" y="201.80" text-anchor="middle" fill="#000000">revisa uma vez</text>
+</svg>

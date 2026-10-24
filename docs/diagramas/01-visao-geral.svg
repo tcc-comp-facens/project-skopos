@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="319pt" viewBox="0 0 453 319" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="319" fill="#FFFFFF"/>
+<rect x="0.00" y="0.00" width="450.50" height="120.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="13.80" text-anchor="start" fill="#000000" font-weight="bold">Orçamento (LAI)</text>
+<polyline points="187.58,57.00 144.70,27.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="187.58,57.00 144.70,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="187.58,57.00 144.70,67.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="187.58,57.00 144.70,87.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="282.27,57.00 325.14,27.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="282.27,57.00 325.14,74.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="343.14,35.00 343.14,40.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="234.92,65.00 234.92,79.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="282.27,87.00 325.14,74.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="282.27,87.00 325.14,100.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="187.58,83.00 176.58,83.00 176.58,91.00 187.58,91.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="19.00" width="136.70" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="76.35" y="31.30" text-anchor="middle" fill="#000000" font-weight="bold">Fornecedor</text>
+<rect x="8.00" y="19.00" width="136.70" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="39.00" width="136.70" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="76.35" y="51.30" text-anchor="middle" fill="#000000" font-weight="bold">FonteRecurso</text>
+<rect x="8.00" y="39.00" width="136.70" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="59.00" width="136.70" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="76.35" y="71.30" text-anchor="middle" fill="#000000" font-weight="bold">Subfuncao</text>
+<rect x="8.00" y="59.00" width="136.70" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="79.00" width="136.70" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="76.35" y="91.30" text-anchor="middle" fill="#000000" font-weight="bold">UnidadeOrcamentaria</text>
+<rect x="8.00" y="79.00" width="136.70" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="187.58" y="49.00" width="94.69" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="234.92" y="61.30" text-anchor="middle" fill="#000000" font-weight="bold">Empenho</text>
+<rect x="187.58" y="49.00" width="94.69" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="325.14" y="19.00" width="117.36" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="383.82" y="31.30" text-anchor="middle" fill="#000000" font-weight="bold">Acao</text>
+<rect x="325.14" y="19.00" width="117.36" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="325.14" y="40.00" width="117.36" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="383.82" y="52.30" text-anchor="middle" fill="#000000" font-weight="bold">ProgramaGoverno</text>
+<rect x="325.14" y="40.00" width="117.36" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="325.14" y="66.00" width="117.36" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="383.82" y="78.30" text-anchor="middle" fill="#000000" font-weight="bold">Aplicacao</text>
+<rect x="325.14" y="66.00" width="117.36" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="325.14" y="92.00" width="117.36" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="383.82" y="104.30" text-anchor="middle" fill="#000000" font-weight="bold">Natureza</text>
+<rect x="325.14" y="92.00" width="117.36" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="187.58" y="79.00" width="94.69" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="234.92" y="91.30" text-anchor="middle" fill="#000000" font-weight="bold">DespesaAnual</text>
+<rect x="187.58" y="79.00" width="94.69" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="99.00" width="136.70" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="76.35" y="111.30" text-anchor="middle" fill="#000000" font-weight="bold">OrcamentoPrograma</text>
+<rect x="8.00" y="99.00" width="136.70" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="136.00" width="450.50" height="135.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="149.80" text-anchor="start" fill="#000000" font-weight="bold">Saúde (DATASUS/TabNet)</text>
+<polyline points="151.89,210.50 102.01,163.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="151.89,210.50 102.01,186.75" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="151.89,210.50 102.01,210.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="151.89,210.50 102.01,234.25" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="151.89,210.50 102.01,258.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,163.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,182.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,201.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,220.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,239.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="253.91,210.50 303.79,258.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="155.00" width="94.01" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="55.00" y="167.30" text-anchor="middle" fill="#000000" font-weight="bold">FaixaEtaria</text>
+<rect x="8.00" y="155.00" width="94.01" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="178.75" width="94.01" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="55.00" y="191.05" text-anchor="middle" fill="#000000" font-weight="bold">CapituloCID10</text>
+<rect x="8.00" y="178.75" width="94.01" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="202.50" width="94.01" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="55.00" y="214.80" text-anchor="middle" fill="#000000" font-weight="bold">Sexo</text>
+<rect x="8.00" y="202.50" width="94.01" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="226.25" width="94.01" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="55.00" y="238.55" text-anchor="middle" fill="#000000" font-weight="bold">FaixaPeso</text>
+<rect x="8.00" y="226.25" width="94.01" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="250.00" width="94.01" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="55.00" y="262.30" text-anchor="middle" fill="#000000" font-weight="bold">Vacina</text>
+<rect x="8.00" y="250.00" width="94.01" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="155.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="167.30" text-anchor="middle" fill="#000000" font-weight="bold">TipoEstabelecimento</text>
+<rect x="303.79" y="155.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="174.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="186.30" text-anchor="middle" fill="#000000" font-weight="bold">OcupacaoProfissional</text>
+<rect x="303.79" y="174.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="193.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="205.30" text-anchor="middle" fill="#000000" font-weight="bold">TipoEquipe</text>
+<rect x="303.79" y="193.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="212.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="224.30" text-anchor="middle" fill="#000000" font-weight="bold">TipoAtendimento</text>
+<rect x="303.79" y="212.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="231.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="243.30" text-anchor="middle" fill="#000000" font-weight="bold">TipoLeitoConsultorio</text>
+<rect x="303.79" y="231.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="303.79" y="250.00" width="138.71" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="373.15" y="262.30" text-anchor="middle" fill="#000000" font-weight="bold">TipoEquipamento</text>
+<rect x="303.79" y="250.00" width="138.71" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="151.89" y="202.50" width="102.02" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="202.90" y="214.80" text-anchor="middle" fill="#000000" font-weight="bold">IndicadorSaude</text>
+<rect x="151.89" y="202.50" width="102.02" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="234.92,95.00 234.92,202.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="240.92" y="132.30" text-anchor="start" fill="#000000">cruzamento em memória</text>
+<rect x="0.00" y="277.00" width="450.50" height="40.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="290.80" text-anchor="start" fill="#000000" font-weight="bold">Execução das análises</text>
+<polyline points="62.68,304.00 332.46,304.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="296.00" width="54.68" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="35.34" y="308.30" text-anchor="middle" fill="#000000" font-weight="bold">Analise</text>
+<rect x="8.00" y="296.00" width="54.68" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="332.46" y="296.00" width="110.04" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="387.48" y="308.30" text-anchor="middle" fill="#000000" font-weight="bold">MetricaExecucao</text>
+<rect x="332.46" y="296.00" width="110.04" height="16.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+</svg>

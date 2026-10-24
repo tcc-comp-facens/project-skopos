@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="443pt" height="199pt" viewBox="0 0 443 199" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="443" height="199" fill="#FFFFFF"/>
+<polygon points="145.39,19.00 139.39,22.20 139.39,15.80" fill="#000000" stroke="none"/>
+<polyline points="125.39,19.00 139.39,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="311.45,19.00 305.45,22.20 305.45,15.80" fill="#000000" stroke="none"/>
+<polyline points="291.45,19.00 305.45,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="218.42,38.00 218.42,54.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="375.81,38.00 375.81,54.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polygon points="375.81,144.00 372.61,138.00 379.01,138.00" fill="#000000" stroke="none"/>
+<polyline points="375.81,122.00 375.81,138.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="291.45,170.50 297.45,167.30 297.45,173.70" fill="#000000" stroke="none"/>
+<polyline points="311.45,170.50 297.45,170.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="125.39,170.50 131.39,167.30 131.39,173.70" fill="#000000" stroke="none"/>
+<polyline points="145.39,170.50 131.39,170.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="125.39" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="62.69" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Perceber</text>
+<text x="62.69" y="30.80" text-anchor="middle" fill="#000000">analysis_id e período</text>
+<rect x="145.39" y="0.00" width="146.06" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="218.42" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Propor ações</text>
+<text x="218.42" y="30.80" text-anchor="middle" fill="#000000">candidatos por dimensão</text>
+<rect x="311.45" y="0.00" width="128.71" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="375.81" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Avaliar e selecionar</text>
+<text x="375.81" y="30.80" text-anchor="middle" fill="#000000">arbitrar_dimensao()</text>
+<rect x="145.39" y="54.00" width="146.06" height="68.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="218.42" y="69.80" text-anchor="middle" fill="#000000" font-weight="bold">Candidatos (SINAN)</text>
+<text x="218.42" y="84.80" text-anchor="middle" fill="#000000">sem quebra</text>
+<text x="218.42" y="99.80" text-anchor="middle" fill="#000000">POR_FAIXA_ETARIA</text>
+<text x="218.42" y="114.80" text-anchor="middle" fill="#000000">POR_SEXO</text>
+<rect x="311.45" y="54.00" width="128.71" height="68.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="375.81" y="69.80" text-anchor="middle" fill="#000000" font-weight="bold">Critério</text>
+<text x="375.81" y="84.80" text-anchor="middle" fill="#000000">score da intenção</text>
+<text x="375.81" y="99.80" text-anchor="middle" fill="#000000">+ LLM (se use_llm)</text>
+<text x="375.81" y="114.80" text-anchor="middle" fill="#000000">falha → maior score</text>
+<rect x="0.00" y="144.00" width="125.39" height="53.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="62.69" y="167.30" text-anchor="middle" fill="#000000" font-weight="bold">Neo4j</text>
+<text x="62.69" y="182.30" text-anchor="middle" fill="#000000">IndicadorSaude</text>
+<rect x="145.39" y="144.00" width="146.06" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="218.42" y="167.30" text-anchor="middle" fill="#000000" font-weight="bold">query_builder</text>
+<text x="218.42" y="182.30" text-anchor="middle" fill="#000000">Cypher parametrizado</text>
+<rect x="311.45" y="144.00" width="128.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="375.81" y="159.80" text-anchor="middle" fill="#000000" font-weight="bold">Executar</text>
+<text x="375.81" y="174.80" text-anchor="middle" fill="#000000">consultar_indicadores</text>
+<text x="375.81" y="189.80" text-anchor="middle" fill="#000000">falha → lista vazia</text>
+</svg>

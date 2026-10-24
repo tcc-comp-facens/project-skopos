@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="227pt" viewBox="0 0 453 227" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="227" fill="#FFFFFF"/>
+<polyline points="225.25,53.00 225.25,75.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="44.02,75.00 406.48,75.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="44.02,97.00 40.82,91.00 47.22,91.00" fill="#000000" stroke="none"/>
+<polyline points="44.02,75.00 44.02,91.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="164.84,97.00 161.64,91.00 168.04,91.00" fill="#000000" stroke="none"/>
+<polyline points="164.84,75.00 164.84,91.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="285.66,97.00 282.46,91.00 288.86,91.00" fill="#000000" stroke="none"/>
+<polyline points="285.66,75.00 285.66,91.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="406.48,97.00 403.28,91.00 409.68,91.00" fill="#000000" stroke="none"/>
+<polyline points="406.48,75.00 406.48,91.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="44.02,157.00 40.82,151.00 47.22,151.00" fill="#000000" stroke="none"/>
+<polyline points="44.02,135.00 44.02,151.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="164.84,157.00 161.64,151.00 168.04,151.00" fill="#000000" stroke="none"/>
+<polyline points="164.84,135.00 164.84,151.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="285.66,157.00 282.46,151.00 288.86,151.00" fill="#000000" stroke="none"/>
+<polyline points="285.66,135.00 285.66,151.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="406.48,157.00 403.28,151.00 409.68,151.00" fill="#000000" stroke="none"/>
+<polyline points="406.48,135.00 406.48,151.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="158.89" y="0.00" width="132.72" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">CoordenadorGeral</text>
+<text x="225.25" y="30.80" text-anchor="middle" fill="#000000">3. combinar_despesas</text>
+<text x="225.25" y="45.80" text-anchor="middle" fill="#000000">persistir_metricas</text>
+<rect x="0.00" y="97.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="44.02" y="112.80" text-anchor="middle" fill="#000000" font-weight="bold">1. Supervisor</text>
+<text x="44.02" y="127.80" text-anchor="middle" fill="#000000">Orçamento</text>
+<rect x="120.82" y="97.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="164.84" y="112.80" text-anchor="middle" fill="#000000" font-weight="bold">2. Supervisor</text>
+<text x="164.84" y="127.80" text-anchor="middle" fill="#000000">Saúde</text>
+<rect x="241.65" y="97.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="285.66" y="112.80" text-anchor="middle" fill="#000000" font-weight="bold">4. Supervisor</text>
+<text x="285.66" y="127.80" text-anchor="middle" fill="#000000">Contexto</text>
+<rect x="362.47" y="97.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="406.48" y="112.80" text-anchor="middle" fill="#000000" font-weight="bold">5. Supervisor</text>
+<text x="406.48" y="127.80" text-anchor="middle" fill="#000000">Analítico</text>
+<rect x="0.00" y="157.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="44.02" y="172.80" text-anchor="middle" fill="#000000" font-weight="bold">Orçamento</text>
+<text x="44.02" y="187.80" text-anchor="middle" fill="#000000">até 7 agentes</text>
+<rect x="120.82" y="157.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="164.84" y="172.80" text-anchor="middle" fill="#000000" font-weight="bold">Saúde</text>
+<text x="164.84" y="187.80" text-anchor="middle" fill="#000000">até 8 agentes</text>
+<rect x="241.65" y="157.00" width="88.03" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="285.66" y="172.80" text-anchor="middle" fill="#000000" font-weight="bold">Contexto</text>
+<text x="285.66" y="187.80" text-anchor="middle" fill="#000000">orçamentário</text>
+<rect x="362.47" y="157.00" width="88.03" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="406.48" y="172.80" text-anchor="middle" fill="#000000" font-weight="bold">Analítico</text>
+<text x="406.48" y="187.80" text-anchor="middle" fill="#000000">Priorização</text>
+<text x="406.48" y="202.80" text-anchor="middle" fill="#000000">Sintetizador</text>
+<text x="406.48" y="217.80" text-anchor="middle" fill="#000000">Verificação</text>
+</svg>

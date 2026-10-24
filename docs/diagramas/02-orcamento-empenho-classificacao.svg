@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="436pt" height="173pt" viewBox="0 0 436 173" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="436" height="173" fill="#FFFFFF"/>
+<polyline points="152.04,15.00 296.74,15.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="224.39" y="11.00" text-anchor="middle" fill="#000000">DO_FORNECEDOR</text>
+<text x="292.74" y="27.00" text-anchor="end" fill="#000000">1</text>
+<polyline points="152.04,64.50 296.74,64.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="224.39" y="60.50" text-anchor="middle" fill="#000000">FINANCIADO_POR</text>
+<text x="292.74" y="76.50" text-anchor="end" fill="#000000">1</text>
+<polyline points="152.04,114.00 296.74,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="224.39" y="110.00" text-anchor="middle" fill="#000000">CLASSIFICADO_EM</text>
+<text x="292.74" y="126.00" text-anchor="end" fill="#000000">1</text>
+<polyline points="152.04,156.00 296.74,156.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="224.39" y="152.00" text-anchor="middle" fill="#000000">DA_UNIDADE</text>
+<text x="292.74" y="168.00" text-anchor="end" fill="#000000">1</text>
+<polyline points="136.04,85.50 152.04,85.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="152.04,15.00 152.04,156.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="139.04" y="97.50" text-anchor="start" fill="#000000">N</text>
+<rect x="0.00" y="25.50" width="136.04" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="68.02" y="37.30" text-anchor="middle" fill="#000000" font-weight="bold">Empenho</text>
+<text x="6.00" y="52.30" text-anchor="start" fill="#000000">id</text>
+<polyline points="6.00,53.90 15.34,53.90" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="130.04" y="52.30" text-anchor="end" fill="#4D4D4D">string</text>
+<text x="6.00" y="67.30" text-anchor="start" fill="#000000">dataEmpenho</text>
+<text x="130.04" y="67.30" text-anchor="end" fill="#4D4D4D">date</text>
+<text x="6.00" y="82.30" text-anchor="start" fill="#000000">subfuncaoCodigo</text>
+<text x="130.04" y="82.30" text-anchor="end" fill="#4D4D4D">int</text>
+<text x="6.00" y="97.30" text-anchor="start" fill="#000000">natureza</text>
+<text x="130.04" y="97.30" text-anchor="end" fill="#4D4D4D">string</text>
+<text x="6.00" y="112.30" text-anchor="start" fill="#000000">valorProcessado</text>
+<text x="130.04" y="112.30" text-anchor="end" fill="#4D4D4D">float</text>
+<text x="6.00" y="127.30" text-anchor="start" fill="#000000">valorPago</text>
+<text x="130.04" y="127.30" text-anchor="end" fill="#4D4D4D">float</text>
+<text x="6.00" y="142.30" text-anchor="start" fill="#000000">…</text>
+<polyline points="0.00,40.50 136.04,40.50" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="0.00" y="25.50" width="136.04" height="120.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="296.74" y="0.00" width="136.70" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="365.09" y="11.80" text-anchor="middle" fill="#000000" font-weight="bold">Fornecedor</text>
+<text x="302.74" y="26.80" text-anchor="start" fill="#000000">documento</text>
+<polyline points="302.74,28.40 362.10,28.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="427.44" y="26.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="296.74,15.00 433.44,15.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="296.74" y="0.00" width="136.70" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="296.74" y="42.00" width="136.70" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="365.09" y="53.80" text-anchor="middle" fill="#000000" font-weight="bold">FonteRecurso</text>
+<text x="302.74" y="68.80" text-anchor="start" fill="#000000">nome</text>
+<polyline points="302.74,70.40 332.75,70.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="427.44" y="68.80" text-anchor="end" fill="#4D4D4D">string</text>
+<text x="302.74" y="83.80" text-anchor="start" fill="#000000">tipoRecurso</text>
+<text x="427.44" y="83.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="296.74,57.00 433.44,57.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="296.74" y="42.00" width="136.70" height="45.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="296.74" y="99.00" width="136.70" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="365.09" y="110.80" text-anchor="middle" fill="#000000" font-weight="bold">Subfuncao</text>
+<text x="302.74" y="125.80" text-anchor="start" fill="#000000">codigo</text>
+<polyline points="302.74,127.40 338.09,127.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="427.44" y="125.80" text-anchor="end" fill="#4D4D4D">int</text>
+<polyline points="296.74,114.00 433.44,114.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="296.74" y="99.00" width="136.70" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="296.74" y="141.00" width="136.70" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="365.09" y="152.80" text-anchor="middle" fill="#000000" font-weight="bold">UnidadeOrcamentaria</text>
+<text x="302.74" y="167.80" text-anchor="start" fill="#000000">nome</text>
+<polyline points="302.74,169.40 332.75,169.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="427.44" y="167.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="296.74,156.00 433.44,156.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="296.74" y="141.00" width="136.70" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+</svg>

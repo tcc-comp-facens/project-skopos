@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="425pt" height="160pt" viewBox="0 0 425 160" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="425" height="160" fill="#FFFFFF"/>
+<polygon points="108.04,41.50 102.04,44.70 102.04,38.30" fill="#000000" stroke="none"/>
+<polyline points="88.04,86.50 98.04,86.50 98.04,41.50 102.04,41.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="108.04,131.50 102.04,134.70 102.04,128.30" fill="#000000" stroke="none"/>
+<polyline points="98.04,86.50 98.04,131.50 102.04,131.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="263.43,41.50 257.43,44.70 257.43,38.30" fill="#000000" stroke="none"/>
+<polyline points="243.43,41.50 257.43,41.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="343.13,105.00 339.93,99.00 346.33,99.00" fill="#000000" stroke="none"/>
+<polyline points="343.13,83.00 343.13,99.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="263.43,131.50 257.43,134.70 257.43,128.30" fill="#000000" stroke="none"/>
+<polyline points="243.43,131.50 257.43,131.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="60.00" width="88.04" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="44.02" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">Despesas</text>
+<text x="44.02" y="90.80" text-anchor="middle" fill="#000000">por subfunção</text>
+<text x="44.02" y="105.80" text-anchor="middle" fill="#000000">e ano</text>
+<rect x="108.04" y="22.50" width="135.38" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="175.74" y="38.30" text-anchor="middle" fill="#000000" font-weight="bold">Variação ano a ano</text>
+<text x="175.74" y="53.30" text-anchor="middle" fill="#000000">compute_yoy_variation</text>
+<rect x="108.04" y="112.50" width="135.38" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="175.74" y="128.30" text-anchor="middle" fill="#000000" font-weight="bold">Resumo do período</text>
+<text x="175.74" y="143.30" text-anchor="middle" fill="#000000">compute_cagr (CAGR)</text>
+<rect x="263.43" y="0.00" width="159.40" height="83.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="343.13" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Classificação</text>
+<text x="343.13" y="30.80" text-anchor="middle" fill="#000000">classify_trend:</text>
+<text x="343.13" y="45.80" text-anchor="middle" fill="#000000">crescimento, corte,</text>
+<text x="343.13" y="60.80" text-anchor="middle" fill="#000000">estagnação ou</text>
+<text x="343.13" y="75.80" text-anchor="middle" fill="#000000">insuficiente</text>
+<rect x="263.43" y="105.00" width="159.40" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="343.13" y="120.80" text-anchor="middle" fill="#000000" font-weight="bold">Resultado</text>
+<text x="343.13" y="135.80" text-anchor="middle" fill="#000000">tendencia</text>
+<text x="343.13" y="150.80" text-anchor="middle" fill="#000000">variacao_media_percentual</text>
+</svg>

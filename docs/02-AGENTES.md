@@ -17,6 +17,8 @@
 
 > Para o passo a passo de cada topologia, com o código de cada ação, ver [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md) e [arquitetura/arquitetura-hierarquica.md](arquitetura/arquitetura-hierarquica.md). Para a classe base e as chamadas ao LLM, ver [arquitetura/agente-coala-e-llm.md](arquitetura/agente-coala-e-llm.md).
 
+> **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/agentes/`](diagramas/agentes/), em PNG (300 dpi) e SVG, prontas para a monografia: até 16 × 9 cm, texto em Arial 12 quando inseridas a 100%, sem título nem legenda dentro da imagem. Convenção: retângulo branco = ação ou processo; arredondado cinza-claro = dado; cinza = componente externo (Neo4j, LLM, WebSocket); borda ou seta tracejada = etapa opcional, alternativa ou retorno. Para regenerar: `python docs/diagramas/agentes/gerar_diagramas_agentes.py`.
+
 ---
 
 ## O que é um Agente?
@@ -38,6 +40,8 @@ O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023, arXiv:2309.02427)
 
 ### Memória — quatro sistemas
 
+![Estrutura de um agente CoALA: memórias, ciclo de decisão e ambiente](diagramas/agentes/01-coala-estrutura.png)
+
 | Memória | Papel | No código |
 |---------|-------|-----------|
 | **Working** | Buffer ativo de curto prazo: parâmetros da análise, resultados parciais | `working_memory: dict` |
@@ -51,6 +55,8 @@ O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023, arXiv:2309.02427)
 - **Externas** (grounding): interação com o ambiente: Neo4j, WebSocket, delegação a outro agente. Ex.: consultar `IndicadorSaude` no Neo4j.
 
 ### O ciclo CoALA
+
+![Ciclo de decisão CoALA](diagramas/agentes/02-coala-ciclo.png)
 
 ```
 PERCEBER → ATUALIZAR WORKING MEMORY → PROPOR AÇÕES → AVALIAR E SELECIONAR → EXECUTAR
@@ -101,6 +107,8 @@ self.procedural_memory = {
 }
 ```
 
+![Execução de uma ação com estratégia de fallback](diagramas/agentes/03-coala-recuperacao-falha.png)
+
 ---
 
 ## Classe Base AgenteCoALA
@@ -148,6 +156,8 @@ intent-9f8e7d6c                ← agente de intenção (um por sessão de chat,
 
 ## Agente de Interpretação de Intenção
 
+![Fluxo do AgenteInterpretacaoIntencao](diagramas/agentes/04-agente-intencao.png)
+
 **Arquivo:** `agents/intent/agente_interpretacao_intencao.py`
 
 É a porta de entrada do sistema. Cada mensagem do chat (`WS /ws/chat/{sessionId}`) passa por ele **antes** de qualquer topologia ser instanciada. **Não há regex**: toda mensagem passa pelo LLM.
@@ -190,6 +200,8 @@ class AnalysisIntent:
 
 ## Agentes de Saúde (8)
 
+![Agentes de saúde, seus sistemas e dimensões](diagramas/agentes/06-agentes-saude-sistemas.png)
+
 Um agente por **sistema de informação do DATASUS**, todos em `agents/domain/`. Cada um consulta `IndicadorSaude {sistema: <sis>}` no Neo4j via `neo4j_client.get_indicadores_por_sistema`. **Nenhum consulta despesas**: orçamento é responsabilidade do `AgenteOrcamentoSubfuncao`.
 
 | Agente | Arquivo | `sistema` | Subtipos | Dimensões válidas (deliberação) |
@@ -206,6 +218,8 @@ Um agente por **sistema de informação do DATASUS**, todos em `agents/domain/`.
 As dimensões válidas vêm de `db/query_builder.py::SISTEMA_DIMENSOES`, carregadas em `semantic_memory["dimensoes_validas"]`.
 
 ### Deliberação de dimensão
+
+![Ciclo de um agente de saúde com deliberação de dimensão](diagramas/agentes/05-agente-saude.png)
 
 Os agentes com dimensões válidas implementam deliberação real, em dois estágios, compartilhada em `agents/domain/query_planning.py`:
 
@@ -234,6 +248,8 @@ O LLM decide **o quê** filtrar e **nunca escreve Cypher**. `db/query_builder.py
 
 ## Agente de Orçamento por Subfunção (até 7 instâncias)
 
+![Ciclo do AgenteOrcamentoSubfuncao](diagramas/agentes/07-agente-orcamento.png)
+
 **Arquivo:** `agents/domain/agente_orcamento.py`, classe `AgenteOrcamentoSubfuncao`
 
 Classe **parametrizada** por subfunção (`subfuncao_codigo`, `subfuncao_nome`). As topologias instanciam uma por subfunção relevante à análise, entre 122, 301, 302, 303, 304, 305 e 306. Consulta `DespesaAnual` (`valorProcessado`, execução real) via `get_despesas_por_subfuncao`.
@@ -253,6 +269,8 @@ Como a lista de candidatos mistura três goals, `evaluate_and_select` particiona
 Processam dados **em memória**, sem acessar o Neo4j.
 
 ### AgenteAnalitico — Correlação (Spearman) + Anomalias
+
+![AgenteAnalitico: correlação e anomalias](diagramas/agentes/09-agente-analitico.png)
 
 **Arquivo:** `agents/analytical/analitico.py`
 
@@ -282,6 +300,8 @@ Consolida os antigos `AgenteCorrelacao` e `AgenteAnomalias` num único agente Co
 
 ### AgentePriorizacaoAnalitica — Ênfase dos achados
 
+![AgentePriorizacaoAnalitica: escolha do ângulo de ênfase](diagramas/agentes/10-agente-priorizacao.png)
+
 **Arquivo:** `agents/analytical/priorizacao.py`
 
 Decide **qual ângulo enfatizar** e em que ordem apresentar os achados ao sintetizador. **Nunca recalcula nem filtra** correlações ou anomalias, só reordena. Os dados brutos da métrica Q1 ficam intactos.
@@ -291,6 +311,8 @@ Decide **qual ângulo enfatizar** e em que ordem apresentar os achados ao sintet
 - Roda **depois** de `capturar_wallclock`, portanto fora do wall-clock comparado entre topologias.
 
 ### TextSynthesizer — Geração de texto (serviço, não é agente CoALA)
+
+![Síntese de texto e verificação pós-síntese](diagramas/agentes/11-sintese-verificacao.png)
 
 **Arquivo:** `agents/analytical/sintetizador.py`
 
@@ -308,6 +330,8 @@ Com `use_self_check=True` (e `use_llm=True`), a ação `verificar_afirmacoes` ap
 ---
 
 ## Agente de Contexto Orçamentário
+
+![AgenteContextoOrcamentario: tendência e CAGR](diagramas/agentes/08-agente-contexto.png)
 
 **Arquivo:** `agents/context/contexto_orcamentario.py`, classe `AgenteContextoOrcamentario`
 
@@ -329,6 +353,8 @@ Sem sequência clara, vale a direção média. `compute_yoy_variation`/`classify
 ---
 
 ## Arquitetura Estrela
+
+![Topologia estrela: OrquestradorEstrela e agentes, na ordem de execução](diagramas/agentes/12-topologia-estrela.png)
 
 **Arquivo:** `backend/agents/star/orchestrator.py`
 
@@ -377,6 +403,8 @@ persistir_metricas       → MetricaExecucao por agente + evento WebSocket
 
 ## Arquitetura Hierárquica
 
+![Topologia hierárquica: coordenador, supervisores e agentes-folha](diagramas/agentes/13-topologia-hierarquica.png)
+
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `supervisors.py`
 
 Três níveis, organizados como **árvore estrita**: cada supervisor só troca dados com o `CoordenadorGeral` (seu pai), nunca com outro supervisor.
@@ -395,6 +423,8 @@ Subfuncao (≤ 7)       (≤ 8)               Orcamentario             AgentePri
 ```
 
 ### Pipeline do `CoordenadorGeral`
+
+![Sequência de chamadas do CoordenadorGeral aos supervisores](diagramas/agentes/14-hierarquica-fluxo.png)
 
 ```
 delegar_orcamento   → SupervisorOrcamento.run()   → {despesas, tendencias}

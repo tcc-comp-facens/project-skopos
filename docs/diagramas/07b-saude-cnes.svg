@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="389pt" height="198pt" viewBox="0 0 389 198" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="389" height="198" fill="#FFFFFF"/>
+<polyline points="24.00,97.00 252.70,97.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="138.35" y="93.00" text-anchor="middle" fill="#000000">POR_TIPO_ATENDIMENTO</text>
+<text x="248.70" y="109.00" text-anchor="end" fill="#000000">N</text>
+<polyline points="24.00,139.00 252.70,139.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="138.35" y="135.00" text-anchor="middle" fill="#000000">POR_TIPO_LEITO_CONSULTORIO</text>
+<text x="248.70" y="151.00" text-anchor="end" fill="#000000">N</text>
+<polyline points="24.00,181.00 252.70,181.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="138.35" y="177.00" text-anchor="middle" fill="#000000">POR_TIPO_EQUIPAMENTO</text>
+<text x="248.70" y="193.00" text-anchor="end" fill="#000000">N</text>
+<polyline points="24.00,60.00 24.00,181.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="29.00" y="72.00" text-anchor="start" fill="#000000">N</text>
+<rect x="0.00" y="0.00" width="102.02" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="51.01" y="11.80" text-anchor="middle" fill="#000000" font-weight="bold">IndicadorSaude</text>
+<text x="6.00" y="26.80" text-anchor="start" fill="#000000">chave</text>
+<polyline points="6.00,28.40 38.02,28.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="96.02" y="26.80" text-anchor="end" fill="#4D4D4D">string</text>
+<text x="6.00" y="41.80" text-anchor="start" fill="#000000">sistema</text>
+<text x="96.02" y="41.80" text-anchor="end" fill="#4D4D4D">string</text>
+<text x="6.00" y="56.80" text-anchor="start" fill="#000000">…</text>
+<polyline points="0.00,15.00 102.02,15.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="0.00" y="0.00" width="102.02" height="60.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="252.70" y="82.00" width="133.33" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="319.36" y="93.80" text-anchor="middle" fill="#000000" font-weight="bold">TipoAtendimento</text>
+<text x="258.70" y="108.80" text-anchor="start" fill="#000000">chave</text>
+<polyline points="258.70,110.40 290.71,110.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="380.02" y="108.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="252.70,97.00 386.02,97.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="252.70" y="82.00" width="133.33" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="252.70" y="124.00" width="133.33" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="319.36" y="135.80" text-anchor="middle" fill="#000000" font-weight="bold">TipoLeitoConsultorio</text>
+<text x="258.70" y="150.80" text-anchor="start" fill="#000000">chave</text>
+<polyline points="258.70,152.40 290.71,152.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="380.02" y="150.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="252.70,139.00 386.02,139.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="252.70" y="124.00" width="133.33" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="252.70" y="166.00" width="133.33" height="15.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<text x="319.36" y="177.80" text-anchor="middle" fill="#000000" font-weight="bold">TipoEquipamento</text>
+<text x="258.70" y="192.80" text-anchor="start" fill="#000000">chave</text>
+<polyline points="258.70,194.40 290.71,194.40" fill="none" stroke="#000000" stroke-width="0.75"/>
+<text x="380.02" y="192.80" text-anchor="end" fill="#4D4D4D">string</text>
+<polyline points="252.70,181.00 386.02,181.00" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="252.70" y="166.00" width="133.33" height="30.00" rx="0.0" fill="none" stroke="#000000" stroke-width="1.0"/>
+</svg>

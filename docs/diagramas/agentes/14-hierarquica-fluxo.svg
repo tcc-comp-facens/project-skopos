@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="230pt" viewBox="0 0 453 230" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="230" fill="#FFFFFF"/>
+<polyline points="41.67,38.00 41.67,228.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="144.39,38.00 144.39,228.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="234.65,38.00 234.65,228.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="324.90,38.00 324.90,228.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="415.16,38.00 415.16,228.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polygon points="324.90,56.00 318.90,59.20 318.90,52.80" fill="#000000" stroke="none"/>
+<polyline points="41.67,56.00 318.90,56.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="122.92" y="40.91" width="120.72" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="183.28" y="52.00" text-anchor="middle" fill="#000000">1. delegar_orcamento</text>
+<polygon points="41.67,75.00 47.67,71.80 47.67,78.20" fill="#000000" stroke="none"/>
+<polyline points="324.90,75.00 47.67,75.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="123.25" y="59.91" width="120.06" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="183.28" y="71.00" text-anchor="middle" fill="#000000">despesas, tendências</text>
+<polygon points="144.39,94.00 138.39,97.20 138.39,90.80" fill="#000000" stroke="none"/>
+<polyline points="41.67,94.00 138.39,94.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="44.67" y="78.91" width="96.72" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="93.03" y="90.00" text-anchor="middle" fill="#000000">2. delegar_saude</text>
+<polygon points="41.67,113.00 47.67,109.80 47.67,116.20" fill="#000000" stroke="none"/>
+<polyline points="144.39,113.00 47.67,113.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="60.35" y="97.91" width="65.36" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="93.03" y="109.00" text-anchor="middle" fill="#000000">indicadores</text>
+<polygon points="41.67,138.00 47.67,134.80 47.67,141.20" fill="#000000" stroke="none"/>
+<polyline points="41.67,126.00 59.67,126.00 59.67,138.00 47.67,138.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="63.67" y="125.20" width="124.72" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="65.67" y="136.30" text-anchor="start" fill="#000000">3. combinar_despesas</text>
+<polygon points="234.65,158.00 228.65,161.20 228.65,154.80" fill="#000000" stroke="none"/>
+<polyline points="41.67,158.00 228.65,158.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="53.78" y="142.91" width="168.75" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="138.16" y="154.00" text-anchor="middle" fill="#000000">4. delegar_contexto(despesas)</text>
+<polygon points="41.67,177.00 47.67,173.80 47.67,180.20" fill="#000000" stroke="none"/>
+<polyline points="234.65,177.00 47.67,177.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="76.80" y="161.91" width="122.72" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="138.16" y="173.00" text-anchor="middle" fill="#000000">contexto orçamentário</text>
+<polygon points="415.16,196.00 409.16,199.20 409.16,192.80" fill="#000000" stroke="none"/>
+<polyline points="41.67,196.00 409.16,196.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="84.68" y="180.91" width="287.46" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="228.41" y="192.00" text-anchor="middle" fill="#000000">5. delegar_analitico(despesas, indicadores, contexto)</text>
+<polygon points="41.67,215.00 47.67,211.80 47.67,218.20" fill="#000000" stroke="none"/>
+<polyline points="415.16,215.00 47.67,215.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="148.38" y="199.91" width="160.06" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="228.41" y="211.00" text-anchor="middle" fill="#000000">correlações, anomalias, texto</text>
+<rect x="0.00" y="0.00" width="83.34" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="41.67" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Coordenador</text>
+<text x="41.67" y="30.80" text-anchor="middle" fill="#000000">Geral</text>
+<rect x="109.05" y="0.00" width="70.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="144.39" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Supervisor</text>
+<text x="144.39" y="30.80" text-anchor="middle" fill="#000000">Saúde</text>
+<rect x="199.30" y="0.00" width="70.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="234.65" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Supervisor</text>
+<text x="234.65" y="30.80" text-anchor="middle" fill="#000000">Contexto</text>
+<rect x="289.56" y="0.00" width="70.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="324.90" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Supervisor</text>
+<text x="324.90" y="30.80" text-anchor="middle" fill="#000000">Orçamento</text>
+<rect x="379.81" y="0.00" width="70.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="415.16" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Supervisor</text>
+<text x="415.16" y="30.80" text-anchor="middle" fill="#000000">Analítico</text>
+</svg>

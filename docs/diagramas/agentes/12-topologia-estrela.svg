@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="206pt" viewBox="0 0 453 206" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="206" fill="#FFFFFF"/>
+<polygon points="106.42,38.00 113.19,38.66 109.65,43.99" fill="#000000" stroke="none"/>
+<polygon points="151.55,68.00 144.78,67.34 148.32,62.01" fill="#000000" stroke="none"/>
+<polyline points="146.55,64.68 111.42,41.32" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="225.25,38.00 228.45,44.00 222.05,44.00" fill="#000000" stroke="none"/>
+<polygon points="225.25,68.00 222.05,62.00 228.45,62.00" fill="#000000" stroke="none"/>
+<polyline points="225.25,62.00 225.25,44.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="344.08,38.00 340.85,43.99 337.31,38.66" fill="#000000" stroke="none"/>
+<polygon points="298.95,68.00 302.18,62.01 305.72,67.34" fill="#000000" stroke="none"/>
+<polyline points="303.95,64.68 339.08,41.32" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="47.01,166.00 51.89,161.27 53.66,167.42" fill="#000000" stroke="none"/>
+<polygon points="151.55,136.00 146.66,140.73 144.90,134.58" fill="#000000" stroke="none"/>
+<polyline points="145.78,137.66 52.78,164.34" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="165.84,166.00 162.64,160.00 169.04,160.00" fill="#000000" stroke="none"/>
+<polygon points="165.84,136.00 169.04,142.00 162.64,142.00" fill="#000000" stroke="none"/>
+<polyline points="165.84,142.00 165.84,160.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="284.66,166.00 281.46,160.00 287.86,160.00" fill="#000000" stroke="none"/>
+<polygon points="284.66,136.00 287.86,142.00 281.46,142.00" fill="#000000" stroke="none"/>
+<polyline points="284.66,142.00 284.66,160.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="403.49,166.00 396.84,167.42 398.61,161.27" fill="#000000" stroke="none"/>
+<polygon points="298.95,136.00 305.60,134.58 303.84,140.73" fill="#000000" stroke="none"/>
+<polyline points="304.72,137.66 397.72,164.34" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="139.55" y="68.00" width="171.41" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="83.80" text-anchor="middle" fill="#000000" font-weight="bold">OrquestradorEstrela</text>
+<text x="225.25" y="98.80" text-anchor="middle" fill="#000000">cruzar_dados · detectar_gaps</text>
+<text x="225.25" y="113.80" text-anchor="middle" fill="#000000">capturar_wallclock</text>
+<text x="225.25" y="128.80" text-anchor="middle" fill="#000000">persistir_metricas</text>
+<rect x="59.41" y="0.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="106.42" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">1. Saúde</text>
+<text x="106.42" y="30.80" text-anchor="middle" fill="#000000">até 8 agentes</text>
+<rect x="178.24" y="0.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">2. Orçamento</text>
+<text x="225.25" y="30.80" text-anchor="middle" fill="#000000">até 7 agentes</text>
+<rect x="297.07" y="0.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="344.08" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">3. Contexto</text>
+<text x="344.08" y="30.80" text-anchor="middle" fill="#000000">tendências</text>
+<rect x="0.00" y="166.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="47.01" y="181.80" text-anchor="middle" fill="#000000" font-weight="bold">4. Analítico</text>
+<text x="47.01" y="196.80" text-anchor="middle" fill="#000000">estatística</text>
+<rect x="118.83" y="166.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="165.84" y="181.80" text-anchor="middle" fill="#000000" font-weight="bold">5. Priorização</text>
+<text x="165.84" y="196.80" text-anchor="middle" fill="#000000">ênfase (LLM)</text>
+<rect x="237.65" y="166.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="284.66" y="181.80" text-anchor="middle" fill="#000000" font-weight="bold">6. Sintetizador</text>
+<text x="284.66" y="196.80" text-anchor="middle" fill="#000000">texto (LLM)</text>
+<rect x="356.48" y="166.00" width="94.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="356.48,166.00 450.50,166.00 450.50,204.00 356.48,204.00 356.48,166.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="403.49" y="181.80" text-anchor="middle" fill="#000000" font-weight="bold">7. Verificação</text>
+<text x="403.49" y="196.80" text-anchor="middle" fill="#000000">opcional</text>
+</svg>

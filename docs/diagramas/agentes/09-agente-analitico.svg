@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="429pt" height="193pt" viewBox="0 0 429 193" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="429" height="193" fill="#FFFFFF"/>
+<polygon points="124.69,26.50 118.69,29.70 118.69,23.30" fill="#000000" stroke="none"/>
+<polyline points="104.69,95.50 114.69,95.50 114.69,26.50 118.69,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="124.69,164.50 118.69,167.70 118.69,161.30" fill="#000000" stroke="none"/>
+<polyline points="114.69,95.50 114.69,164.50 118.69,164.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="186.38,53.00 189.58,59.00 183.18,59.00" fill="#000000" stroke="none"/>
+<polyline points="186.38,69.00 186.38,59.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polygon points="186.38,138.00 183.18,132.00 189.58,132.00" fill="#000000" stroke="none"/>
+<polyline points="186.38,122.00 186.38,132.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polygon points="268.07,26.50 262.07,29.70 262.07,23.30" fill="#000000" stroke="none"/>
+<polyline points="248.07,26.50 262.07,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="268.07,164.50 262.07,167.70 262.07,161.30" fill="#000000" stroke="none"/>
+<polyline points="248.07,164.50 262.07,164.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="69.00" width="104.69" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="52.34" y="84.80" text-anchor="middle" fill="#000000" font-weight="bold">Dados cruzados</text>
+<text x="52.34" y="99.80" text-anchor="middle" fill="#000000">subfunção ×</text>
+<text x="52.34" y="114.80" text-anchor="middle" fill="#000000">indicador × ano</text>
+<rect x="124.69" y="0.00" width="123.38" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="186.38" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Calcular correlação</text>
+<text x="186.38" y="30.80" text-anchor="middle" fill="#000000">calcular_correlacao</text>
+<text x="186.38" y="45.80" text-anchor="middle" fill="#000000">Spearman por par</text>
+<rect x="124.69" y="69.00" width="123.38" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="186.38" y="84.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória semântica</text>
+<text x="186.38" y="99.80" text-anchor="middle" fill="#000000">limiares 0,7 e 0,4</text>
+<text x="186.38" y="114.80" text-anchor="middle" fill="#000000">polaridade</text>
+<rect x="124.69" y="138.00" width="123.38" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="186.38" y="153.80" text-anchor="middle" fill="#000000" font-weight="bold">Detectar anomalia</text>
+<text x="186.38" y="168.80" text-anchor="middle" fill="#000000">detectar_anomalia</text>
+<text x="186.38" y="183.80" text-anchor="middle" fill="#000000">mediana por par</text>
+<rect x="268.07" y="0.00" width="158.75" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="347.45" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Correlações</text>
+<text x="347.45" y="30.80" text-anchor="middle" fill="#000000">alta, média ou baixa</text>
+<text x="347.45" y="45.80" text-anchor="middle" fill="#000000">+ leitura de polaridade</text>
+<rect x="268.07" y="138.00" width="158.75" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="347.45" y="153.80" text-anchor="middle" fill="#000000" font-weight="bold">Anomalias</text>
+<text x="347.45" y="168.80" text-anchor="middle" fill="#000000">alto_gasto_baixo_resultado</text>
+<text x="347.45" y="183.80" text-anchor="middle" fill="#000000">baixo_gasto_alto_resultado</text>
+</svg>

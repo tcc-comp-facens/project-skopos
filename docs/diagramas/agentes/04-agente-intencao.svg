@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440pt" height="227pt" viewBox="0 0 440 227" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="440" height="227" fill="#FFFFFF"/>
+<polygon points="140.02,26.50 134.02,29.70 134.02,23.30" fill="#000000" stroke="none"/>
+<polyline points="120.02,26.50 134.02,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="318.74,26.50 312.74,29.70 312.74,23.30" fill="#000000" stroke="none"/>
+<polyline points="298.74,26.50 312.74,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="378.09,75.00 374.89,69.00 381.29,69.00" fill="#000000" stroke="none"/>
+<polyline points="378.09,53.00 378.09,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="258.74,75.00 263.58,70.22 265.40,76.36" fill="#000000" stroke="none"/>
+<polyline points="332.74,53.00 264.49,73.29" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="289.74" y="63.00" text-anchor="end" fill="#000000">falha</text>
+<polyline points="378.09,128.00 378.09,150.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="78.70,150.00 378.09,150.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="78.70,172.00 75.50,166.00 81.90,166.00" fill="#000000" stroke="none"/>
+<polyline points="78.70,150.00 78.70,166.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="218.72,172.00 215.52,166.00 221.92,166.00" fill="#000000" stroke="none"/>
+<polyline points="218.72,150.00 218.72,166.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="358.74,172.00 355.54,166.00 361.94,166.00" fill="#000000" stroke="none"/>
+<polyline points="358.74,150.00 358.74,166.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="7.50" width="120.02" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="60.01" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">Mensagem do chat</text>
+<text x="60.01" y="38.30" text-anchor="middle" fill="#000000">texto do usuário</text>
+<rect x="140.02" y="0.00" width="158.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="219.38" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Memória episódica</text>
+<text x="219.38" y="30.80" text-anchor="middle" fill="#000000">buscar_memoria_episodica</text>
+<text x="219.38" y="45.80" text-anchor="middle" fill="#000000">análises anteriores</text>
+<rect x="318.74" y="0.00" width="118.70" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="378.09" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Classificar escopo</text>
+<text x="378.09" y="30.80" text-anchor="middle" fill="#000000">classificar_escopo</text>
+<text x="378.09" y="45.80" text-anchor="middle" fill="#000000">1 chamada ao LLM</text>
+<rect x="318.74" y="75.00" width="118.70" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="378.09" y="98.30" text-anchor="middle" fill="#000000" font-weight="bold">Extrair parâmetros</text>
+<text x="378.09" y="113.30" text-anchor="middle" fill="#000000">extrair_parametros</text>
+<rect x="140.02" y="75.00" width="158.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="140.02,75.00 298.74,75.00 298.74,128.00 140.02,128.00 140.02,75.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="219.38" y="90.80" text-anchor="middle" fill="#000000" font-weight="bold">LLM indisponível</text>
+<text x="219.38" y="105.80" text-anchor="middle" fill="#000000">escopo = indisponivel</text>
+<text x="219.38" y="120.80" text-anchor="middle" fill="#000000">pede nova tentativa</text>
+<rect x="18.68" y="172.00" width="120.02" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="78.70" y="187.80" text-anchor="middle" fill="#000000" font-weight="bold">Fora do escopo</text>
+<text x="78.70" y="202.80" text-anchor="middle" fill="#000000">recusa escrita</text>
+<text x="78.70" y="217.80" text-anchor="middle" fill="#000000">pelo LLM</text>
+<rect x="158.71" y="172.00" width="120.02" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="218.72" y="187.80" text-anchor="middle" fill="#000000" font-weight="bold">Conversa</text>
+<text x="218.72" y="202.80" text-anchor="middle" fill="#000000">resposta direta,</text>
+<text x="218.72" y="217.80" text-anchor="middle" fill="#000000">sem análise</text>
+<rect x="298.73" y="172.00" width="120.02" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="358.74" y="187.80" text-anchor="middle" fill="#000000" font-weight="bold">Pergunta de dados</text>
+<text x="358.74" y="202.80" text-anchor="middle" fill="#000000">AnalysisIntent →</text>
+<text x="358.74" y="217.80" text-anchor="middle" fill="#000000">dispatch_analysis()</text>
+</svg>

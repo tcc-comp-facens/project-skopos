@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="336pt" height="205pt" viewBox="0 0 336 205" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="336" height="205" fill="#FFFFFF"/>
+<polygon points="186.71,26.50 180.71,29.70 180.71,23.30" fill="#000000" stroke="none"/>
+<polyline points="146.71,26.50 180.71,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="260.07,75.00 256.87,69.00 263.27,69.00" fill="#000000" stroke="none"/>
+<polyline points="260.07,53.00 260.07,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="146.71,101.50 152.71,98.30 152.71,104.70" fill="#000000" stroke="none"/>
+<polyline points="186.71,101.50 152.71,101.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="73.36,150.00 70.16,144.00 76.56,144.00" fill="#000000" stroke="none"/>
+<polyline points="73.36,128.00 73.36,144.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="186.71,176.50 180.71,179.70 180.71,173.30" fill="#000000" stroke="none"/>
+<polyline points="146.71,176.50 180.71,176.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="73.36" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Perceber</text>
+<text x="73.36" y="30.80" text-anchor="middle" fill="#000000">perceive()</text>
+<text x="73.36" y="45.80" text-anchor="middle" fill="#000000">lê o estado</text>
+<rect x="186.71" y="0.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="260.07" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Atualizar memória</text>
+<text x="260.07" y="30.80" text-anchor="middle" fill="#000000">update_working_memory</text>
+<text x="260.07" y="45.80" text-anchor="middle" fill="#000000">incorpora a percepção</text>
+<rect x="186.71" y="75.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="260.07" y="90.80" text-anchor="middle" fill="#000000" font-weight="bold">Propor ações</text>
+<text x="260.07" y="105.80" text-anchor="middle" fill="#000000">propose_actions()</text>
+<text x="260.07" y="120.80" text-anchor="middle" fill="#000000">candidatos (goals)</text>
+<rect x="0.00" y="75.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="73.36" y="90.80" text-anchor="middle" fill="#000000" font-weight="bold">Avaliar e selecionar</text>
+<text x="73.36" y="105.80" text-anchor="middle" fill="#000000">evaluate_and_select()</text>
+<text x="73.36" y="120.80" text-anchor="middle" fill="#000000">escolhe o que executar</text>
+<rect x="0.00" y="150.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="73.36" y="165.80" text-anchor="middle" fill="#000000" font-weight="bold">Executar</text>
+<text x="73.36" y="180.80" text-anchor="middle" fill="#000000">execute()</text>
+<text x="73.36" y="195.80" text-anchor="middle" fill="#000000">memória procedural</text>
+<rect x="186.71" y="150.00" width="146.71" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="260.07" y="165.80" text-anchor="middle" fill="#000000" font-weight="bold">Aprender</text>
+<text x="260.07" y="180.80" text-anchor="middle" fill="#000000">_observe_and_learn()</text>
+<text x="260.07" y="195.80" text-anchor="middle" fill="#000000">memória episódica</text>
+</svg>

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="439pt" height="190pt" viewBox="0 0 439 190" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="439" height="190" fill="#FFFFFF"/>
+<polygon points="138.72,26.50 132.72,29.70 132.72,23.30" fill="#000000" stroke="none"/>
+<polyline points="118.72,26.50 132.72,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="311.44,26.50 305.44,29.70 305.44,23.30" fill="#000000" stroke="none"/>
+<polyline points="291.44,26.50 305.44,26.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="215.08,45.50 215.08,69.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polygon points="373.80,75.00 370.60,69.00 377.00,69.00" fill="#000000" stroke="none"/>
+<polyline points="373.80,53.00 373.80,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="373.80,150.00 370.60,144.00 377.00,144.00" fill="#000000" stroke="none"/>
+<polyline points="373.80,128.00 373.80,144.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="118.72" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="59.36" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Achados</text>
+<text x="59.36" y="30.80" text-anchor="middle" fill="#000000">correlações,</text>
+<text x="59.36" y="45.80" text-anchor="middle" fill="#000000">anomalias, contexto</text>
+<rect x="138.72" y="7.50" width="152.72" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="215.08" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">Propor ações</text>
+<text x="215.08" y="38.30" text-anchor="middle" fill="#000000">1 candidato por ângulo</text>
+<rect x="311.44" y="0.00" width="124.72" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="373.80" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Avaliar e selecionar</text>
+<text x="373.80" y="30.80" text-anchor="middle" fill="#000000">score + LLM</text>
+<text x="373.80" y="45.80" text-anchor="middle" fill="#000000">(intent_summary)</text>
+<rect x="138.72" y="69.00" width="152.72" height="98.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="215.08" y="84.80" text-anchor="middle" fill="#000000" font-weight="bold">Ângulos</text>
+<text x="215.08" y="99.80" text-anchor="middle" fill="#000000">ineficiencias</text>
+<text x="215.08" y="114.80" text-anchor="middle" fill="#000000">eficiencia</text>
+<text x="215.08" y="129.80" text-anchor="middle" fill="#000000">correlacoes_fortes</text>
+<text x="215.08" y="144.80" text-anchor="middle" fill="#000000">tendencias_orcamentarias</text>
+<text x="215.08" y="159.80" text-anchor="middle" fill="#000000">intencao_usuario</text>
+<rect x="311.44" y="75.00" width="124.72" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="373.80" y="90.80" text-anchor="middle" fill="#000000" font-weight="bold">Executar</text>
+<text x="373.80" y="105.80" text-anchor="middle" fill="#000000">reordena as listas</text>
+<text x="373.80" y="120.80" text-anchor="middle" fill="#000000">(nunca filtra)</text>
+<rect x="311.44" y="150.00" width="124.72" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="373.80" y="165.80" text-anchor="middle" fill="#000000" font-weight="bold">TextSynthesizer</text>
+<text x="373.80" y="180.80" text-anchor="middle" fill="#000000">recebe a ênfase</text>
+</svg>
