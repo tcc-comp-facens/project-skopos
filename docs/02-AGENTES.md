@@ -5,147 +5,81 @@
 1. [O que é um Agente?](#o-que-é-um-agente)
 2. [Modelo CoALA](#modelo-coala-cognitive-architectures-for-language-agents)
 3. [Classe Base AgenteCoALA](#classe-base-agentecoala)
-4. [Agente de Interpretação de Intenção (1)](#agente-de-interpretação-de-intenção-1)
-5. [Agentes de Domínio (4)](#agentes-de-domínio-4)
-6. [Agentes Analíticos (2 CoALA + 1 serviço)](#agentes-analíticos-2-coala--1-serviço)
-7. [Agente de Contexto (1)](#agente-de-contexto-1)
-8. [Arquitetura Estrela](#arquitetura-estrela)
-9. [Arquitetura Hierárquica](#arquitetura-hierárquica)
-10. [Regras de Negócio](#regras-de-negócio)
+4. [Agente de Interpretação de Intenção](#agente-de-interpretação-de-intenção)
+5. [Agentes de Saúde (8)](#agentes-de-saúde-8)
+6. [Agente de Orçamento por Subfunção (até 7 instâncias)](#agente-de-orçamento-por-subfunção-até-7-instâncias)
+7. [Agentes Analíticos](#agentes-analíticos)
+8. [Agente de Contexto Orçamentário](#agente-de-contexto-orçamentário)
+9. [Arquitetura Estrela](#arquitetura-estrela)
+10. [Arquitetura Hierárquica](#arquitetura-hierárquica)
+11. [Regras de Negócio](#regras-de-negócio)
+12. [Uso de LLM — resumo](#uso-de-llm--resumo)
+
+> Para o passo a passo de cada topologia, com o código de cada ação, ver [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md) e [arquitetura/arquitetura-hierarquica.md](arquitetura/arquitetura-hierarquica.md). Para a classe base e as chamadas ao LLM, ver [arquitetura/agente-coala-e-llm.md](arquitetura/agente-coala-e-llm.md).
 
 ---
 
 ## O que é um Agente?
 
-Um **agente** é um programa autônomo que percebe o ambiente, toma decisões e age para atingir objetivos. Diferente de uma função comum que recebe input e retorna output, um agente tem:
+Um **agente** é um programa autônomo que percebe o ambiente, toma decisões e age para atingir objetivos. Diferente de uma função comum, que recebe input e retorna output, um agente tem:
 
-- **Autonomia** — decide sozinho o que fazer
-- **Reatividade** — responde a mudanças no ambiente
-- **Proatividade** — age para atingir objetivos, não só reage
-- **Estado interno** — mantém memória e planos de ação
+- **Autonomia**: decide sozinho o que fazer
+- **Reatividade**: responde a mudanças no ambiente
+- **Proatividade**: age para atingir objetivos, não só reage
+- **Estado interno**: mantém memória e planos de ação
 
-```
-┌─────────────────────────────────────────────┐
-│              AGENTE                          │
-│                                             │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│   │ Memória  │  │Percepção │  │  Ação    │ │
-│   │ (o que   │  │ (o que   │  │ (o que   │ │
-│   │  sei)    │  │  observo)│  │  faço)   │ │
-│   └────┬─────┘  └────┬─────┘  └────┬─────┘ │
-│        │             │             │        │
-│        └──────┬──────┘             │        │
-│               ▼                    ▼        │
-│         Deliberação           Execução      │
-│                                             │
-│   Percepção ◄──── Ambiente ────► Ação       │
-└─────────────────────────────────────────────┘
-```
-
-Neste projeto, cada agente é uma classe Python que herda de `AgenteCoALA` e se especializa em uma tarefa: interpretar a intenção do usuário, consultar dados, calcular correlações, detectar anomalias, etc.
+Neste projeto, cada agente é uma classe Python que herda de `AgenteCoALA` e se especializa numa tarefa: interpretar a intenção do usuário, consultar um sistema de informação de saúde, consultar o orçamento de uma subfunção, calcular correlações e anomalias, priorizar achados etc.
 
 ---
 
 ## Modelo CoALA (Cognitive Architectures for Language Agents)
 
-O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023 — *"Cognitive Architectures for Language Agents"*, arXiv:2309.02427) é um framework para organizar agentes baseados em LLM segundo três dimensões: como armazenam informação (memória de curto e longo prazo), qual o espaço de ações disponível (internas e externas), e como decidem o que fazer (um loop de percepção-proposta-avaliação-execução).
+O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023, arXiv:2309.02427) organiza agentes baseados em LLM em três dimensões: como armazenam informação (memória), qual o espaço de ações disponível (internas e externas) e como decidem o que fazer (um loop de percepção, proposta, avaliação e execução).
 
 ### Memória — quatro sistemas
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│   WORKING MEMORY (memória de trabalho)                      │
-│   ─────────────────────────────────────                     │
-│   Buffer ativo de curto prazo — equivalente às antigas       │
-│   "beliefs". Parâmetros da análise, resultados parciais de   │
-│   outros agentes, tudo que está "em uso" agora.               │
-│                                                             │
-│   SEMANTIC MEMORY (memória semântica)                        │
-│   ─────────────────────────────────                          │
-│   Fatos/regras declarativas de domínio — ex: mapeamento       │
-│   subfunção→indicador, limiares de classificação. Lidos via   │
-│   *retrieval* explícito dentro de `propose_actions`, nunca    │
-│   hardcoded direto do módulo no meio da lógica de decisão.    │
-│                                                             │
-│   EPISODIC MEMORY (memória episódica)                        │
-│   ────────────────────────────────                           │
-│   Histórico de ações executadas nesta instância (sucesso e   │
-│   falha), gravado via `_observe_and_learn` — só em memória,   │
-│   descartada ao fim do processo.                              │
-│                                                             │
-│   PROCEDURAL MEMORY (memória procedural)                      │
-│   ──────────────────────────────────                         │
-│   "Como fazer" — lista ordenada de estratégias (callables)    │
-│   por goal; a primeira é a estratégia primária, as demais são │
-│   fallbacks tentados em ordem se a anterior falhar.            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+| Memória | Papel | No código |
+|---------|-------|-----------|
+| **Working** | Buffer ativo de curto prazo: parâmetros da análise, resultados parciais | `working_memory: dict` |
+| **Semantic** | Fatos/regras de domínio (subtipos de um sistema, dimensões válidas, limiares, polaridade de indicadores), lidos por *retrieval* explícito dentro de `propose_actions` | `semantic_memory: dict` |
+| **Episodic** | Histórico de ações executadas (sucesso e falha), gravado por `_observe_and_learn`. O agente de intenção também recupera análises passadas do Neo4j como episódios | `episodic_memory: list` |
+| **Procedural** | "Como fazer": lista ordenada de estratégias por goal (a primeira é a primária, as demais são fallbacks) | `procedural_memory: dict[str, list[Callable]]` |
 
 ### Espaço de ações
 
-- **Internas** (reasoning/retrieval/learning) — processamento sobre a working memory, leitura de semantic memory, gravação em episodic memory. Inclui chamadas ao LLM para raciocinar sobre o estado atual — o LLM é parte da procedural memory implícita do agente, não do ambiente. Ex.: calcular Spearman, cruzar dados, classificar tendência, chamar o LLM para classificar escopo/gerar texto.
-- **Externas** (grounding) — interação com o ambiente fora da cognição do agente: Neo4j, WebSocket, comunicação lateral entre agentes. Ex.: consultar despesas no Neo4j.
+- **Internas** (reasoning/retrieval/learning): processamento sobre a working memory, leitura de semantic memory, gravação em episodic memory. Inclui chamadas ao LLM para raciocinar sobre o estado atual. Ex.: calcular Spearman, cruzar dados, escolher uma dimensão de consulta, gerar texto.
+- **Externas** (grounding): interação com o ambiente: Neo4j, WebSocket, delegação a outro agente. Ex.: consultar `IndicadorSaude` no Neo4j.
 
-### O Ciclo CoALA
-
-Todo agente executa o mesmo ciclo de raciocínio:
+### O ciclo CoALA
 
 ```
-    ┌──────────┐
-    │ PERCEBER │ ◄─── Observa o ambiente (lê working memory, consulta Neo4j)
-    └────┬─────┘
-         ▼
-    ┌──────────────┐
-    │  ATUALIZAR   │ ◄─── Incorpora novas informações à working memory
-    │WORKING MEMORY│
-    └────┬─────────┘
-         ▼
-    ┌──────────────┐
-    │   PROPOR     │ ◄─── Gera candidatos de ação (goals), fazendo
-    │   AÇÕES      │      retrieval de semantic memory onde relevante
-    └────┬─────────┘
-         ▼
-    ┌──────────────┐
-    │  AVALIAR E   │ ◄─── Seleciona quais candidatos executar
-    │  SELECIONAR  │
-    └────┬─────────┘
-         ▼
-    ┌──────────┐
-    │ EXECUTAR │ ◄─── Executa cada ação via procedural memory,
-    └──────────┘      registrando o episódio (observe/learn)
+PERCEBER → ATUALIZAR WORKING MEMORY → PROPOR AÇÕES → AVALIAR E SELECIONAR → EXECUTAR
+   │                                       │                 │                  │
+   lê parâmetros               candidatos de ação     escolhe quais     roda cada ação via
+   da working memory           (com retrieval de      executar          procedural memory e
+                               semantic memory)                         registra o episódio
 ```
 
-**Exemplo concreto** — `AgenteVigilanciaEpidemiologica`:
+**Exemplo concreto: `AgenteSINAN`**
 
 ```
-1. PERCEBER:     working_memory já tem analysis_id="abc", período 2019-2021
-2. ATUALIZAR:    working_memory = {analysis_id: "abc", date_from: 2019, date_to: 2021}
-3. PROPOR AÇÕES: "Tenho os parâmetros → proponho consultar_despesas E
-                  consultar_indicadores" (retrieval de semantic_memory
-                  para saber subfunção=305, tipos=["dengue","covid"])
-4. AVALIAR/SEL.: as duas ações propostas são selecionadas (não há
-                  candidatos concorrentes a arbitrar neste agente)
-5. EXECUTAR:     → Query Neo4j: DespesaSIOPS subfunção 305
-                  → Query Neo4j: IndicadorDataSUS tipo IN [dengue, covid]
-                  → working_memory["despesas"] = [...]
-                  → working_memory["indicadores"] = [...]
+1. PERCEBER:     working_memory tem analysis_id="abc", período 2019–2024
+2. ATUALIZAR:    working_memory = {analysis_id, date_from: 2019, date_to: 2024,
+                                   intent_summary: "dengue por faixa etária"}
+3. PROPOR:       retrieval de semantic_memory["dimensoes_validas"] = [POR_FAIXA_ETARIA, POR_SEXO]
+                 → 3 candidatos de "consultar_indicadores":
+                   sem quebra | quebra por faixa etaria | quebra por sexo
+4. AVALIAR/SEL.: score determinístico ("faixa etaria" aparece na intenção → 1.0)
+                 + arbitragem opcional via LLM → escolhe POR_FAIXA_ETARIA
+5. EXECUTAR:     Neo4j: IndicadorSaude {sistema:"sinan"} -[:POR_FAIXA_ETARIA]-> FaixaEtaria
+                 → working_memory["indicadores"] = [...]
 ```
 
-### O Ciclo CoALA no Código
-
-O método `run_coala_cycle()` da classe base executa o ciclo completo:
+### O ciclo no código
 
 ```python
 # backend/agents/base.py — AgenteCoALA
-
 def run_coala_cycle(self) -> None:
-    """Ciclo CoALA completo.
-
-    perceive → update_working_memory → propose_actions →
-    evaluate_and_select → execute (que já embute observe/learn por ação).
-    """
     perception = self.perceive()
     self.update_working_memory(perception)
     candidates = self.propose_actions()
@@ -153,144 +87,19 @@ def run_coala_cycle(self) -> None:
     self.execute(actions)
 ```
 
-Cada passo corresponde a um método que as subclasses sobrescrevem:
+A implementação base de `evaluate_and_select` é um passthrough, que seleciona todos os candidatos. Os agentes com **deliberação real** a sobrescrevem: os agentes de saúde com dimensões válidas e o agente de orçamento (escolha de dimensão), além do `AgentePriorizacaoAnalitica` (escolha de ângulo de ênfase). Orquestrador, coordenador e supervisores mantêm o passthrough de propósito: a ordem das macro-ações é imposta por dependência de dados, não por arbitragem.
 
-**1. Perceber** — o agente lê a working memory e extrai o que é relevante:
-
-```python
-# Implementação padrão (retorna vazio)
-def perceive(self) -> dict:
-    return {}
-
-# Implementação real (agente de domínio)
-def perceive(self) -> dict:
-    return {
-        "analysis_id": self.working_memory.get("analysis_id"),
-        "date_from": self.working_memory.get("date_from"),
-        "date_to": self.working_memory.get("date_to"),
-    }
-```
-
-**2. Atualizar working memory** — incorpora novas informações (mesmo para todos):
-
-```python
-def update_working_memory(self, perception: dict) -> None:
-    self.working_memory.update(perception)
-```
-
-**3. Propor ações** — aqui está a **tomada de decisão**. O agente avalia a working memory e propõe candidatos de ação. Cada agente tem sua própria lógica:
-
-```python
-# Agente de domínio — "se tenho parâmetros, proponho consultar"
-def propose_actions(self) -> list[dict]:
-    actions = []
-    if self.working_memory.get("analysis_id") and self.working_memory.get("date_from") is not None:
-        actions.append({"goal": "consultar_despesas"})
-        actions.append({"goal": "consultar_indicadores"})
-    # Se NÃO tem parâmetros → actions fica vazia → agente não faz nada
-    return actions
-
-# AgenteCorrelacao — "se tenho dados cruzados, proponho calcular"
-def propose_actions(self) -> list[dict]:
-    if self.working_memory.get("dados_cruzados"):
-        return [{"goal": "calcular_correlacoes"}]
-    return []
-
-# TextSynthesizer — serviço (não é agente CoALA), não usa propose_actions()
-# O caller invoca diretamente: sintetizador.generate(correlacoes, anomalias, contexto)
-```
-
-**4. Avaliar e selecionar** — decide quais candidatos executar (1 candidato = 1 ação selecionada, na maioria dos agentes):
-
-```python
-def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
-    """Neste sistema não há candidatos concorrentes com score real a
-    arbitrar — evaluate e select colapsam num único passo por decisão
-    intencional (documentado no código, não por omissão)."""
-    return [dict(c, status="pending") for c in candidates]
-```
-
-**5. Executar** — percorre cada ação pendente pela procedural memory, com recuperação de falha:
-
-```python
-def execute(self, actions: list[dict]) -> None:
-    for action in actions:
-        goal = action.get("goal")
-        strategies = self.procedural_memory.get(goal, [])
-        for i, strategy in enumerate(strategies):
-            try:
-                strategy(action)
-            except ActionFailure as exc:
-                action["status"] = "failed"
-                self._failed_actions.append(dict(action, reason=exc.reason))
-                self._observe_and_learn(action, "failed", detail=exc.reason)
-                continue  # tenta a próxima estratégia (fallback)
-            else:
-                action["status"] = "completed"
-                self._observe_and_learn(action, "completed")
-                break
-```
-
-### A exceção ActionFailure
-
-Quando algo dá errado, o agente encapsula o erro com contexto da ação:
-
-```python
-# backend/agents/base.py
-class ActionFailure(Exception):
-    def __init__(self, action: dict, reason: str):
-        self.action = action
-        self.reason = reason
-        super().__init__(f"Action failed: {reason}")
-
-# Uso em um agente de domínio:
-def _act_consultar_despesas(self, action: dict) -> None:
-    try:
-        despesas = self.neo4j_client.get_despesas(...)
-    except Exception as e:
-        raise ActionFailure(action, str(e)) from e
-```
-
-### Recuperação de Falhas
-
-Quando uma estratégia falha, `procedural_memory[goal]` pode ter uma estratégia de fallback registrada em seguida:
-
-```
-    Executando ação "consultar_despesas"
-              │
-              ▼
-    ┌─────────────────┐
-    │  Neo4j offline!  │ ──► ActionFailure levantada
-    └────────┬────────┘
-             ▼
-    ┌─────────────────┐
-    │ Próxima          │ ──► Tenta a estratégia de fallback registrada:
-    │ estratégia       │     "_act_fallback_despesas" — retorna lista vazia
-    └────────┬────────┘
-             ▼
-    ┌─────────────────┐
-    │ Agente continua  │ ──► working_memory["despesas"] = []
-    │ em estado válido │     (orquestrador recebe dados parciais)
-    └─────────────────┘
-```
-
-No código, a recuperação é implementada como uma segunda estratégia registrada para o mesmo goal:
+`execute()` percorre `procedural_memory[goal]` em ordem. Se uma estratégia levanta `ActionFailure`, registra o episódio como falha e tenta a próxima (fallback). Se todas falharem, a ação fica `"failed"` e o laço segue. Essa propriedade sustenta a degradação graciosa em todos os níveis.
 
 ```python
 # Agente de domínio — procedural_memory com fallback
 self.procedural_memory = {
-    "consultar_despesas": [
-        self._act_consultar_despesas,      # estratégia primária
-        self._act_fallback_despesas,        # fallback: lista vazia
+    "consultar_indicadores": [
+        self._act_consultar_indicadores,   # primária: consulta o Neo4j
+        self._act_fallback_indicadores,    # fallback: working_memory["indicadores"] = []
     ],
-    ...
 }
-
-def _act_fallback_despesas(self, action: dict) -> None:
-    self.working_memory["despesas"] = []    # dados parciais em vez de falha total
 ```
-
-O agente **nunca fica em estado indefinido**. Se todas as estratégias registradas falharem, a ação é marcada `"failed"` e o laço segue para a próxima ação — o erro é reportado ao orquestrador/supervisor via `_failed_actions`, que decide como continuar.
 
 ---
 
@@ -298,85 +107,67 @@ O agente **nunca fica em estado indefinido**. Se todas as estratégias registrad
 
 **Arquivo:** `backend/agents/base.py`
 
-Todos os agentes herdam desta classe (agentes de domínio, analíticos, contexto, o agente de interpretação de intenção, e os dois orquestradores/coordenador/supervisores). Ela fornece o esqueleto do ciclo CoALA:
+Todos os agentes herdam desta classe: intenção, saúde, orçamento, analíticos, contexto, além do orquestrador, do coordenador e dos supervisores. A exceção é o `TextSynthesizer`, que é um serviço.
 
 ```python
 class AgenteCoALA:
-    agent_id: str                                          # ID único (ex: "star-vigilancia-a1b2c3d4")
-    working_memory: dict[str, Any]                         # Buffer de curto prazo
-    semantic_memory: dict[str, Any]                        # Fatos/regras de domínio
-    episodic_memory: list[dict]                            # Histórico de ações (sucesso/falha)
-    procedural_memory: dict[str, list[Callable[[dict], None]]]  # Estratégias por goal
-    _failed_actions: list[dict]                            # Ações que falharam
+    agent_id: str
+    working_memory: dict[str, Any]
+    semantic_memory: dict[str, Any]
+    episodic_memory: list[dict]
+    procedural_memory: dict[str, list[Callable[[dict], None]]]
+    _failed_actions: list[dict]
+
+class ActionFailure(Exception):
+    def __init__(self, action: dict, reason: str): ...
 ```
 
-### Métodos que cada agente sobrescreve
-
-| Método | O que faz | Exemplo |
-|--------|-----------|---------|
-| `perceive()` | Observa o ambiente | Lê parâmetros da working memory |
-| `propose_actions()` | Decide candidatos de ação | "Tenho dados → proponho calcular correlações" |
-| `evaluate_and_select(candidates)` | Seleciona o que executar | Passthrough na maioria dos agentes (sem candidatos concorrentes) |
-| `_act_*(action)` | Executa uma ação | Roda query no Neo4j, chama o LLM |
-| `_act_fallback_*(action)` | Trata falha (2ª estratégia) | Retorna lista vazia como fallback |
+| Método | O que faz |
+|--------|-----------|
+| `perceive()` | Lê o ambiente/working memory |
+| `propose_actions()` | Gera candidatos de ação (`{"goal": ...}`) |
+| `evaluate_and_select(candidates)` | Seleciona o que executar (passthrough por padrão) |
+| `_act_*(action)` | Estratégia de uma ação, registrada em `procedural_memory` |
+| `_act_fallback_*(action)` | Estratégia alternativa (dados parciais em vez de falha) |
 
 ### Padrão de IDs
 
-Formato: `{topologia}-{papel}-{uuid_hex[:8]}`
+Formato `{topologia}-{papel}-{uuid_hex[:8]}`:
 
 ```
-star-vigilancia-a1b2c3d4     ← agente de vigilância na topologia estrela
-hier-sup-dominio-m3n4o5p6    ← supervisor de domínio na hierárquica
-star-correlacao-e5f6g7h8     ← agente de correlação na estrela
-intent-9f8e7d6c              ← agente de interpretação de intenção (uma instância por sessão de chat, não amarrado a uma topologia)
+star-orch-1a2b3c4d             ← OrquestradorEstrela
+star-sinan-a1b2c3d4            ← agente de saúde SINAN na estrela
+star-orcamento-305-e5f6g7h8    ← agente de orçamento da subfunção 305
+hier-coord-9z8y7x6w            ← CoordenadorGeral
+hier-sup-saude-m3n4o5p6        ← SupervisorSaude
+hier-analitico-q7r8s9t0        ← AgenteAnalitico na hierárquica
+intent-9f8e7d6c                ← agente de intenção (por turno de chat, fora das topologias)
 ```
 
 ---
 
-## Agente de Interpretação de Intenção (1)
-
-### AgenteInterpretacaoIntencao — Guardrail de Escopo + Extração via LLM
+## Agente de Interpretação de Intenção
 
 **Arquivo:** `agents/intent/agente_interpretacao_intencao.py`
 
-Camada de entrada compartilhada pelas duas arquiteturas quando a análise é disparada via chat (`WS /ws/chat/{sessionId}`). Substitui totalmente um design anterior baseado em regex-primário/LLM-fallback — hoje **não há regex neste módulo**: toda mensagem do usuário passa pelo LLM.
+É a porta de entrada do sistema. Cada mensagem do chat (`WS /ws/chat/{sessionId}`) passa por ele **antes** de qualquer topologia ser instanciada. **Não há regex**: toda mensagem passa pelo LLM.
 
-**Duas ações, uma única chamada LLM:**
+**Ações do ciclo:**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│              AgenteInterpretacaoIntencao.parse(texto)             │
-│                                                                   │
-│  propose_actions() propõe as duas ações juntas — execute() as    │
-│  roda em ordem na mesma passada do ciclo CoALA:                   │
-│                                                                   │
-│  1. classificar_escopo                                            │
-│     ─────────────────                                            │
-│     Única chamada LLM do ciclo. Prompt combinado pede ao LLM:     │
-│     (a) classificar se a mensagem está DENTRO do escopo do        │
-│         assistente (dados orçamentários/saúde pública de          │
-│         Sorocaba-SP) e (b) — se estiver dentro — já extrair       │
-│         date_from/date_to/health_params/intent_summary na         │
-│         MESMA resposta JSON (decisão de custo: evita 2 chamadas   │
-│         de rede por mensagem).                                    │
-│     → grava working_memory["escopo"] = "dentro" | "fora"          │
-│     → grava working_memory["_llm_parsed"] com a resposta bruta    │
-│                                                                   │
-│  2. extrair_parametros                                            │
-│     ──────────────────                                           │
-│     Ação puramente interna — NÃO chama o LLM de novo. Só copia    │
-│     os campos já obtidos em (1) para working_memory quando        │
-│     escopo == "dentro". Existe como ação própria (e não fundida   │
-│     com a anterior) para que o guardrail apareça como um passo    │
-│     auditável e independente em episodic_memory.                  │
-│                                                                   │
-│  Se escopo == "fora": nenhum parâmetro é extraído, e parse()      │
-│  retorna uma recusa — nenhuma arquitetura (estrela/hierárquica)   │
-│  chega a ser instanciada pelo caller.                             │
-└─────────────────────────────────────────────────────────────────┘
-```
+| Ação | Tipo | O que faz |
+|------|------|-----------|
+| `buscar_memoria_episodica` | Externa | Recupera as últimas análises (`Analise` no Neo4j, via `get_past_analises`) e as grava como episódios. Só quando há `neo4j_client` |
+| `classificar_escopo` | Interna (LLM) | **Única chamada LLM**: classifica a mensagem em 3 vias e, se for pergunta de dados, já extrai os parâmetros na mesma resposta JSON |
+| `extrair_parametros` | Interna | Copia os parâmetros já extraídos para a working memory. É ação própria para que o guardrail apareça como passo auditável em `episodic_memory` |
 
-**Fallback (LLM indisponível ou resposta inválida):** `procedural_memory["classificar_escopo"]` registra uma segunda estratégia (`_act_fallback_classificar_escopo`) que grava `working_memory["escopo"] = "indisponivel"` — distinto de `"fora"`: é uma falha técnica, não uma recusa de escopo, e gera uma mensagem diferente ao usuário ("não consegui interpretar agora" em vez de "isso está fora do meu escopo").
+**Classificação em 3 vias:**
+- `em_escopo=false`: assunto não relacionado, recusado com resposta escrita pelo próprio LLM.
+- `em_escopo=true, precisa_analise=false`: saudação, "o que você faz?" e afins. Responde direto, sem disparar análise.
+- `em_escopo=true, precisa_analise=true`: pergunta de dados. Extrai parâmetros e dispara a análise.
+
+**Fallback:** se o LLM falhar, `_act_fallback_classificar_escopo` grava `escopo = "indisponivel"`. É uma falha técnica, com mensagem distinta de uma recusa de escopo.
+
+**Inferência "natural":** sem período explícito, usa todo o intervalo disponível (`min_year`/`max_year` vindos de `GET /api/data-range`). Sem tema explícito, usa todos os indicadores válidos. As flags `date_range_inferred`/`health_params_inferred` registram a suposição.
 
 **Saída — `AnalysisIntent`:**
 
@@ -385,384 +176,155 @@ Camada de entrada compartilhada pelas duas arquiteturas quando a análise é dis
 class AnalysisIntent:
     date_from: int
     date_to: int
-    health_params: list[str]
-    intent_summary: str   # resumo de 1 frase da intenção do usuário
+    health_params: list[str]        # tokens de VALID_HEALTH_PARAMS
+    intent_summary: str             # resumo de 1 frase, insumo da deliberação dos agentes
+    date_range_inferred: bool
+    health_params_inferred: bool
 ```
 
-`intent_summary` é o campo que estende o antigo `AnalysisParams` — carregado no dict `params` repassado tanto ao `OrquestradorEstrela` quanto ao `CoordenadorGeral` (chave `intent_summary`), para eventual uso por etapas futuras de priorização de achados (ver `PLANO_REFATORACAO.md`).
+`VALID_HEALTH_PARAMS` contém os tokens que ativam agentes: `dengue`, `covid`, `vacinacao`, `internacoes`, `mortalidade`, os demais 8 agravos do SINAN, `nascidos_vivos`, `producao_ambulatorial` e os 12 subtipos do CNES.
 
-**Segurança:** a mensagem do usuário é tratada como dado a ser classificado/interpretado, nunca como instrução — mitigação de prompt injection. A resposta do LLM é validada por parsing JSON estrito (só as chaves esperadas: `em_escopo`, `date_from`, `date_to`, `health_params`, `intent_summary`) antes de qualquer uso.
-
-**Observabilidade:** a chamada ao LLM é rotulada `caller=f"{self.agent_id}:classificar_e_extrair"` — aparece nos logs de `core/llm_client.py` identificando exatamente qual instância do agente e com qual propósito disparou a chamada.
-
-**Interface pública:**
-
-```python
-def parse(self, texto: str, reference_year: int | None = None) -> IntentResult:
-    """Retorna IntentResult(success, params, missing, clarification_message,
-    interpreted_via). Sem regex — toda mensagem não-vazia passa pelo
-    guardrail de escopo antes de qualquer extração de parâmetro."""
-```
-
-Chamado por `api/chat_websocket.py` a cada turno do chat.
+**Segurança:** a mensagem do usuário é tratada como dado, nunca como instrução, para mitigar prompt injection. A resposta do LLM passa por parsing JSON estrito, aceitando só as chaves esperadas.
 
 ---
 
-## Agentes de Domínio (4)
+## Agentes de Saúde (8)
 
-Os agentes de domínio são os "coletores de dados". Cada um consulta o Neo4j para buscar despesas de uma subfunção específica e indicadores de saúde correspondentes.
+Um agente por **sistema de informação do DATASUS**, todos em `agents/domain/`. Cada um consulta `IndicadorSaude {sistema: <sis>}` no Neo4j via `neo4j_client.get_indicadores_por_sistema`. **Nenhum consulta despesas**: orçamento é responsabilidade do `AgenteOrcamentoSubfuncao`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    AGENTES DE DOMÍNIO                           │
-│                                                                 │
-│  ┌─────────────────┐  ┌─────────────────┐                      │
-│  │ Vigilância       │  │ Saúde           │                      │
-│  │ Epidemiológica   │  │ Hospitalar      │                      │
-│  │                  │  │                 │                      │
-│  │ Subfunção: 305   │  │ Subfunção: 302  │                      │
-│  │ Indicadores:     │  │ Indicadores:    │                      │
-│  │ • dengue         │  │ • internações   │                      │
-│  │ • covid          │  │                 │                      │
-│  └─────────────────┘  └─────────────────┘                      │
-│                                                                 │
-│  ┌─────────────────┐  ┌─────────────────┐                      │
-│  │ Atenção          │  │ Mortalidade     │                      │
-│  │ Primária         │  │                 │                      │
-│  │                  │  │ Subfunção: TODAS│                      │
-│  │ Subfunção: 301   │  │ (transversal)   │                      │
-│  │ Indicadores:     │  │ Indicadores:    │                      │
-│  │ • vacinação      │  │ • mortalidade   │                      │
-│  └─────────────────┘  └─────────────────┘                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+| Agente | Arquivo | `sistema` | Subtipos | Dimensões válidas (deliberação) |
+|--------|---------|-----------|----------|---------------------------------|
+| `AgenteSINAN` | `agente_sinan.py` | `sinan` | 9 agravos: dengue, chikungunya, sífilis (adquirida/gestante/congênita), coqueluche, hepatites virais, tuberculose, hanseníase | `POR_FAIXA_ETARIA`, `POR_SEXO` |
+| `AgenteSIM` | `agente_sim.py` | `sim` | `mortalidade` | `POR_FAIXA_ETARIA`, `POR_CAPITULO_CID` |
+| `AgenteSIH` | `agente_sih.py` | `sih` | `internacoes` | `POR_CAPITULO_CID` |
+| `AgenteSIPNI` | `agente_sipni.py` | `sipni` | `cobertura_vacinal`, `doses_aplicadas` | `COBERTURA_VACINAL`, `DOSES_APLICADAS` |
+| `AgenteSINASC` | `agente_sinasc.py` | `sinasc` | `nascidos_vivos` | `POR_FAIXA_ETARIA`, `POR_FAIXA_PESO` |
+| `AgenteCNES` | `agente_cnes.py` | `cnes` | 12 subtipos (leitos, profissionais, estabelecimentos, equipes, equipamentos…) | 6 dimensões (`POR_TIPO_ESTABELECIMENTO`, `POR_OCUPACAO`, `POR_TIPO_EQUIPE`, …) |
+| `AgenteSIA` | `agente_sia.py` | `sia` | `producao_ambulatorial` | — (consulta única) |
+| `AgenteCOVID` | `agente_covid.py` | `covid` | `casos`, `obitos` | — (consulta única) |
 
-### Como funciona um agente de domínio
+As dimensões válidas vêm de `db/query_builder.py::SISTEMA_DIMENSOES`, carregadas em `semantic_memory["dimensoes_validas"]`.
 
-Todos seguem o mesmo padrão. Vamos usar o **AgenteVigilanciaEpidemiologica** como exemplo:
+### Deliberação de dimensão
+
+Os agentes com dimensões válidas implementam deliberação real, em dois estágios, compartilhada em `agents/domain/query_planning.py`:
 
 ```
-Orquestrador chama: agente.query(analysis_id="abc", date_from=2019, date_to=2021)
-                          │
-                          ▼
-              ┌───────────────────────┐
-              │  update_working_memory│
-              │  working_memory = {   │
-              │    analysis_id: "abc" │
-              │    date_from: 2019    │
-              │    date_to: 2021      │
-              │  }                    │
-              └──────────┬────────────┘
-                         ▼
-              ┌───────────────────────┐
-              │  perceive()           │
-              │  "Tenho analysis_id,  │
-              │   date_from, date_to" │
-              └──────────┬────────────┘
-                         ▼
-              ┌───────────────────────┐
-              │  propose_actions()    │
-              │  "Proponho:           │
-              │   - consultar_despesas│
-              │   - consultar_        │
-              │     indicadores"      │
-              └──────────┬────────────┘
-                         ▼
-              ┌───────────────────────┐
-              │  evaluate_and_select()│
-              │  actions = [          │
-              │   {consultar_despesas,│
-              │    status: pending},  │
-              │   {consultar_         │
-              │    indicadores,       │
-              │    status: pending}   │
-              │  ]                    │
-              └──────────┬────────────┘
-                         ▼
-              ┌───────────────────────┐
-              │  execute()            │
-              │                       │
-              │  Ação 1:              │
-              │  Neo4j ──► despesas   │
-              │  WHERE subfuncao=305  │
-              │  AND ano >= 2019      │
-              │  AND ano <= 2021      │
-              │                       │
-              │  Ação 2:              │
-              │  Neo4j ──► indicadores│
-              │  WHERE tipo IN        │
-              │  ["dengue", "covid"]  │
-              └──────────┬────────────┘
-                         ▼
-              ┌───────────────────────┐
-              │  Retorna:             │
-              │  {                    │
-              │   despesas: [         │
-              │    {subfuncao: 305,   │
-              │     ano: 2019,        │
-              │     valor: 28350000}  │
-              │   ],                  │
-              │   indicadores: [      │
-              │    {tipo: "dengue",   │
-              │     ano: 2019,        │
-              │     valor: 12847}     │
-              │   ]                   │
-              │  }                    │
-              └───────────────────────┘
+propose_actions()                       evaluate_and_select()
+─────────────────                       ──────────────────────
+propose_dimensao_candidatos()           arbitrar_dimensao()
+  → "sem quebra" + 1 por dimensão         1. score determinístico: a dimensão aparece
+                                             no intent_summary? (1.0 / 0.0; "sem quebra" = 0.5)
+                                          2. use_llm=True → LLM escolhe entre os candidatos
+                                             (caller "{agent_id}:arbitrar_dimensao")
+                                          3. qualquer falha do LLM → maior score
+                                        → só UM candidato é executado (uma consulta ao Neo4j)
 ```
 
-### Tabela dos 4 agentes de domínio
-
-| Agente | Arquivo | Subfunção | Indicadores | Particularidade |
-|--------|---------|-----------|-------------|-----------------|
-| `AgenteVigilanciaEpidemiologica` | `domain/vigilancia_epidemiologica.py` | 305 | dengue, covid | Filtra subfunção 305 das despesas |
-| `AgenteSaudeHospitalar` | `domain/saude_hospitalar.py` | 302 | internacoes | Filtra subfunção 302 |
-| `AgenteAtencaoPrimaria` | `domain/atencao_primaria.py` | 301 | vacinacao | Filtra subfunção 301 |
-| `AgenteMortalidade` | `domain/mortalidade.py` | TODAS | mortalidade | **Transversal** — retorna despesas de todas as subfunções |
+O LLM decide **o quê** filtrar e **nunca escreve Cypher**. `db/query_builder.py` monta a query parametrizada e só interpola o nome do relacionamento depois de validá-lo contra a allowlist. Uma dimensão inválida cai para "sem quebra".
 
 **Comportamento comum:**
-- Recebem `(agent_id, neo4j_client)` no construtor
-- Método público: `query(analysis_id, date_from, date_to)` → `{"despesas": [...], "indicadores": [...]}`
-- Retornam listas vazias (sem exceção) quando não há dados
-- Se o Neo4j falhar: a estratégia de fallback registrada retorna listas vazias
-- Logam os parâmetros da consulta (subfunção/tipos, período) **antes** de cada query, e o resultado (contagem) depois — ver `core/llm_client.py` e `agents/base.py` para o resto da instrumentação de execução
+- Interface pública: `query(analysis_id, date_from, date_to, intent_summary=None, health_params=None, use_llm=True)` → `{"indicadores": [...]}`.
+- Sem dados, retornam lista vazia sem exceção. Se o Neo4j falhar, o fallback grava lista vazia.
+- Cada consulta Cypher é registrada em `neo4j_client.query_log` e anexada ao resultado do agente, de onde a aba técnica do frontend a exibe.
 
-**Decisão de design deliberada, não lacuna:** qual subfunção/indicador cada agente busca é hardcoded (constantes de módulo), sem LLM envolvido — isso é intencional; a decisão "o que buscar" já é conhecida estaticamente hoje. O `PLANO_REFATORACAO.md` (Etapa 2, ainda não implementada) propõe introduzir LLM aqui como preparação arquitetural para quando a base de dados crescer com fontes/indicadores mais ambíguos — não como necessidade atual.
+> **Nota:** `query_planning.py` ainda contém `plan_query()` (planejamento de consulta via LLM, controlado pela flag `USE_LLM_QUERY_PLANNING`), da Etapa 2 do [plano de refatoração](historico/PLANO_REFATORACAO.md). Desde a migração do modelo de dados (`f4838d2`), **nenhum agente chama `plan_query`**. A flag não tem efeito no fluxo atual, e o contador exposto em `GET /api/metrics/query-planning-cache` permanece zerado. A decisão equivalente hoje é a deliberação de dimensão acima, controlada por `use_llm`.
 
 ---
 
-## Agentes Analíticos (2 CoALA + 1 serviço)
+## Agente de Orçamento por Subfunção (até 7 instâncias)
 
-Os agentes analíticos processam dados **em memória** — não acessam Neo4j. Recebem dados já coletados pelos agentes de domínio e produzem análises.
+**Arquivo:** `agents/domain/agente_orcamento.py`, classe `AgenteOrcamentoSubfuncao`
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   AGENTES ANALÍTICOS                            │
-│                                                                 │
-│  Dados dos agentes     ┌──────────────┐                        │
-│  de domínio ──────────►│ Correlação   │──► Spearman por par     │
-│  (dados cruzados)      │              │    subfunção-indicador  │
-│                        └──────────────┘                        │
-│                                                                 │
-│  Dados dos agentes     ┌──────────────┐                        │
-│  de domínio ──────────►│ Anomalias    │──► alto_gasto +        │
-│  (dados cruzados)      │              │    baixo_resultado     │
-│                        └──────────────┘                        │
-│                                                                 │
-│  Correlações +         ┌──────────────┐                        │
-│  Anomalias +  ────────►│ Sintetizador │──► Texto via LLM       │
-│  Contexto              │ (serviço)    │    (streaming chunks)  │
-│                        └──────────────┘                        │
-└─────────────────────────────────────────────────────────────────┘
-```
+Classe **parametrizada** por subfunção (`subfuncao_codigo`, `subfuncao_nome`). As topologias instanciam uma por subfunção relevante à análise, entre 122, 301, 302, 303, 304, 305 e 306. Consulta `DespesaAnual` (`valorProcessado`, execução real) via `get_despesas_por_subfuncao`.
 
-### AgenteCorrelacao — Correlação Estatística (Spearman)
+| Goal | Deliberação | O que faz |
+|------|-------------|-----------|
+| `consultar_despesas` | **Sim**: candidatos "sem quebra" / `POR_NATUREZA` / `POR_APLICACAO`, arbitrados por `arbitrar_dimensao` | Despesas da subfunção no período |
+| `analisar_tendencia` | Não | Classifica a tendência do período reaproveitando `AgenteContextoOrcamentario.analyze_trends` |
+| `consultar_variacao_anual` | Não | Lê o relacionamento `VARIACAO_ANUAL` pré-computado no ETL (informativo, coexiste com a tendência) |
 
-**Arquivo:** `agents/analytical/correlacao.py`
+Como a lista de candidatos mistura três goals, `evaluate_and_select` particiona por goal e só arbitra o grupo `consultar_despesas`.
 
-Calcula correlação de Spearman entre gastos e indicadores de saúde. Spearman é baseado em ranks — robusto a outliers, captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos. **100% determinístico (scipy) — sem LLM, decisão intencional**: não há embasamento para substituir cálculo estatístico por geração de linguagem.
+---
+
+## Agentes Analíticos
+
+Processam dados **em memória**, sem acessar o Neo4j.
+
+### AgenteAnalitico — Correlação (Spearman) + Anomalias
+
+**Arquivo:** `agents/analytical/analitico.py`
+
+Consolida os antigos `AgenteCorrelacao` e `AgenteAnomalias` num único agente CoALA com duas ações de reasoning sobre o mesmo `dados_cruzados`. **100% determinístico (scipy), sem LLM**: correlação e estatística nunca são calculadas pelo LLM.
+
+**`calcular_correlacao`**: Spearman por par (subfunção, indicador). Spearman é baseado em ranks, robusto a outliers e a amostras pequenas.
 
 ```
-Entrada: dados cruzados (despesa × indicador por subfunção e ano)
-┌──────────────────────────────────────────────────────┐
-│  subfunção 305 × dengue:                             │
-│    2019: despesa=28.3M, indicador=12847              │
-│    2020: despesa=45.6M, indicador=5231               │
-│    2021: despesa=4.9M,  indicador=3412               │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────┐
-│  n=3 pontos (≥ 2) → calcula Spearman                 │
-│                                                      │
-│  Spearman = -0.87  (relação monotônica, por ranks)   │
-│                                                      │
-│  Classificação (baseada em |Spearman|):              │
-│  |0.87| = 0.87 ≥ 0.7 → "alta"                       │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-Saída:
-{
-  subfuncao: 305,
-  tipo_indicador: "dengue",
-  spearman: -0.87,
-  classificacao: "alta",
-  n_pontos: 3
-}
+|r| ≥ 0.7  → "alta"     (limiar_alta,  semantic_memory)
+|r| ≥ 0.4  → "média"    (limiar_media, semantic_memory)
+|r| < 0.4  → "baixa"
 ```
 
-**Classificação (baseada no |Spearman|, limiares em `semantic_memory`):**
+- Menos de 2 pontos ou arrays constantes → 0.0. Resultado limitado a [-1, 1].
+- Cada correlação ganha uma **leitura de polaridade** (`_interpretar_correlacao`), por exemplo "positiva — LEITURA INDESEJÁVEL: mais gasto acompanhou mais casos". Sem isso, o LLM do sintetizador chegou a inverter o sentido de uma correlação gasto × mortalidade.
 
-```
-|r| ≥ 0.7  ──►  "alta"     (relação forte)
-|r| ≥ 0.4  ──►  "média"    (relação moderada)
-|r| < 0.4  ──►  "baixa"    (relação fraca)
-```
+**`detectar_anomalia`**: compara cada ano com a **mediana** do par, considerando a polaridade do indicador:
 
-**Regras especiais:**
-- Pares com < 2 pontos de dados → retorna 0.0 (não é possível calcular correlação)
-- Arrays constantes (todos os valores iguais) → retorna 0.0 (NaN tratado)
-- Resultado sempre clamped a [-1, 1]
+| Polaridade | Indicadores |
+|------------|-------------|
+| Negativos (mais = pior) | `dengue`, `casos`, `obitos`, `internacoes`, `mortalidade` e os demais agravos do SINAN |
+| Positivos (mais = melhor) | `cobertura_vacinal`, `doses_aplicadas` |
 
-### AgenteAnomalias — Detecção de Ineficiências
+- `alto_gasto_baixo_resultado` (ineficiência): despesa acima da mediana com resultado ruim.
+- `baixo_gasto_alto_resultado` (eficiência): despesa abaixo da mediana com resultado bom.
+- Pares com menos de 2 pontos válidos são ignorados. Pontos com valor nulo (subtipos que só existem com quebra dimensional) são descartados.
 
-**Arquivo:** `agents/analytical/anomalias.py`
+### AgentePriorizacaoAnalitica — Ênfase dos achados
 
-Detecta anos onde o gasto e o resultado divergem da mediana, sugerindo ineficiência ou eficiência inesperada. **100% determinístico — sem LLM**, pelo mesmo racional de `AgenteCorrelacao`.
+**Arquivo:** `agents/analytical/priorizacao.py`
 
-**Polaridade dos indicadores:**
+Decide **qual ângulo enfatizar** e em que ordem apresentar os achados ao sintetizador. **Nunca recalcula nem filtra** correlações ou anomalias, só reordena. Os dados brutos da métrica Q1 ficam intactos.
 
-A interpretação de "resultado bom" ou "resultado ruim" depende da natureza do indicador, obtida via *retrieval* de `semantic_memory` (não hardcoded direto do módulo no meio da lógica):
+- `propose_actions`: um candidato por ângulo de `semantic_memory["angulos_possiveis"]`: `ineficiencias`, `eficiencia`, `correlacoes_fortes`, `tendencias_orcamentarias`, `intencao_usuario`.
+- `evaluate_and_select`: score determinístico (magnitude e contagem dos achados) e, com `use_llm=True`, um LLM escolhe o ângulo informado pelo `intent_summary`. Em caso de falha, prevalece o maior score.
+- Roda **depois** de `capturar_wallclock`, portanto fora do wall-clock comparado entre topologias.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  INDICADORES NEGATIVOS (mais = pior):                       │
-│  dengue, covid, internacoes, mortalidade                    │
-│  → Valor ALTO = muitos casos/óbitos = resultado RUIM        │
-│  → Valor BAIXO = poucos casos/óbitos = resultado BOM        │
-│                                                             │
-│  INDICADORES POSITIVOS (mais = melhor):                     │
-│  vacinacao                                                  │
-│  → Valor ALTO = boa cobertura = resultado BOM               │
-│  → Valor BAIXO = baixa cobertura = resultado RUIM           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Tipos de anomalia:**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  alto_gasto_baixo_resultado (ineficiência)                  │
-│  ─────────────────────────                                  │
-│  Despesa ACIMA da mediana + resultado RUIM                  │
-│  • Indicador negativo: gastou muito E casos altos           │
-│  • Indicador positivo: gastou muito E cobertura baixa       │
-│  → "Gastou muito mas o resultado foi ruim"                  │
-│                                                             │
-│  baixo_gasto_alto_resultado (eficiência)                    │
-│  ──────────────────────────                                 │
-│  Despesa ABAIXO da mediana + resultado BOM                  │
-│  • Indicador negativo: gastou pouco E casos baixos          │
-│  • Indicador positivo: gastou pouco E cobertura alta        │
-│  → "Gastou pouco mas o resultado foi bom"                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Constantes de polaridade:**
-- `INDICADORES_NEGATIVOS: set[str]` = {"dengue", "covid", "internacoes", "mortalidade"}
-- `INDICADORES_POSITIVOS: set[str]` = {"vacinacao"}
-
-**Regra:** Pares com < 2 pontos de dados são ignorados (não faz sentido calcular mediana com 1 valor).
-
-### TextSynthesizer — Geração de Texto (Serviço, não é agente CoALA)
+### TextSynthesizer — Geração de texto (serviço, não é agente CoALA)
 
 **Arquivo:** `agents/analytical/sintetizador.py`
 
-> **Nota arquitetural:** O sintetizador NÃO é um agente CoALA — não possui `working_memory`/`episodic_memory`/`semantic_memory`/`procedural_memory` própria nem participa do ciclo `propose_actions → evaluate_and_select → execute`. Ele é, em si, a implementação de duas ações do espaço de ações de quem o chama (orquestrador/supervisor), ambas de *reasoning* interna: `_build_prompt`/`_generate_structured_text` transforma dados já resolvidos em texto, sem tocar o ambiente; a chamada a `core.llm_client.generate_stream` raciocina sobre esses dados via LLM — parte da procedural memory implícita do agente, não do ambiente, mesmo sendo uma chamada de rede à API do provedor. A decisão de modelá-lo como classe normal reflete que ele não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas — quem decide isso é o caller. O streaming é responsabilidade do caller via `StreamingAdapter`.
+Não tem memórias próprias nem participa do ciclo. É a implementação de uma ação de reasoning de quem o chama (orquestrador ou `SupervisorAnalitico`). Recebe correlações, anomalias, contexto orçamentário, lacunas e a ênfase escolhida, e gera o texto final em português:
 
-Recebe todos os resultados dos outros agentes e gera um texto de análise em português:
+- **LLM disponível**: `generate_stream` emite tokens incrementais, enviados ao WebSocket pelo `StreamingAdapter` (`core/streaming_adapter.py`).
+- **LLM indisponível**: `generate_fallback` produz texto estruturado determinístico (resumo, cobertura de dados, correlações, anomalias, contexto orçamentário).
 
-```
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Correlações  │  │  Anomalias   │  │  Contexto    │
-│ (do agente   │  │ (do agente   │  │ Orçamentário │
-│  correlação) │  │  anomalias)  │  │ (do agente   │
-│              │  │              │  │  contexto)   │
-└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-       │                 │                 │
-       └────────┬────────┘                 │
-                ▼                          │
-       ┌─────────────────┐                 │
-       │  Monta prompt   │◄────────────────┘
-       │  em português   │
-       └────────┬────────┘
-                ▼
-       ┌─────────────────┐
-       │  Tenta LLM       │──► Sucesso? → Texto do LLM (provedor de
-       │  (provedor ativo │              LLM_PROVIDER, modelo único,
-       │   em LLM_PROVIDER)│              com retry)
-       │                  │──► Falhou?  → Texto estruturado (fallback)
-       └────────┬────────┘
-                ▼
-       ┌─────────────────┐
-       │  StreamingAdapter│
-       │  (core/streaming │
-       │  _adapter.py)    │
-       │  Divide texto em │
-       │  chunks de ~80   │──► ws_queue ──► WebSocket ──► Frontend
-       │  caracteres      │
-       └─────────────────┘
-```
+As afirmações que o prompt **fornece** ao modelo (ex.: `CONTEXTO_PANDEMIA`) são constantes de módulo, porque `core/ragas_metrics.py` também as inclui no contexto do juiz de fidelidade.
 
-O streaming é realizado pelo `StreamingAdapter` (`backend/core/streaming_adapter.py`), um componente de infraestrutura reutilizável que encapsula a lógica de chunking e envio para `ws_queue`. Oferece dois modos:
-- `stream_text(text)` — para texto pré-gerado (fallback estruturado)
-- `stream_tokens(generator)` — para tokens incrementais do LLM (streaming em tempo real)
+### Verificação pós-síntese (opcional)
 
-A chamada ao LLM é rotulada `caller=self.synthesizer_id` para rastreabilidade nos logs.
-
-**Seções do texto gerado (fallback):**
-1. Resumo Executivo
-2. Cobertura de Dados (gaps detectados)
-3. Análise das Correlações (Spearman por par, com classificação)
-4. Discussão das Anomalias (com descrições em português)
-5. Contexto Orçamentário (tendências por subfunção)
+Com `use_self_check=True` (e `use_llm=True`), a ação `verificar_afirmacoes` aplica `core/claim_verifier.py` (Chain-of-Verification): extrai afirmações do texto, verifica cada uma contra os dados brutos e pede **uma** revisão das não suportadas. Nunca lança exceção: qualquer falha preserva o texto original.
 
 ---
 
-## Agente de Contexto (1)
+## Agente de Contexto Orçamentário
 
-### AgenteContextoOrcamentario — Tendências de Gasto
+**Arquivo:** `agents/context/contexto_orcamentario.py`, classe `AgenteContextoOrcamentario`
 
-**Arquivo:** `agents/context/contexto_orcamentario.py`
+Analisa a evolução do gasto de **todas** as subfunções presentes nas despesas. **100% determinístico, sem LLM.**
 
-Analisa como o gasto de cada subfunção evoluiu ao longo dos anos. **100% determinístico — sem LLM.**
+- **Variação ano a ano**: `compute_yoy_variation` = `((v_n − v_{n−1}) / v_{n−1}) × 100`. Base zero vira ±∞.
+- **Resumo "variação média ao ano"**: **CAGR** ponta a ponta (`compute_cagr`), e não média aritmética das variações. A média simples era dominada por anos de base baixa, como a migração de folha de 301 para 122 em 2020.
+- **Classificação** (`classify_trend`, limiares em `semantic_memory`):
 
-```
-Entrada: despesas agregadas por subfunção
-┌──────────────────────────────────────────────────────┐
-│  Subfunção 305 (Vigilância Epidemiológica):          │
-│    2019: R$ 28.350.000                               │
-│    2020: R$ 45.600.000                               │
-│    2021: R$ 4.886.620                                │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────┐
-│  Calcula variação ano a ano (YoY):                   │
-│                                                      │
-│  2019→2020: ((45.6M - 28.3M) / 28.3M) × 100         │
-│           = +60.9%  (crescimento)                    │
-│                                                      │
-│  2020→2021: ((4.9M - 45.6M) / 45.6M) × 100          │
-│           = -89.3%  (corte drástico)                 │
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼
-┌──────────────────────────────────────────────────────┐
-│  Classifica tendência:                               │
-│                                                      │
-│  +60.9% seguido de -89.3%                            │
-│  → Não há 2+ anos consecutivos na mesma direção      │
-│  → Variação média: (60.9 + (-89.3)) / 2 = -14.2%    │
-│  → Tendência: "corte" (média negativa > 5%)          │
-└──────────────────────────────────────────────────────┘
-```
+| Tendência | Condição |
+|-----------|----------|
+| `crescimento` | ≥ 2 variações positivas consecutivas |
+| `corte` | ≥ 2 variações negativas consecutivas |
+| `estagnacao` | Todas as variações com \|v\| < 5% |
+| `insuficiente` | Menos de 2 anos de dados |
 
-**Classificação de tendências:**
-
-```
-┌────────────────┬──────────────────────────────────────────┐
-│ Tendência      │ Condição                                 │
-├────────────────┼──────────────────────────────────────────┤
-│ "crescimento"  │ Variação positiva consecutiva ≥ 2 anos   │
-│ "corte"        │ Variação negativa consecutiva ≥ 2 anos   │
-│ "estagnacao"   │ Todas as variações com |valor| < 5%      │
-│ "insuficiente" │ Menos de 2 anos de dados                 │
-└────────────────┴──────────────────────────────────────────┘
-```
+Sem sequência clara, vale a direção média. `compute_yoy_variation`/`classify_trend` também são usadas pelo ETL para gravar `VARIACAO_ANUAL`, o que garante uma única lógica de classificação no sistema.
 
 ---
 
@@ -770,77 +332,46 @@ Entrada: despesas agregadas por subfunção
 
 **Arquivo:** `backend/agents/star/orchestrator.py`
 
-Na topologia estrela, um único agente central (OrquestradorEstrela) coordena todos os agentes. Nenhum agente periférico se comunica diretamente com outro — tudo passa pelo hub.
-
-**Ativação condicional de agentes de domínio:** O orquestrador usa o mapeamento `INDICADOR_TO_AGENT` para instanciar apenas os agentes de domínio relevantes aos `health_params` selecionados pelo usuário (ou extraídos pelo `AgenteInterpretacaoIntencao`, se a análise veio do chat):
+Um hub central (`OrquestradorEstrela`) instancia e chama todos os agentes. Nenhum agente periférico se comunica com outro.
 
 ```
-INDICADOR_TO_AGENT:
-  dengue      → vigilancia_epidemiologica
-  covid       → vigilancia_epidemiologica
-  internacoes → saude_hospitalar
-  vacinacao   → atencao_primaria
-  mortalidade → mortalidade
+                                OrquestradorEstrela (hub)
+                                          │
+   ┌───────────────┬──────────────┬───────┴──────┬──────────────┬──────────────┬─────────────┐
+   ▼               ▼              ▼              ▼              ▼              ▼             ▼
+Agentes de      Agentes de     Contexto       Analítico     Priorização    Sintetizador   (Verificação)
+saúde (≤ 8)     orçamento      orçamentário   (Spearman +   (ângulo)       (LLM,          (opcional)
+                (≤ 7, por      (tendências)   anomalias)                   streaming)
+                subfunção)
 ```
 
-Se o usuário seleciona apenas `dengue` e `vacinacao`, somente `AgenteVigilanciaEpidemiologica` e `AgenteAtencaoPrimaria` são instanciados. Agentes analíticos e de contexto são sempre executados.
+### Ativação condicional
+
+Só os agentes relevantes aos `health_params` são instanciados:
+
+- **Saúde**: `INDICADOR_TO_AGENT` mapeia cada token para um sistema (`dengue` e demais agravos → `sinan`; `covid` → `covid`; `internacoes` → `sih`; `vacinacao` → `sipni`; `mortalidade` → `sim`; `nascidos_vivos` → `sinasc`; `producao_ambulatorial` → `sia`; subtipos do CNES → `cnes`).
+- **Orçamento**: `_SUBFUNCAO_TOKENS` ativa cada subfunção pelos tokens com par temático: 301 ← SI-PNI · 302 ← SIH · 303 ← SINAN · 304 ← SINAN + `estabelecimentos_vigilancia_epidemiologica` · 305 ← SINAN + COVID · 122/306 ← CNES. `mortalidade` ativa também 301/302/303/305 (é transversal).
+
+### Pipeline (ações em `procedural_memory`)
 
 ```
-                         OrquestradorEstrela
-                              (Hub)
-                               │
-        ┌──────┬───────┬───────┼───────┬──────┬──────┬──────┐
-        ▼      ▼       ▼       ▼       ▼      ▼      ▼      ▼
-      Vigil. Hospit. Primár. Mortal. Contex. Correl. Anomal. Sintet.
-      (305)  (302)   (301)   (todas)  (YoY)  (stats) (median) (LLM)
-        │      │       │       │       │      │      │      │
-        └──────┴───────┴───────┘       │      │      │      │
-               │                       │      │      │      │
-          despesas +                   │      │      │      │
-          indicadores                  │      │      │      │
-               │                       │      │      │      │
-               ├───────────────────────┘      │      │      │
-               │  (despesas)                  │      │      │
-               │                              │      │      │
-               ├──── cross_domain_data() ─────┤      │      │
-               │     (dados cruzados)         │      │      │
-               │                              │      │      │
-               │                              │      │      │
-               └──────────────────────────────┴──────┘      │
-                                                            │
-                    correlações + anomalias + contexto ──────┘
-                                                            │
-                                                     texto (streaming)
-```
-
-### Pipeline
-
-O método `run()` executa o pipeline completo de forma linear (delega inteiramente ao ciclo `run_coala_cycle()` da base). O orquestrador herda de `AgenteCoALA` por uniformidade de interface e para permitir extensão futura, mas opera como agente de coordenação com pipeline determinístico. A autonomia deliberativa reside nos agentes de nível folha (domínio, analíticos, contexto), que efetivamente exercem o ciclo CoALA para decidir quais dados consultar e como processar resultados. Os métodos `perceive`/`propose_actions` são mantidos por conformidade de interface, mas `evaluate_and_select` colapsa num passthrough — não há candidatos concorrentes a arbitrar neste nível (a ordem das macro-ações é imposta por dependência de dados, não por arbitragem):
-
-```
-Passo 1:  Instancia agentes de domínio condicionalmente conforme
-          health_params (via mapeamento INDICADOR_TO_AGENT)
-Passo 2:  Executa apenas os agentes de domínio relevantes em SEQUÊNCIA
-          Vigilância → Hospitalar → Primária → Mortalidade
-Passo 3:  Deduplica despesas (mortalidade retorna todas as subfunções)
-Passo 4:  Cruza dados: cross_domain_data(despesas, indicadores)
-Passo 5:  Detecta lacunas: detect_data_gaps()
-Passo 6:  AgenteContextoOrcamentario.analyze_trends(despesas)
-Passo 7:  AgenteCorrelacao.compute(dados_cruzados)
-Passo 8:  AgenteAnomalias.detect(dados_cruzados)
-Passo 9:  *** Captura wall-clock (exclui sintetizador) ***
-Passo 10: TextSynthesizer.generate(correlações, anomalias, contexto)
-Passo 11: Persiste métricas de execução por agente
+consultar_saude × N      → um agente de saúde por sistema ativado, em sequência
+consultar_orcamento × M  → um AgenteOrcamentoSubfuncao por subfunção ativada
+cruzar_dados             → deduplicate_despesas + cross_domain_data
+detectar_gaps            → detect_data_gaps (cobertura por subfunção/indicador)
+analisar_contexto        → AgenteContextoOrcamentario.analyze_trends
+analisar                 → AgenteAnalitico.analisar (correlações + anomalias)
+capturar_wallclock       → *** fim do trecho determinístico medido ***
+priorizar_achados        → AgentePriorizacaoAnalitica
+sintetizar_texto         → TextSynthesizer (streaming)
+[verificar_afirmacoes]   → só com use_self_check=True e use_llm=True
+persistir_metricas       → MetricaExecucao por agente + evento WebSocket
 ```
 
 **Características:**
-- Pipeline via `run_coala_cycle()` — cada macro-etapa é uma ação (`_act_*`) registrada em `procedural_memory`, proposta em ordem fixa por `propose_actions()`
-- Comunicação simples: orquestrador ↔ agente (ida + volta = 2 mensagens)
-- Ponto único de falha: se o orquestrador falhar, toda a análise falha
-- Ativação condicional: apenas agentes de domínio relevantes aos `health_params` são instanciados
-- Métricas de benchmark excluem o sintetizador do breakdown por agente (é serviço LLM, não agente CoALA) — o overhead do orquestrador é calculado como `wall_clock - soma_workers`
-- Em falha de agente: envia evento `error` via WebSocket, continua com dados parciais
-- Recebe opcionalmente `intent_summary` (quando a análise vem do chat) no dict `params` — armazenado na working memory para uso futuro por etapas de priorização de achados (ainda não implementadas)
+- Ponto único de coordenação: tudo passa pelo hub.
+- Em falha de um agente, o hub envia um evento `error` pelo WebSocket e continua com dados parciais.
+- Overhead de coordenação = `wall_clock − soma dos tempos dos agentes`. Priorização, sintetizador e verificação ficam fora do wall-clock e do breakdown.
 
 ---
 
@@ -848,199 +379,107 @@ Passo 11: Persiste métricas de execução por agente
 
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `supervisors.py`
 
-Na topologia hierárquica, os agentes são organizados em 3 níveis com supervisores intermediários que podem se comunicar lateralmente:
+Três níveis, organizados como **árvore estrita**: cada supervisor só troca dados com o `CoordenadorGeral` (seu pai), nunca com outro supervisor.
 
 ```
-                    CoordenadorGeral
-                      (Nível 0)
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-    SupervisorDominio  SupervisorContexto  SupervisorAnalitico
-      (Nível 1)         (Nível 1)           (Nível 1)
-          │                │                    │
-    ┌─────┼─────┐         │              ┌─────┼─────┐
-    ▼     ▼     ▼    ▼    ▼              ▼     ▼     ▼
-  Vigil. Hosp. Prim. Mort. CtxOrç.     Corr. Anom. TextSynth.
-  (Nível 2)                (Nível 2)    (Nível 2)   (serviço)
-
-
-  Comunicação lateral (sem passar pelo Coordenador):
-  ─────────────────────────────────────────────────
-  SupervisorDominio ───────► SupervisorAnalitico
-                              (despesas + indicadores + intent_summary)
-  SupervisorDominio ───────► SupervisorContexto
-                              (despesas)
-  SupervisorContexto ──────► SupervisorAnalitico
-                              (contexto orçamentário)
+                                  CoordenadorGeral (nível 0)
+                                            │
+       ┌────────────────────┬───────────────┴────┬─────────────────────────┐
+       ▼                    ▼                    ▼                         ▼
+SupervisorOrcamento   SupervisorSaude     SupervisorContexto       SupervisorAnalitico   (nível 1)
+       │                    │                    │                         │
+AgenteOrcamento-      agentes de saúde    AgenteContexto-          AgenteAnalitico,
+Subfuncao (≤ 7)       (≤ 8)               Orcamentario             AgentePriorizacao,      (nível 2)
+                                                                   TextSynthesizer (serviço),
+                                                                   verificação (opcional)
 ```
 
-### Pipeline
+### Pipeline do `CoordenadorGeral`
 
 ```
-Passo 1:  Coordenador instancia 3 supervisores
-Passo 2:  SupervisorDominio.run()
-          → Executa agentes de domínio relevantes em sequência
-          → Agrega despesas + indicadores
-Passo 3:  Comunicação lateral: Domínio → Analítico (despesas + indicadores)
-Passo 4:  Comunicação lateral: Domínio → Contexto (despesas)
-Passo 5:  SupervisorContexto.run()
-          → Executa AgenteContextoOrcamentario
-Passo 6:  Comunicação lateral: Contexto → Analítico (contexto orçamentário)
-Passo 7:  SupervisorAnalitico.run()
-          → Cruza dados, executa correlação, anomalias
-          → Marca fim da parte determinística (antes do sintetizador)
-          → TextSynthesizer (streaming LLM)
-Passo 8:  Coordenador usa esse marco para medir o supervisor analítico
-          sem incluir tempo do sintetizador/LLM
-Passo 9:  *** Captura wall-clock (subtrai tempo do sintetizador) ***
-Passo 10: Persiste métricas para agentes + 3 supervisores
-          (exclui sintetizador do breakdown — é serviço LLM, não agente CoALA)
-          workers_time_ms soma apenas agentes folha (nível 2);
-          supervisores aparecem no breakdown para exibição mas NÃO
-          são somados (evita dupla contagem — seu tempo engloba subordinados)
+delegar_orcamento   → SupervisorOrcamento.run()   → {despesas, tendencias}
+delegar_saude       → SupervisorSaude.run()       → {indicadores}
+combinar_despesas   → deduplicate_despesas(orçamento + saúde)   (salvaguarda: saúde não traz despesas)
+delegar_contexto    → SupervisorContexto.run(despesas=<combinadas>)
+delegar_analitico   → SupervisorAnalitico.run(despesas, indicadores, contexto_orcamentario, …)
+persistir_metricas  → agentes-folha + 4 supervisores
 ```
 
-**Características:**
-- Degradação graciosa: se um supervisor falha, o coordenador continua com dados parciais
-- Comunicação lateral via `receive_from_peer()` — supervisores trocam dados diretamente (e agora logam explicitamente o que repassam, de ambos os lados do hop)
-- Mensagens esperadas: ~24+ (agentes + supervisores + comunicação lateral)
-- Métricas coletadas para 11 entidades (8 agentes + 3 supervisores)
-- Supervisores implementam o ciclo CoALA por uniformidade de interface, mas `_execute_intention()`-equivalente é essencialmente determinístico. A deliberação é determinística e a execução real ocorre no método `run()` chamado pelo coordenador.
-- Cálculo de overhead: `overhead = wall_clock - soma dos agentes folha (nível 2)`. Supervisores aparecem no breakdown de métricas para exibição, mas NÃO são somados em `workers_time_ms` — seu tempo já engloba o dos subordinados, somá-los causaria dupla contagem. O overhead captura: tempo dos supervisores fora dos subordinados + comunicação lateral + instanciação.
+O coordenador colhe o retorno de cada supervisor e o **repassa como parâmetro direto** ao próximo. Não há estado de "dado de par".
 
-### Degradação Graciosa
+### Pipeline dos supervisores
 
-```
-    SupervisorDominio falha!
-              │
-              ▼
-    CoordenadorGeral:
-    ├── Captura exceção
-    ├── Envia evento "error" via WebSocket
-    ├── Define dominio_data = {despesas: [], indicadores: []}
-    └── CONTINUA com SupervisorContexto e SupervisorAnalitico
-              │
-              ▼
-    Resultado final: parcial mas válido
-    (correlações e anomalias vazias, mas texto gerado com fallback)
-```
+| Supervisor | Ações |
+|------------|-------|
+| `SupervisorOrcamento` | `consultar_orcamento` × M → `agregar_resultados` |
+| `SupervisorSaude` | `consultar_saude` × N → `agregar_resultados` (mesmo `INDICADOR_TO_AGENT` da estrela; com `health_params` vazio ativa todos, mas o agente de intenção nunca envia vazio) |
+| `SupervisorContexto` | `executar_contexto_orcamentario` |
+| `SupervisorAnalitico` | `cruzar_dados` → `detectar_gaps` → `analisar` → `capturar_wallclock` → `priorizar_achados` → `sintetizar_texto` → [`verificar_afirmacoes`] |
+
+### Métricas e overhead
+
+- O tempo do `SupervisorAnalitico` é medido até o **fim da parte determinística** (`_coala_leaf_end_time`), sem o sintetizador.
+- `workers_time_ms` soma só os **agentes-folha** (nível 2). Supervisores aparecem no breakdown, mas não são somados, para evitar contar o tempo duas vezes.
+- Overhead = `wall_clock − soma dos agentes-folha`. Captura o tempo dos supervisores fora dos subordinados e a instanciação.
+
+### Degradação graciosa
+
+Se um supervisor falha, o coordenador captura a exceção, envia um evento `error` e segue com um retorno vazio (ex.: `{"despesas": [], "tendencias": {}}`). O resultado final é parcial mas válido, e o texto pode ser gerado pelo fallback.
+
+> **Histórico:** uma versão anterior tinha "comunicação lateral" entre supervisores (`receive_from_peer`/`peer_data`, inclusive com resumos via LLM, Etapa 5 do [plano de refatoração](historico/PLANO_REFATORACAO.md)). Ela foi removida em `38df7be`: com troca de dados entre nós do mesmo nível, a topologia deixa de ser uma árvore no sentido estrito, que é o modelo de hierarquia documentado na literatura.
 
 ---
 
 ## Regras de Negócio
 
-### Mapeamento Subfunção → Indicador
+### Mapeamento subfunção → indicadores (cruzamento)
 
-```
-┌──────────┬──────────────────────────┬─────────────────┬──────────┐
-│ Código   │ Nome                     │ Indicador       │ DataSUS  │
-├──────────┼──────────────────────────┼─────────────────┼──────────┤
-│ 301      │ Atenção Básica           │ Vacinação       │ SI-PNI   │
-│ 302      │ Assistência Hospitalar   │ Internações     │ SIH      │
-│ 303      │ Suporte Profilático      │ — (sem par)     │ —        │
-│ 305      │ Vigilância Epidemiológica│ Dengue, COVID   │ SINAN    │
-│ (todas)  │ Mortalidade (transversal)│ Mortalidade     │ SIM      │
-└──────────┴──────────────────────────┴─────────────────┴──────────┘
-```
+**Arquivo:** `backend/agents/data_crossing.py` (`SUBFUNCAO_INDICADOR_MAP`)
 
-### Deduplicação de Despesas (`deduplicate_despesas`)
+O cruzamento usa os **subtipos nativos** de cada sistema, e não os tokens de ativação:
 
-**Arquivo:** `backend/agents/data_crossing.py`
+| Subfunção | Indicadores cruzados |
+|-----------|----------------------|
+| 122 Administração Geral | Subtipos do CNES |
+| 301 Atenção Básica | `cobertura_vacinal`, `doses_aplicadas` (SI-PNI), `nascidos_vivos` (SINASC) |
+| 302 Assistência Hospitalar e Ambulatorial | `internacoes` (SIH), `producao_ambulatorial` (SIA) |
+| 303 Suporte Profilático e Terapêutico | 9 agravos do SINAN |
+| 304 Vigilância Sanitária | 9 agravos do SINAN + `estabelecimentos_vigilancia_epidemiologica` (CNES) |
+| 305 Vigilância Epidemiológica | `casos`, `obitos` (COVID) + 9 agravos do SINAN |
+| 306 Alimentação e Nutrição | Subtipos do CNES |
+| *mortalidade* (transversal) | Cruza com 301, 302, 303 e 305 |
 
-O `AgenteMortalidade` é transversal — retorna despesas de **todas** as subfunções (301, 302, 303, 305). Quando executado junto com outros agentes de domínio, as despesas se sobrepõem. A função `deduplicate_despesas()` resolve isso:
+### Deduplicação de despesas (`deduplicate_despesas`)
 
-```
-Antes (com duplicatas):
-┌──────────────────────────────────────────────────────┐
-│  AgenteAtencaoPrimaria  → subfunção=301, ano=2020    │
-│  AgenteMortalidade      → subfunção=301, ano=2020  ← │ duplicata!
-│  AgenteMortalidade      → subfunção=302, ano=2020    │
-│  AgenteSaudeHospitalar  → subfunção=302, ano=2020  ← │ duplicata!
-└──────────────────────────────────────────────────────┘
-                    │
-                    ▼  deduplicate_despesas()
-                    │  (chave: subfuncao + ano)
-                    ▼
-Depois (sem duplicatas):
-┌──────────────────────────────────────────────────────┐
-│  subfunção=301, ano=2020  (primeira ocorrência)      │
-│  subfunção=302, ano=2020  (primeira ocorrência)      │
-└──────────────────────────────────────────────────────┘
-```
+Mantém a primeira ocorrência de cada par `(subfuncao, ano)`, preservando a ordem. Hoje é uma salvaguarda, porque só os agentes de orçamento produzem despesas.
 
-Preserva a ordem de inserção — a primeira ocorrência de cada par `(subfuncao, ano)` é mantida.
+### Cruzamento (`cross_domain_data`)
 
-### Cruzamento de Dados (`cross_domain_data`)
+Gera um ponto por (subfunção, indicador, ano) com `valor_despesa` e `valor_indicador`. Com dimensão ativa (`POR_NATUREZA`/`POR_APLICACAO` na despesa, ou qualquer dimensão na saúde), indexa por `(ano, dimensao_valor)`.
 
-**Arquivo:** `backend/agents/data_crossing.py`
+### Detecção de lacunas (`detect_data_gaps`)
 
-```
-Despesas (por subfunção e ano)     Indicadores (por tipo e ano)
-┌────────────────────────┐         ┌────────────────────────┐
-│ subfunção=305, ano=2020│         │ tipo=dengue, ano=2020  │
-│ valor=45.600.000       │         │ valor=5231             │
-└───────────┬────────────┘         └───────────┬────────────┘
-            │                                  │
-            └──────────┬───────────────────────┘
-                       ▼
-              CrossedDataPoint:
-              {
-                subfuncao: 305,
-                tipo_indicador: "dengue",
-                ano: 2020,
-                valor_despesa: 45600000,
-                valor_indicador: 5231
-              }
-```
-
-### Detecção de Lacunas (`detect_data_gaps`)
-
-**Arquivo:** `backend/agents/data_crossing.py`
-
-Identifica dados faltantes para transparência na análise.
-
-**Assinatura:**
 ```python
 detect_data_gaps(despesas, indicadores, date_from, date_to, health_params=None)
 ```
 
-**Parâmetro `health_params`** (opcional):
-- Quando fornecido (ex: `["dengue", "vacinacao"]`), verifica apenas as subfunções e indicadores relevantes à seleção do usuário
-- Quando `None`, verifica todos os tipos e subfunções (comportamento legado)
-- Mortalidade é transversal — se incluída em `health_params`, todas as subfunções são verificadas
-
-```
-Período solicitado: 2019-2023, health_params=["dengue", "vacinacao"]
-
-Verifica apenas:
-  Subfunções: 305 (dengue→vigilância), 301 (vacinacao→atenção primária)
-  Indicadores: dengue, vacinacao
-
-Despesas subfunção 305:  2019 ✓  2020 ✓  2021 ✓  2022 ✗  2023 ✗
-Indicador dengue:        2019 ✓  2020 ✓  2021 ✓  2022 ✓  2023 ✓
-
-Gaps detectados:
-  ⚠ Despesa subfunção 305: sem dados para 2022, 2023
-  ⚠ Cruzamento Vigilância × dengue: despesa sem indicador em 2022, 2023
-
-Cobertura: despesas 60%, indicadores 100%
-```
-
-O resultado é passado ao sintetizador para que o texto mencione explicitamente quais dados estão faltando.
+Aponta anos sem despesa ou sem indicador no período, considerando só as subfunções e os indicadores relevantes aos `health_params`. O resultado vai ao sintetizador, para que o texto mencione explicitamente o que falta.
 
 ---
 
 ## Uso de LLM — resumo
 
 | Agente/serviço | Usa LLM? | Observação |
-|---|---|---|
-| `AgenteInterpretacaoIntencao` | **Sim** — única chamada, combinando guardrail de escopo + extração | Único ponto de entrada de linguagem natural do sistema |
-| Agentes de domínio (4) | Não | Filtro de subfunção/indicador é hardcoded (decisão de escopo atual, não lacuna definitiva — ver `PLANO_REFATORACAO.md`) |
-| `AgenteCorrelacao` | Não | Estatística determinística (scipy), decisão intencional |
-| `AgenteAnomalias` | Não | Comparação com mediana, decisão intencional |
-| `AgenteContextoOrcamentario` | Não | Variação percentual, decisão intencional |
-| `TextSynthesizer` | **Sim** | Síntese textual final, com fallback estruturado determinístico |
-| `OrquestradorEstrela` / `CoordenadorGeral` / supervisores | Não | Coordenação — ordem de macro-ações fixa por dependência de dados, sem arbitragem real |
+|----------------|----------|------------|
+| `AgenteInterpretacaoIntencao` | **Sim**: uma chamada por mensagem | Guardrail de escopo + extração de parâmetros |
+| Agentes de saúde com dimensões (SINAN, SIM, SIH, SI-PNI, SINASC, CNES) | **Opcional** (`use_llm`) | Arbitram a dimensão de consulta. Sem LLM, prevalece o score determinístico |
+| `AgenteSIA`, `AgenteCOVID` | Não | Sem dimensões válidas, consulta única |
+| `AgenteOrcamentoSubfuncao` | **Opcional** (`use_llm`) | Arbitra a dimensão de `consultar_despesas` |
+| `AgenteAnalitico` | Não | Estatística determinística, decisão intencional |
+| `AgenteContextoOrcamentario` | Não | Variação percentual/CAGR |
+| `AgentePriorizacaoAnalitica` | **Opcional** (`use_llm`) | Escolhe o ângulo de ênfase, fora do wall-clock |
+| `TextSynthesizer` | **Sim** | Síntese final, com fallback estruturado |
+| Verificação (`core/claim_verifier.py`) | **Sim**, só com `use_self_check` | Até 3 chamadas (extrair, verificar, revisar) |
+| Orquestrador, coordenador e supervisores | Não | Coordenação com ordem fixa por dependência de dados |
 
-Ver `PLANO_REFATORACAO.md` na raiz do repositório para o plano (em andamento, Etapa 1 de 6 concluída) de introduzir uso adicional de LLM nos agentes de domínio (construção de consultas), priorização de achados, verificação pós-síntese e comunicação lateral semântica.
+Pelo chat, `use_llm` é sempre `True` (o toggle saiu do frontend) e `use_self_check` vem do payload da mensagem (`useSelfCheck`, padrão `false`). A avaliação RAGAS usa LLM também, mas fora das topologias (ver [arquitetura/metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md)).
