@@ -2,461 +2,359 @@
 
 ## Sumário
 
-1. [Origens Institucionais dos Dados](#origens-institucionais-dos-dados)
-2. [SIOPS — Despesas Municipais](#siops--despesas-municipais)
-3. [DataSUS — Indicadores de Saúde](#datasus--indicadores-de-saúde)
+1. [Visão Geral](#visão-geral)
+2. [Origens Institucionais dos Dados](#origens-institucionais-dos-dados)
+3. [Janela Temporal](#janela-temporal)
 4. [Pipeline ETL](#pipeline-etl)
-5. [Modelo de Dados Neo4j](#modelo-de-dados-neo4j)
+5. [Modelo de Dados Neo4j — Orçamento](#modelo-de-dados-neo4j--orçamento)
+6. [Modelo de Dados Neo4j — Indicadores de Saúde](#modelo-de-dados-neo4j--indicadores-de-saúde)
+7. [Nós de Execução e Consultas](#nós-de-execução-e-consultas)
+8. [Validações com Dado Real](#validações-com-dado-real)
+9. [Limitações Conhecidas](#limitações-conhecidas)
+
+---
+
+## Visão Geral
+
+O sistema lê **exclusivamente arquivos locais já extraídos** em `Dados/` (raiz do repositório) e os persiste num grafo Neo4j. Não há download em tempo de execução: nem FTP do DataSUS nem planilhas do FNS (o pipeline antigo, baseado em PySUS e FNS, foi removido em `b40e328`).
+
+```
+Dados/orcamento/{2015-2019,2020-2022,2023-2025}/*.csv     Dados/Sorocaba_DATASUS_2015-2025/*.xlsx
+  (execução orçamentária municipal — LAI)                    (extratos DATASUS/TabNet de Sorocaba)
+                 │                                                          │
+                 ▼                                                          ▼
+     backend/etl/orcamento_loader.py                       backend/etl/saude_indicadores_loader.py
+                 │                                                          │
+                 └──────────────────────────────┬───────────────────────────┘
+                                                ▼
+                                          Neo4j (grafo)
+                                                │
+                                                ▼
+                     Agentes de domínio (consultas parametrizadas via db/neo4j_client.py)
+```
+
+São dois domínios de dados:
+
+| Domínio | Fonte | Granularidade |
+|---------|-------|---------------|
+| **Orçamento** | Portal de transparência / LAI do município de Sorocaba | Empenho a empenho (execução real, todas as fontes de recurso: própria, federal, estadual, emendas, crédito) |
+| **Indicadores de saúde** | DATASUS / TabNet, já filtrado para Sorocaba (IBGE 355220) | Anual por sistema de informação, com quebras dimensionais (faixa etária, capítulo CID-10, vacina, tipo de estabelecimento etc.) |
+
+**Offline-first:** os agentes consultam apenas o Neo4j local durante uma análise, sem APIs externas além do LLM. Isso garante que as duas topologias comparadas processem exatamente os mesmos dados e que os benchmarks sejam reprodutíveis.
 
 ---
 
 ## Origens Institucionais dos Dados
 
-O sistema integra dados de duas fontes públicas federais, ambas mantidas pelo Ministério da Saúde:
+### Orçamento (`Dados/orcamento/`)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Ministério da Saúde                           │
-│                                                                 │
-│  ┌──────────────────────┐    ┌────────────────────────────────┐ │
-│  │   FNS                │    │   DATASUS                      │ │
-│  │   (Fundo Nacional    │    │   (Departamento de             │ │
-│  │    de Saúde)         │    │    Informática do SUS)         │ │
-│  │                      │    │                                │ │
-│  │  Dados gerados por:  │    │  Sistemas:                     │ │
-│  │  • Portarias do MS   │    │  • SINAN (Vigilância)          │ │
-│  │  • Ordens bancárias  │    │  • SIM (Mortalidade)           │ │
-│  │  • Sistema de gestão │    │  • SIH (Internações)           │ │
-│  │    financeira FNS    │    │  • SI-PNI (Vacinação)          │ │
-│  │                      │    │                                │ │
-│  └──────────┬───────────┘    └──────────────┬─────────────────┘ │
-└─────────────┼───────────────────────────────┼───────────────────┘
-              │                               │
-              ▼                               ▼
-    Portal Consulta FNS               FTP DataSUS
-    (consultafns.saude.gov.br)        (ftp.datasus.gov.br)
-    Planilhas .xls/.xlsx              Arquivos .dbc (comprimidos)
-              │                               │
-              ▼                               ▼
-         siops_loader.py              datasus_loader.py
-              │                        download_pysus.py
-              │                               │
-              └───────────────┬───────────────┘
-                              ▼
-                         Neo4j (grafos)
-```
+Dois tipos de CSV por bloco plurianual (`2015-2019`, `2020-2022`, `2023-2025`):
 
----
+| Arquivo | Conteúdo | Vira no grafo |
+|---------|----------|---------------|
+| `guestuser_lai_-_empenhado_(extraçao_de_dados)_<hash>.csv` | Uma linha por empenho (data, subfunção, natureza, fonte de recurso, fornecedor, ação, aplicação, valores) | `Empenho` + dimensões, agregado em `DespesaAnual` |
+| `guestuser_lai_-_previsto_e_empenhado_por_programa_e_secretaria_(extraçao_dados)_<hash>.csv` | Previsto vs. realizado por programa/ação/órgão | `OrcamentoPrograma` |
 
-## FNS — Repasses Federais Fundo a Fundo
+A proveniência é limitada ao que o nome dos arquivos indica: extração de um portal de transparência/LAI (Lei de Acesso à Informação) de Sorocaba, acessado como usuário convidado. Os CSVs **não têm data de extração embutida**. É uma assimetria real em relação ao lado saúde: se os números do orçamento precisarem ser auditados, não há como saber pelo arquivo quando nem por qual ferramenta foram exportados.
 
-### O que é
+Diferente do pipeline antigo (repasses federais do FNS, que cobriam só a parcela federal do financiamento), esses dados são **execução orçamentária municipal real**. O breakdown por `tipoRecurso` em `DespesaAnual` permite separar recurso próprio de repasse federal/estadual em qualquer consulta.
 
-O **FNS** (Fundo Nacional de Saúde) é o gestor financeiro dos recursos do SUS no âmbito federal. Ele realiza as **transferências fundo a fundo** — repasses automáticos de recursos federais diretamente para os Fundos Municipais e Estaduais de Saúde, sem necessidade de convênio.
+### Indicadores de saúde (`Dados/Sorocaba_DATASUS_2015-2025/`)
 
-Os dados utilizados neste projeto são os **repasses federais detalhados** disponibilizados no portal de consulta do FNS: `https://consultafns.saude.gov.br/#/detalhada`
+Todas as planilhas têm uma aba **"Notas"** com a proveniência. Município: sempre 355220 (Sorocaba/SP, IBGE 3552205). Datas de extração: 01/08/2026 e 02/08/2026.
 
-### Como funciona o financiamento fundo a fundo
+| Sistema | Fonte | Ressalvas |
+|---------|-------|-----------|
+| **SIM** (mortalidade) | TabNet/DATASUS | Dados de **2025 preliminares** (3ª prévia) |
+| **SIH** (internações) | TabNet/DATASUS | Dados de **2025 preliminares** (3ª prévia) |
+| **SINASC** (nascidos vivos) | TabNet/DATASUS | Dados de **2025 preliminares** (3ª prévia) |
+| **CNES — Rede Assistencial** (estabelecimentos por tipo) | TabNet/DATASUS | Dados de **2025 preliminares** (3ª prévia) |
+| **SIA** (produção ambulatorial) | TabNet/DATASUS | Total anual = soma de 12 competências mensais; atendimentos processados com atraso "vazam" entre anos adjacentes (comportamento oficial do TabNet) |
+| **SINAN** (agravos de notificação) | TabNet/DATASUS | A variável de tempo **varia por doença** (notificação, diagnóstico ou 1º sintoma). Sífilis (adquirida/gestante/congênita) e hepatites virais ainda não têm 2024 e/ou 2025 publicados — atraso normal de consolidação |
+| **SI-PNI** (vacinação) | Duas fontes com metodologias diferentes | Ver abaixo |
+| **CNES — Recursos** (leitos, profissionais) | TabNet/DATASUS | Variáveis de **estoque** (situação em 31/12). "Profissionais" conta vínculos, não pessoas |
+| **CNES — Dados Adicionais** (7 abas) | TabNet/DATASUS | Ver abaixo |
+| **COVID-19** | MS (covid.saude.gov.br) + compilação `wcota/covid19br` | Ver abaixo |
+| **Bases Indisponíveis** | — | Documentação de cubos checados e indisponíveis (HIPERDIA/SISVAN migraram para e-SUS APS/SISAB; dados financeiros do SUS não têm cubo TabNet público) |
 
-O financiamento federal do SUS é organizado em **blocos de financiamento** (Portaria GM/MS nº 828/2020 e Portaria de Consolidação nº 6/2017), que agrupam os repasses por finalidade:
+**SI-PNI — o caso mais delicado.** A planilha combina dois períodos:
+- **2015–2022**: cubo TabNet legado. O acesso automatizado retornou "Nenhum dado disponível" (base em revisão), então os dados vieram de uma **exportação manual via navegador** (02/08/2026).
+- **2023–2026**: painel "Vacinação do Calendário Nacional" (metodologia RNDS), que substituiu o TabNet.
+- A **nomenclatura de vacinas não foi unificada** entre os períodos (ex.: `"Meningococo C"` vs. `"Meningocócica Conjugada"`), de propósito, para não supor equivalência.
+- Coberturas **acima de 100%** são o que o TabNet retornou (provável denominador populacional desatualizado), não erro de ETL.
 
-```
-Ministério da Saúde (Orçamento Federal)
-         │
-         ▼
-Fundo Nacional de Saúde (FNS)
-         │
-         │  Transferências automáticas (fundo a fundo)
-         │  Sem convênio — regulares e obrigatórias
-         ▼
-┌─────────────────────────────────────────────────────┐
-│         Fundo Municipal de Saúde (FMS)              │
-│         (ex: FMS de Sorocaba)                       │
-│                                                     │
-│  Recursos recebidos por GRUPO:                      │
-│  • Atenção Primária (Piso da APS)                   │
-│  • Atenção Especializada (MAC - Média/Alta Complex.)│
-│  • Assistência Farmacêutica                         │
-│  • Vigilância em Saúde                              │
-│  • Gestão do SUS                                    │
-│  • Investimentos                                    │
-└─────────────────────────────────────────────────────┘
-```
+**CNES — Dados Adicionais.** A aba de ocupações só tem snapshots de dezembro (consultas com todos os meses davam timeout no TabNet). Há um gap conhecido entre mai/2010 e jan/2012 no sub-cubo de serviço/classificação e uma anomalia em ago/2025 no de equipamentos. Os códigos de equipe mudaram ao longo do tempo (`24 ESF1`/`27 ESF2` até ~2020, `70 ESF`/`71 ESB` depois) e foram mantidos sem unificação.
 
-### Quem alimenta os dados
-
-Os dados de repasses são gerados pelo próprio FNS a partir de:
-
-- **Portarias ministeriais** — definem os valores a serem repassados por município
-- **Ordens bancárias** — registram as transferências efetivamente realizadas
-- **Sistema de Gestão Financeira do FNS** — consolida todas as movimentações
-
-O fluxo é:
-1. O Ministério da Saúde publica portarias definindo valores por município/grupo
-2. O FNS executa as transferências via ordens bancárias para os Fundos Municipais
-3. Os dados são consolidados e disponibilizados no portal `consultafns.saude.gov.br`
-4. Planilhas detalhadas podem ser exportadas em formato `.xls` ou `.xlsx`
-
-### Como são coletados para este projeto
-
-1. Acesso ao portal `https://consultafns.saude.gov.br/#/detalhada`
-2. Filtro por município: Sorocaba-SP (IBGE 355220)
-3. Seleção do período desejado (ex: 2019-2023)
-4. Download da "Planilha Detalhada" em formato `.xls` ou `.xlsx`
-5. A planilha é colocada em `backend/data/` para processamento pelo ETL
-
-### Formato dos dados
-
-- **Arquivo:** Planilha Excel (.xls ou .xlsx) — "Planilha Detalhada" do FNS
-- **Estrutura:** Metadados nas primeiras 7 linhas (Município, Ano, IBGE), cabeçalho na linha 7-8, dados nas linhas seguintes
-- **Colunas relevantes:** "Grupo" (nome do grupo de repasse) e "Valor Total" (em formato brasileiro: 1.234.567,89)
-- **Granularidade:** Repasse por grupo por ano
-- **Filtro:** Município de Sorocaba (IBGE 355220)
-- **Natureza dos dados:** São repasses federais recebidos pelo município (não despesas executadas pelo município)
-
-### Grupos de repasse mapeados para subfunções
-
-Os grupos de repasse do FNS são mapeados para subfunções orçamentárias de saúde no sistema:
-
-| Código subfunção | Nome | Grupos do FNS (planilha) |
-|------------------|------|--------------------------|
-| 301 | Atenção Básica | "Atenção Primária", "Atenção Básica" |
-| 302 | Assistência Hospitalar | "Atenção de Média e Alta Complexidade", "MAC", "Atenção Especializada", "Coronavírus (COVID-19)" |
-| 303 | Suporte Profilático | "Assistência Farmacêutica", "Suporte Profilático" |
-| 305 | Vigilância Epidemiológica | "Vigilância em Saúde", "Vigilância Epidemiológica" |
-
-**Nota:** O mapeamento grupo→subfunção usa busca exata e parcial para acomodar variações de nomenclatura entre anos e versões da planilha.
+**COVID-19.** A série termina em março/2023, quando o MS passou o painel para periodicidade semanal. É coerente com a janela do sistema: COVID só tem dado de 2020 a 2023.
 
 ---
 
-## DataSUS — Indicadores de Saúde
+## Janela Temporal
 
-### O que é
+**Todos os dados, de orçamento e de saúde, ficam restritos a 01/01/2016 – 31/12/2025 (10 anos).** O corte é feito **no ETL**, por linha, e não em tempo de consulta (`PERIODO_ANO_MIN = 2016` e `PERIODO_ANO_MAX = 2025` em ambos os loaders).
 
-O **DATASUS** (Departamento de Informática do SUS) é o órgão do Ministério da Saúde responsável por coletar, processar e disseminar informações de saúde. Mantém diversos sistemas de informação alimentados por diferentes atores do SUS.
+Os arquivos de origem extrapolam a janela: os extratos DATASUS começam em 2015 e as doses do SI-PNI vão até 2026, e essas linhas são descartadas. Nos empenhos, os dados reais começam em 2016 apesar da pasta se chamar `2015-2019`.
 
-### Sistemas utilizados
+**Exceção:** `OrcamentoPrograma` não tem coluna de ano por linha. O grão é o bloco plurianual inteiro, mantido integralmente, sabendo que `"2015-2019"` nominalmente inclui 2015.
 
-#### SINAN — Sistema de Informação de Agravos de Notificação
-
-| Aspecto | Detalhe |
-|---------|---------|
-| **O que registra** | Notificações compulsórias de doenças (dengue, COVID-19, etc.) |
-| **Quem alimenta** | Unidades de saúde → Vigilâncias Epidemiológicas municipais → estaduais → MS |
-| **Fluxo** | Caso suspeito → notificação → investigação → confirmação/descarte |
-| **Indicadores extraídos** | Contagem de notificações de dengue e COVID-19 por município/ano |
-| **Código no FTP** | `DENGBR{YY}.dbc` (dengue), `INFLBR{YY}.dbc` (influenza/COVID) |
-| **Diretório FTP** | `/dissemin/publicos/SINAN/DADOS/FINAIS` |
-
-#### SIM — Sistema de Informações sobre Mortalidade
-
-| Aspecto | Detalhe |
-|---------|---------|
-| **O que registra** | Declarações de óbito com causa (CID-10) |
-| **Quem alimenta** | Cartórios de Registro Civil → Secretarias Municipais de Saúde → SES → MS |
-| **Fluxo** | Óbito → Declaração de Óbito → digitação → codificação CID-10 |
-| **Indicadores extraídos** | Contagem de óbitos por município/ano |
-| **Código no FTP** | `DOSP{YYYY}.dbc` (óbitos de SP) |
-| **Diretório FTP** | `/dissemin/publicos/SIM/CID10/DORES` |
-
-#### SIH — Sistema de Informações Hospitalares
-
-| Aspecto | Detalhe |
-|---------|---------|
-| **O que registra** | Internações hospitalares no SUS (AIH — Autorização de Internação Hospitalar) |
-| **Quem alimenta** | Hospitais públicos e conveniados → Secretarias Municipais → SES → MS |
-| **Fluxo** | Internação → preenchimento AIH → processamento → pagamento |
-| **Indicadores extraídos** | Contagem de internações por município de residência/ano |
-| **Código no FTP** | `RDSP{YY}{MM}.dbc` (12 arquivos mensais por ano) |
-| **Diretório FTP** | `/dissemin/publicos/SIHSUS/200801_/Dados` |
-
-#### SI-PNI — Sistema de Informação do Programa Nacional de Imunizações
-
-| Aspecto | Detalhe |
-|---------|---------|
-| **O que registra** | Doses de vacinas aplicadas |
-| **Quem alimenta** | Unidades Básicas de Saúde (UBS) → Secretarias Municipais → SES → MS |
-| **Fluxo** | Vacinação → registro no sistema → consolidação municipal |
-| **Indicadores extraídos** | Contagem de doses aplicadas por município/ano |
-| **Código no FTP** | `CPNISP{YY}.dbc` |
-| **Diretório FTP** | `/dissemin/publicos/PNI/DADOS` |
-
-### Formato dos dados (DataSUS)
-
-- **Formato original:** `.dbc` (formato proprietário comprimido do DataSUS)
-- **Descompressão:** `.dbc` → `.dbf` (via biblioteca `datasus-dbc`)
-- **Leitura:** `.dbf` → DataFrame pandas (via `dbfread`)
-- **Cache local:** DataFrame → `.parquet` (formato colunar eficiente)
-- **Filtro:** Município de Sorocaba (IBGE 355220) — múltiplas variantes de coluna de município
-- **Valor persistido:** Contagem de registros (notificações, óbitos, internações, doses) por ano
-
-### Coluna de município — variantes por sistema
-
-Cada sistema DataSUS usa nomes diferentes para a coluna de município:
-
-| Sistema | Colunas candidatas |
-|---------|-------------------|
-| SINAN | `CODMUNRES`, `CO_MUN_RES`, `MUNIC_RES`, `ID_MUNICIP` |
-| SIM | `CODMUNRES`, `CO_MUN_RES`, `MUNIC_RES`, `CODMUNOCOR` |
-| SIH | `MUNIC_RES`, `CO_MUN_RES`, `CODMUNRES`, `MUNIC_MOV` |
-| SI-PNI | `CO_MUN_RES`, `CODMUNRES`, `MUNIC_RES`, `CO_MUNICIPIO_IBGE`, `MUNIC` |
-
-O sistema tenta cada variante em ordem até encontrar uma que exista no DataFrame.
+O endpoint `GET /api/data-range` devolve o intervalo efetivamente carregado (`min`/`max` de `ano` entre `Empenho` e `IndicadorSaude`), usado para validar períodos pedidos no chat.
 
 ---
 
 ## Pipeline ETL
 
-### Execução local (`backend/run_etl.py`)
-
-Script para rodar o pipeline ETL completo **antes** do `docker compose up`. Faz o trabalho pesado (download FTP via PySUS) na máquina local, que tem memória suficiente. Os dados são salvos como cache em `data/datasus/` (parquets) e persistidos no Neo4j.
-
-Quando o container sobe, o `entrypoint.sh` apenas sincroniza os parquets já existentes com o Neo4j — sem download, sem PySUS, sem risco de OOM.
-
-**Detecção automática de ambiente local:**
-O script detecta se `NEO4J_URI` contém o hostname Docker (`neo4j`) e substitui automaticamente por `localhost` para acesso via porta exposta. Isso permite usar o mesmo `.env` tanto no Docker quanto localmente sem edição manual.
-
-**Requisitos:**
-- Neo4j rodando (local ou Docker, porta 7687 acessível)
-- Variáveis em `.env` (`NEO4J_URI=bolt://neo4j:7687` ou `bolt://localhost:7687` — ambos funcionam graças à auto-detecção)
-- Dependências instaladas (`pip install -r requirements.txt`)
-- Memória suficiente para downloads PySUS (~1-2GB para SP inteiro)
-
-**Etapas executadas:**
-1. Verifica conexão com Neo4j
-2. Detecta anos disponíveis via `detect_siops_years()`
-3. Carrega todas as planilhas SIOPS (`.xls`/`.xlsx` em `backend/data/`)
-4. Carrega DataSUS (download FTP ou cache-only, conforme flags)
-5. Executa seed de fallback (COVID)
-
-**Flags:**
-
-| Flag | Descrição |
-|------|-----------|
-| `--skip-download` | Pula downloads FTP, usa apenas cache existente (chama `load_from_cache`) |
-| `--year-from YYYY` | Ano inicial (default: detecta dos arquivos SIOPS) |
-| `--year-to YYYY` | Ano final (default: detecta dos arquivos SIOPS) |
-
-**Fluxo recomendado:**
-```bash
-# 1. Sobe só o Neo4j
-docker compose up neo4j -d
-
-# 2. ETL pesado local (download + persistência)
-cd backend && python run_etl.py
-
-# 3. Sobe tudo (backend lê do cache, sem download)
-docker compose up --build
-```
-
-**Variações de uso:**
-```bash
-# Sem downloads (usa apenas cache existente)
-cd backend && python run_etl.py --skip-download
-
-# Com intervalo de anos específico
-cd backend && python run_etl.py --year-from 2019 --year-to 2023
-
-# Combinando flags
-cd backend && python run_etl.py --skip-download --year-from 2020 --year-to 2022
-```
-
 ### Execução automática (Docker)
 
-O `backend/entrypoint.sh` executa o ETL automaticamente ao iniciar o container:
+`docker compose up` já executa o ETL. O `backend/entrypoint.sh`:
 
 ```
-1. Aguarda Neo4j (30 tentativas, 2s entre cada)
-2. FNS: itera sobre todos .xls/.xlsx em backend/data/ (planilhas de repasses)
-3. DataSUS: auto-detecta anos das planilhas FNS para limitar downloads
-4. Seed fallback: garante dados mínimos caso ETLs falhem
-5. Inicia FastAPI
+1. Aguarda o Neo4j responder (até 30 tentativas, 2s entre cada)
+2. python -m etl.orcamento_loader            (Dados/orcamento/)
+3. python -m etl.saude_indicadores_loader    (Dados/Sorocaba_DATASUS_2015-2025/)
+4. exec uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-### SIOPS Loader (`backend/etl/siops_loader.py`)
+A falha de um loader é registrada como aviso e não impede o backend de subir. Como a leitura é local e rápida, não há distinção entre modo "cache" e "download".
 
-**Nota sobre nomenclatura:** O loader é chamado "siops_loader" por razões históricas, mas os dados que processa são planilhas de repasses do FNS (consultafns.saude.gov.br), não do SIOPS (siops.saude.gov.br). Os nós persistidos no Neo4j são chamados `DespesaSIOPS` por convenção do projeto.
+O `Dockerfile` copia só `backend/` para a imagem. Por isso o `docker-compose.yml` monta `./Dados:/Dados:ro` e define `DADOS_DIR=/Dados` no serviço `backend`. Fora do Docker, os loaders resolvem `DADOS_DIR` com fallback para `../Dados` relativo ao repositório.
 
-**Entrada:** Planilha `.xls` ou `.xlsx` do portal Consulta FNS
+### Execução manual (fora do Docker)
 
-**Processo:**
-1. Detecta engine de leitura (`xlrd` para .xls, `openpyxl` para .xlsx)
-2. Extrai ano dos metadados (busca célula "Ano:" nas primeiras 7 linhas)
-3. Detecta linha de cabeçalho (procura "Grupo" ou "Bloco")
-4. Detecta colunas "Grupo" e "Valor Total" dinamicamente
-5. Para cada linha de dados:
-   - Mapeia nome do grupo → código de subfunção (busca exata + parcial)
-   - Converte valor do formato brasileiro (1.234.567,89) para float
-   - Agrega valores por subfunção
-6. Persiste como `DespesaSIOPS` via MERGE (deduplicação por subfuncao+ano)
-
-**Saída:** Nós `DespesaSIOPS` no Neo4j
-
-**Comando:**
 ```bash
-python -m etl.siops_loader data/PlanilhaDetalhada.xls
+# 1. Subir só o Neo4j
+docker compose up neo4j -d
+
+# 2. ETL completo (orçamento + saúde)
+cd backend
+python run_etl.py
+
+# 3. Ou cada loader individualmente
+python -m etl.orcamento_loader
+python -m etl.saude_indicadores_loader
 ```
 
-### DataSUS Loader (`backend/etl/datasus_loader.py`)
+O `run_etl.py` lê o `.env` da raiz e troca automaticamente o hostname Docker (`bolt://neo4j:`) por `bolt://localhost:`. Ao rodar os módulos diretamente, exporte `NEO4J_URI=bolt://localhost:7687`.
 
-**Dois modos de operação:**
-1. **cache-only** (padrão no Docker): lê apenas parquets já existentes em `data/datasus/` ou `datasus_cache/`. Zero risco de OOM — não importa PySUS nem acessa rede.
-2. **download** (manual, fora do Docker): baixa dados via PySUS do FTP, filtra Sorocaba, salva cache local e persiste no Neo4j.
+### `orcamento_loader.py`
 
-**Compatibilidade PySUS:** O loader utiliza exclusivamente a API do PySUS 2.x (`pysus.sinan()`, `pysus.sim()`, `pysus.sih()`, `pysus.pni()`). Não há fallback para a API legacy.
+**Fluxo:**
+1. Garante constraints e índices (`CREATE ... IF NOT EXISTS`).
+2. Itera `Dados/orcamento/<bloco>/*.csv` e decide o tipo pelo nome (`previsto_e_empenhado` → `OrcamentoPrograma`, `empenhado` → `Empenho`).
+3. Lê com pandas (`sep="|"`, `encoding="latin-1"`).
+4. Para `Empenho`: filtra a janela, mapeia subfunção/fonte de recurso/fornecedor/ação e persiste em lotes de 2.000 via `UNWIND` (dimensões, nó e relacionamentos numa query por lote).
+5. Ao final, quatro agregações sobre o grafo já carregado:
+   - `DespesaAnual` por `(subfuncaoCodigo, ano)`, em Cypher;
+   - `POR_APLICACAO` e `POR_NATUREZA` (quebras dimensionais de `DespesaAnual`), em Cypher;
+   - `VARIACAO_ANUAL` entre anos consecutivos, calculada em Python reaproveitando `compute_yoy_variation`/`classify_trend` de `agents/context/contexto_orcamentario.py`, para que ETL e agente usem a mesma fórmula e os mesmos limiares.
 
-**Estratégia de cache (3 níveis):**
-1. Cache local: `backend/data/datasus/{sistema}_{tipo}_{ano}.parquet`
-2. Cache global: `datasus_cache/{sistema}_{tipo}_{ano}.parquet` (pré-baixado por `download_pysus.py`)
-3. Download FTP: via biblioteca PySUS (último recurso)
+**Mapeamentos:**
+- **Subfunção**: texto da planilha → código 122/301–306 (tabela fixa de 7 entradas, sem casos não mapeados nos dados reais).
+- **Fonte de recurso → `tipoRecurso`**: tabela fixa de 13 entradas (ver `FonteRecurso` abaixo), com fallback `outros` e log de aviso.
+- **Fornecedor**: regex extrai CNPJ ou, na falta dele, CPF; o nome é o texto restante sem tags HTML.
+- **Ação**: `"2109-Atencao Primaria em Saude"` → código antes do primeiro hífen, nome depois.
+- Todas as 19 colunas do CSV de empenho viram propriedade ou dimensão.
 
-**Estrutura interna:**
+**Idempotência:** só `MERGE`, nunca `CREATE`. Rodar o ETL várias vezes produz o mesmo grafo.
 
-A função `load()` itera sobre uma lista declarativa de indicadores `(sistema, tipo, download_fn)`, processando cada combinação sistema/tipo/ano em um loop unificado. Helpers extraídos:
-- `_load_or_download(sistema, tipo, year, has_siops, download_fn)` — resolve cache vs download FTP
-- `_persist_one(neo4j_client, sistema, tipo, year, valor)` — persistência unitária no Neo4j
+### `saude_indicadores_loader.py`
 
-**Processo por indicador/ano:**
-1. Verifica se cache local ou global existe
-2. Se não: baixa via PySUS do FTP DataSUS (funções `_download_sinan`, `_download_sim`, `_download_sih`, `_download_pni`)
-3. Lê resultado (ParquetSet, lista de paths, ou path único)
-4. Identifica coluna de município (tenta múltiplas variantes)
-5. Filtra para Sorocaba (IBGE 355220, com tratamento de zeros à esquerda)
-6. Salva cache local como Parquet
-7. Persiste imediatamente como `IndicadorDataSUS` via `_persist_one()` (persistência incremental)
-8. Libera DataFrame da memória (`del df` + `gc.collect()`) antes de processar o próximo indicador/ano
+As planilhas TabNet seguem um padrão (linha 0 = título, linha 2 = cabeçalho, dados a partir da linha 3), mas em quatro formatos com leitores próprios:
 
-**Persistência incremental:** Cada indicador é salvo no Neo4j imediatamente após ser processado, em vez de acumular todos os registros e persistir em batch ao final. Isso evita perda de dados caso o processo seja interrompido (ex: OOM kill durante download de arquivos grandes do SIH).
+| Formato | Leitor | Onde |
+|---------|--------|------|
+| Ano em linhas, categorias em colunas, `Total` opcional | `_read_wide_sheet(mensal=False)` | SIM, SIH, SINASC, SINAN, CNES (ocupações, estabelecimentos por tipo) |
+| `Ano/Mês` em linhas (`"2015/Jan"`) | `_read_wide_sheet(mensal=True)` | Sub-cubos mensais do CNES: só **dezembro** é mantido |
+| Ano + uma coluna de valor | `_read_single_valor_sheet` | SIA, CNES leitos, CNES profissionais |
+| Transposto (vacina em linhas, ano em colunas) | `_read_vacina_transposta` | SI-PNI |
 
-**Sistemas baixados:**
-- SINAN dengue (`disease="DENG"`)
-- SINAN COVID (`disease="INFL"`)
-- SI-PNI vacinação (`group="CPNI"`, `states="SP"`)
-- SIM mortalidade (`groups="CID10"`, `states="SP"`)
-- SIH internações (`states="SP"`, `groups="RD"`, `months=1-12`)
+COVID tem leitores próprios (`_read_covid_anual`, `_read_covid_mensal`), porque traz métricas emparelhadas com acumulados. Linhas cuja chave (ano ou ano/mês) não parseia são puladas, o que descarta rodapés, notas e linhas de totalização.
 
-**Comandos:**
-```bash
-# Modo cache-only (startup Docker / entrypoint):
-python -m etl.datasus_loader
-
-# Modo download (manual, requer memória suficiente):
-python -m etl.datasus_loader --download [year_from] [year_to]
-```
-
-### Download Direto FTP (`download_pysus.py`)
-
-**Arquivo:** `download_pysus.py` (raiz do projeto)
-
-Script standalone que acessa o FTP do DataSUS diretamente (sem PySUS), com:
-- Barra de progresso (tqdm)
-- Conversão `.dbc` → `.dbf` → DataFrame (via `datasus-dbc` + `dbfread`)
-- Filtro para Sorocaba
-- Cache em `datasus_cache/` como Parquet
-- Resumo final com contagem por sistema/ano
-
-**Dependências extras:** `dbfread`, `datasus-dbc`, `pyarrow`, `tqdm`
-
-**Comando:**
-```bash
-python download_pysus.py 2019 2025
-```
-
-### Seed Data (`backend/etl/seed_data.py`)
-
-Dados hardcoded de COVID-19 de Sorocaba (2018-2022) como fallback:
-- Apenas 5 registros de indicadores de COVID — dados não disponíveis via PySUS/SINAN (foram notificados pelo e-SUS Notifica / SIVEP-Gripe)
-- Despesas SIOPS não precisam de seed — são carregadas das planilhas FNS
-- Demais indicadores (dengue, vacinação, internações, mortalidade) são obtidos diretamente do DataSUS via ETL
-
-Garante que o sistema tenha dados de COVID mesmo sem acesso ao FTP DataSUS.
-
-### Detect Years (`backend/etl/detect_years.py`)
-
-Auto-detecta anos disponíveis nos arquivos de repasses FNS em `backend/data/` para limitar downloads DataSUS apenas aos anos relevantes.
-
-**Estratégia de extração de ano:**
-- Busca célula "Ano:" nos metadados da planilha (primeiras 7 linhas)
-- Retorna `None` se não encontrar o ano nos metadados
+Há uma função `_load_<sistema>` por sistema (`_load_sim`, `_load_sih`, `_load_sinasc`, `_load_sinan`, `_load_sipni`, `_load_sia`, `_load_covid`, `_load_cnes`). Cada uma persiste `IndicadorSaude` (`MERGE` por `chave`) e as quebras dimensionais em lotes de 2.000. Planilhas que descrevem o **mesmo** fato (ex.: óbitos por faixa etária e por capítulo CID) convergem para o mesmo nó, e cada uma só acrescenta o seu tipo de relacionamento.
 
 ---
 
-## Modelo de Dados Neo4j
+## Modelo de Dados Neo4j — Orçamento
 
-### Nós
+> As contagens abaixo vêm da validação de 2026-08-04 (ver [documento histórico](historico/DOCUMENTACAO_ETL_MODELO_DADOS.md)), anterior às agregações `POR_APLICACAO`/`POR_NATUREZA`/`VARIACAO_ANUAL`. Servem como ordem de grandeza.
 
-| Label | Chave natural | Campos principais |
-|-------|---------------|-------------------|
-| `Analise` | `id` (UUID) | dateFrom, dateTo, healthParams (JSON), starStatus, hierStatus, starTextAnalysis, hierTextAnalysis, starCompletedAt, hierCompletedAt, createdAt |
-| `DespesaSIOPS` | `subfuncao + ano` | id (UUID), subfuncao (int), subfuncaoNome (str), ano (int), valor (float), fonte ("siops"), importedAt (ISO 8601). **Nota:** apesar do nome, os dados vêm do portal FNS (repasses federais), não do SIOPS. |
-| `IndicadorDataSUS` | `sistema + tipo + ano` | id (UUID), sistema (str), tipo (str), ano (int), valor (float), fonte ("datasus"), importedAt (ISO 8601) |
-| `MetricaExecucao` | `id` (UUID) | architecture (str), agentId (str), agentType (str), executionTimeMs (float), cpuPercent (float), recordedAt (ISO 8601) |
+```
+(:Empenho)-[:DO_FORNECEDOR]->(:Fornecedor)
+(:Empenho)-[:FINANCIADO_POR]->(:FonteRecurso)
+(:Empenho)-[:CLASSIFICADO_EM]->(:Subfuncao)
+(:Empenho)-[:APLICADO_EM]->(:Aplicacao)
+(:Empenho)-[:EXECUTA_ACAO]->(:Acao)-[:PARTE_DE]->(:ProgramaGoverno)
+(:Empenho)-[:DA_UNIDADE]->(:UnidadeOrcamentaria)
 
-### Relacionamentos
+(:DespesaAnual)-[:POR_APLICACAO {valor}]->(:Aplicacao)
+(:DespesaAnual)-[:POR_NATUREZA {valor}]->(:Natureza)
+(:DespesaAnual)-[:VARIACAO_ANUAL {percentual, classificacao}]->(:DespesaAnual)   // ano atual → ano anterior
+```
 
-```cypher
-(:Analise)-[:POSSUI_DESPESA]->(:DespesaSIOPS)
-(:Analise)-[:POSSUI_INDICADOR]->(:IndicadorDataSUS)
+### `Empenho` (~52,9 mil nós)
+
+Um nó por linha do CSV de empenho, sem agregação. A chave de `MERGE` é `id = "{periodoOrigem}:{índice da linha}"`, porque `nroEmpenho`/`nroProcesso` se repetem entre parcelas e estornos.
+
+| Propriedade | Observação |
+|-------------|------------|
+| `nroEmpenho`, `nroProcesso` | Como vêm da planilha |
+| `dataEmpenho` (Date), `ano`, `mes` | Parseado de `DD/MM/YYYY` |
+| `subfuncaoCodigo`, `subfuncaoNome` | 122, 301–306 |
+| `natureza` | Natureza de despesa (ex.: `3.3.90.30.00-Material de Consumo`) |
+| `valorEmpenhoOriginal`, `valorEstorno`, `saldoEmpenho`, `valorProcessado`, `valorPago` | R$ |
+| `periodoOrigem` | Bloco de arquivo de origem |
+| `fonte` | Sempre `lai_transparencia` |
+
+Soma de `valorProcessado` na validação: **R$ 7,15 bilhões** (2016–2025).
+
+### Dimensões do empenho
+
+| Nó | Chave | Observações |
+|----|-------|-------------|
+| `Fornecedor` (~2,2 mil) | `documento` (CNPJ **ou** CPF) | ~15–20% dos empenhos são para pessoa física. `tipoDocumento`: `cnpj` \| `pessoa_fisica` \| `desconhecido` (fallback `SEM_DOC:{nome}`) |
+| `FonteRecurso` (13) | `nome` (texto literal) | `tipoRecurso`: `proprio` \| `federal` \| `estadual` \| `credito` \| `emenda_parlamentar` \| `outros`. Variantes como `"...vinculados"` vs. `"...vinculados-exec.anter."` não são unificadas: marcam exercício corrente vs. anterior |
+| `Subfuncao` (7) | `codigo` | 122 Administração Geral · 301 Atenção Básica · 302 Assistência Hospitalar e Ambulatorial · 303 Suporte Profilático e Terapêutico · 304 Vigilância Sanitária · 305 Vigilância Epidemiológica · 306 Alimentação e Nutrição |
+| `Aplicacao` (~330) | `nome` | Dimensão mais específica da finalidade do gasto (ex.: `"Bloco 01 - Assistencia Farmaceutica"`) |
+| `Natureza` | `nome` | Criado na agregação `POR_NATUREZA` a partir de `Empenho.natureza` |
+| `Acao` (~900) / `ProgramaGoverno` (4) | `codigo` / `nome` | Extraídos do campo `Ação` |
+| `UnidadeOrcamentaria` (1) | `nome` | Só `"Secr.da Saude"` |
+
+**`emenda_parlamentar`** é uma categoria própria, de propósito: a variante `"- Leg. Municipal"` (só em 2023–2025) sugere emenda de vereador (recurso municipal), mas as variantes sem qualificador podem ser de deputado/senador (repasse federal).
+
+**Subfunção 122** só aparece a partir de 2020. Antes disso, folha e obrigações patronais ficavam em 301, o que explica o salto de 301 entre 2016 e 2018. É mudança real de prática contábil, não bug do ETL.
+
+### `DespesaAnual` (agregado materializado)
+
+Grão `(subfuncaoCodigo, ano)`, calculado a partir de `Empenho` no fim do ETL. É o que os agentes de orçamento consultam (`neo4j_client.get_despesas_por_subfuncao`).
+
+| Propriedade | Observação |
+|-------------|------------|
+| `subfuncaoCodigo`, `subfuncaoNome`, `ano` | Índice composto (Neo4j Community não tem constraint composta) |
+| `valorProcessado`, `valorPago`, `valorEmpenhado` | Somas de `Empenho` |
+| `valorProprio`, `valorFederal`, `valorEstadual`, `valorCredito`, `valorEmendaParlamentar`, `valorOutros` | Breakdown por `tipoRecurso`, que soma exatamente o `valorProcessado` |
+
+Relacionamentos derivados:
+- **`POR_APLICACAO` / `POR_NATUREZA`** `{valor}`: quebra dimensional do gasto, no mesmo padrão do lado saúde (o valor vive na relação). Consumidos via `db/query_builder.py::build_despesa_cypher`, com `dimensao` validada contra `DESPESA_DIMENSOES`.
+- **`VARIACAO_ANUAL`** `{percentual, classificacao}`: variação ano a ano pré-computada. "Consecutivo" significa consecutivo na lista de anos com despesa para a subfunção. Lida por `neo4j_client.get_variacao_anual` (ação `consultar_variacao_anual` dos agentes de orçamento).
+
+### `OrcamentoPrograma` (~940 nós)
+
+Previsto vs. realizado por `programa`, `acao`, `orgao` e `periodoOrigem` (bloco inteiro), com `valorPrevisto` e `valorRealizado`. **Não** está ligado a `ProgramaGoverno`/`Acao`, porque os textos não batem entre os dois CSVs.
+
+### Constraints e índices (orçamento)
+
+```
+fornecedor_documento, subfuncao_codigo, fonte_recurso_nome, programa_governo_nome, acao_codigo,
+unidade_orcamentaria_nome, aplicacao_nome, natureza_nome, empenho_id        (UNIQUE)
+despesa_anual_lookup (DespesaAnual: subfuncaoCodigo, ano)                    (índice composto)
+orcamento_programa_lookup (OrcamentoPrograma: periodoOrigem)                 (índice)
+```
+
+---
+
+## Modelo de Dados Neo4j — Indicadores de Saúde
+
+```
+(:IndicadorSaude)-[:POR_FAIXA_ETARIA]->(:FaixaEtaria)
+(:IndicadorSaude)-[:POR_CAPITULO_CID]->(:CapituloCID10)
+(:IndicadorSaude)-[:POR_SEXO]->(:Sexo)
+(:IndicadorSaude)-[:POR_FAIXA_PESO]->(:FaixaPeso)
+(:IndicadorSaude)-[:COBERTURA_VACINAL]->(:Vacina)
+(:IndicadorSaude)-[:DOSES_APLICADAS]->(:Vacina)
+(:IndicadorSaude)-[:POR_TIPO_ESTABELECIMENTO]->(:TipoEstabelecimento)
+(:IndicadorSaude)-[:POR_OCUPACAO]->(:OcupacaoProfissional)
+(:IndicadorSaude)-[:POR_TIPO_EQUIPE]->(:TipoEquipe)
+(:IndicadorSaude)-[:POR_TIPO_ATENDIMENTO]->(:TipoAtendimento)
+(:IndicadorSaude)-[:POR_TIPO_LEITO_CONSULTORIO]->(:TipoLeitoConsultorio)
+(:IndicadorSaude)-[:POR_TIPO_EQUIPAMENTO]->(:TipoEquipamento)
+```
+
+Toda relação de quebra carrega uma única propriedade `valor`; o tipo da relação dá a semântica.
+
+### `IndicadorSaude` (fato central, ~350 nós)
+
+Grão `(sistema, subtipo, ano, mes)`. `mes` é `null` exceto no COVID mensal.
+
+| Propriedade | Observação |
+|-------------|------------|
+| `chave` | `"{sistema}:{subtipo}:{ano}:{mes ou 0}"`, chave de `MERGE` (UNIQUE) |
+| `sistema` | `sim` \| `sih` \| `sinan` \| `sipni` \| `sinasc` \| `sia` \| `cnes` \| `covid`. **É a partição dos 8 agentes de saúde** (um por sistema) |
+| `subtipo` | Ver tabela abaixo |
+| `valorTotal` | Usa o `Total` da própria planilha quando existe, porque somar categorias nem sempre é correto. Fica `null` quando não faz sentido somar |
+| `valorAcumulado` | Só COVID |
+| `fonte` | Sempre `datasus_tabnet` |
+
+| Sistema | Subtipos | Anos |
+|---------|----------|------|
+| `sim` | `mortalidade` | 2016–2025 |
+| `sih` | `internacoes` | 2016–2025 |
+| `sinan` | `dengue`, `chikungunya`, `sifilis_adquirida`, `sifilis_gestante`, `sifilis_congenita`, `coqueluche`, `hepatites_virais`, `tuberculose`, `hanseniase` | 2016–2025 (sífilis/hepatites sem os anos mais recentes) |
+| `sipni` | `cobertura_vacinal` (média das vacinas), `doses_aplicadas` (soma) | 2016–2025 |
+| `sinasc` | `nascidos_vivos` | 2016–2025 |
+| `sia` | `producao_ambulatorial` | 2016–2025 |
+| `covid` | `casos`, `obitos` (grão anual **e** mensal) | 2020–2023 |
+| `cnes` | `leitos`, `profissionais`, `estabelecimentos_por_tipo`, `ocupacoes`, `equipes_saude`, `tipo_atendimento`, `leitos_consultorios`, `equipamentos`, `estabelecimentos_nivel_atencao`, `estabelecimentos_servico_classificacao`, `estabelecimentos_habilitacao`, `estabelecimentos_vigilancia_epidemiologica` | 2016–2025 |
+
+### Dimensões
+
+| Nó | Chave | Decisão |
+|----|-------|---------|
+| `FaixaEtaria` | `"{sistema}:{nome}"` | **Não unificada entre sistemas**: os bins diferem (SIM de 10 em 10, SINAN de 20 em 20) e no SINASC a faixa é a **idade da mãe**. Re-binning sem microdado seria artificial |
+| `CapituloCID10` | `codigo` (`"01"`–`"21"`, arábico) | **Unificada**: é o que permite cruzar SIM × SIH pela mesma causa. SIM usa numeração romana e SIH decimal, e ambos são convertidos para o código canônico |
+| `Sexo`, `FaixaPeso`, `Vacina` | `chave = nome` | Sexo: SINAN tuberculose/hanseníase. FaixaPeso: SINASC. Vacina: SI-PNI |
+| `TipoEstabelecimento`, `OcupacaoProfissional`, `TipoEquipe`, `TipoAtendimento`, `TipoLeitoConsultorio`, `TipoEquipamento` | `chave = nome` | Exclusivas do CNES. Os sub-cubos mensais são agregados para **dezembro** de cada ano |
+
+As dimensões válidas por sistema estão em `db/query_builder.py::SISTEMA_DIMENSOES`, que é a mesma allowlist usada na deliberação dos agentes.
+
+### Constraints (saúde)
+
+`indicador_saude_chave`, `faixa_etaria_chave`, `capitulo_cid10_codigo`, `sexo_chave`, `faixa_peso_chave`, `vacina_chave`, `tipo_estabelecimento_chave`, `ocupacao_profissional_chave`, `tipo_equipe_chave`, `tipo_atendimento_chave`, `tipo_leito_consultorio_chave`, `tipo_equipamento_chave` (todas UNIQUE).
+
+---
+
+## Nós de Execução e Consultas
+
+Além dos dados carregados pelo ETL, o backend grava o histórico das análises:
+
+```
 (:Analise)-[:GEROU_METRICA]->(:MetricaExecucao)
-(:DespesaSIOPS)-[:CORRELACIONA_COM]->(:IndicadorDataSUS)
 ```
 
-### Convenções Cypher
+| Nó | Propriedades |
+|----|--------------|
+| `Analise` | `id`, `dateFrom`, `dateTo`, `healthParams` (JSON), `starStatus`/`hierStatus`, `starTextAnalysis`/`hierTextAnalysis`, `starCompletedAt`/`hierCompletedAt`, `createdAt`, `sourceQuestion`, `interpretedVia` |
+| `MetricaExecucao` | `id`, `architecture`, `agentId`, `agentType`, `executionTimeMs`, `cpuPercent`, `recordedAt` |
 
-- Sempre `MERGE` para deduplicação (nunca `CREATE` direto)
-- `COALESCE(d.id, $id)` para preservar IDs existentes em MERGE
-- Parâmetros nomeados com `$` (ex: `$analysisId`, `$dateFrom`)
-- Timestamps em ISO 8601 UTC
-- Sessions via `with neo4j_client._driver.session() as session:`
+As análises passadas também alimentam a memória episódica do agente de interpretação de intenção (`neo4j_client.get_past_analises`).
 
-### Estratégia Offline-First
+**Consultas seguras.** O LLM nunca escreve Cypher. Quando um agente decide uma quebra dimensional (ex.: `POR_FAIXA_ETARIA`), `db/query_builder.py` monta uma query parametrizada e só interpola o nome do relacionamento depois de validá-lo contra a allowlist. Uma dimensão inválida levanta `DimensaoInvalida`, e `Neo4jClient` cai para a consulta sem quebra, sem erro fatal. Cada consulta é registrada em `neo4j_client.query_log` e anexada ao resultado do agente, de onde o `AgentDataCard` da aba técnica a exibe.
 
-Todos os dados são pré-carregados no Neo4j via ETL. Os agentes consultam apenas o Neo4j local durante a análise — sem chamadas a APIs externas (exceto LLM para síntese textual). Isso garante consistência e reprodutibilidade dos benchmarks.
-
+**Convenções Cypher:** sempre `MERGE` (nunca `CREATE` direto), parâmetros nomeados com `$`, timestamps ISO 8601 UTC, lotes via `UNWIND`.
 
 ---
 
-## Limitações e Pontos de Melhoria
+## Validações com Dado Real
 
-### Observação sobre a natureza dos dados financeiros
+Feitas na implementação do ETL (2026-08-04), contra um Neo4j populado:
 
-Os dados financeiros utilizados neste projeto representam **repasses federais fundo a fundo** (transferências do FNS para o Fundo Municipal de Saúde de Sorocaba), e **não** a despesa total efetivamente executada pelo município em saúde. Essa distinção é importante para a interpretação dos resultados:
+| Validação | Resultado |
+|-----------|-----------|
+| ETL completo | ~58 mil nós, ~321 mil relacionamentos, sem erro |
+| Idempotência (rodar 2×) | Contagens idênticas |
+| `valorProcessado` × soma dos `tipoRecurso` em `DespesaAnual` | Diferença = 0 em toda a base |
+| Registros fora de 2016–2025 | 0 |
+| Correlação gasto × indicador | Subfunção 305 × dengue revela o surto de 2024 (46.635 casos), coincidindo com o pico de gasto em vigilância epidemiológica |
+| Multi-hop SIM × SIH por capítulo CID | Doenças circulatórias lideram óbitos e internações em 2020 |
 
-| Aspecto | O que o projeto usa | O que seria ideal |
-|---------|--------------------|--------------------|
-| Fonte | Portal FNS (consultafns.saude.gov.br) | SIOPS (siops.saude.gov.br) + FNS |
-| Natureza | Repasses federais recebidos | Despesa total executada (federal + estadual + municipal) |
-| Cobertura | Apenas parcela federal | Financiamento tripartite completo |
-| Significado | "Quanto a União transferiu" | "Quanto o município efetivamente gastou" |
+---
 
-**Justificativa da escolha:** Para o objetivo do TCC (comparar duas arquiteturas multiagente), a fonte é adequada porque ambas as topologias processam os mesmos dados, garantindo uma comparação justa. Os dados são reais, oficiais e públicos, e a correlação entre repasses federais e indicadores de saúde ainda é válida como proxy da relação gasto-resultado.
+## Limitações Conhecidas
 
-### Pontos que podem passar despercebidos
-
-1. **Repasses ≠ Gastos efetivos** — O município pode receber recursos e não executá-los no mesmo exercício, ou complementar com recursos próprios. A execução real pode diferir significativamente do valor repassado.
-
-2. **Ausência de recursos próprios municipais** — O financiamento do SUS é tripartite (União + Estado + Município). Em Sorocaba, os recursos próprios municipais podem representar 50-70% do gasto total em saúde. Esses valores não aparecem nos dados do FNS.
-
-3. **Ausência de transferências estaduais** — Repasses do Estado de São Paulo para o município também não estão contemplados.
-
-4. **Defasagem temporal** — Repasses podem ser feitos em um ano mas executados no seguinte. Portarias de habilitação podem ter efeito retroativo. Valores podem ser estornados posteriormente.
-
-5. **Mudanças de nomenclatura** — A estrutura de blocos/grupos do FNS mudou ao longo dos anos (Portaria de Consolidação nº 6/2017, Portaria GM/MS nº 828/2020), o que pode causar inconsistências na série temporal.
-
-6. **Sobreposição de grupos** — Os grupos de repasse federal não necessariamente refletem como o município organiza internamente seus gastos. Ações de "Atenção Primária" podem se sobrepor com "Vigilância" na prática.
-
-### Pontos de melhoria para trabalhos futuros
-
-1. **Integrar dados do SIOPS** — Usar os dados de execução orçamentária declarados pelo município no SIOPS (siops.saude.gov.br) para ter a despesa total efetiva, não apenas os repasses federais.
-
-2. **Incluir financiamento tripartite** — Somar repasses federais (FNS) + estaduais + recursos próprios municipais para ter o quadro completo do financiamento.
-
-3. **Normalizar por população** — Calcular gasto per capita para permitir comparações mais justas entre períodos (a população de Sorocaba cresce ao longo dos anos).
-
-4. **Ajustar por inflação** — Deflacionar valores usando IPCA ou IGP-M para comparações reais entre anos.
-
-5. **Cruzar com dados de cobertura** — Usar dados de cobertura de equipes (e-SUS, CNES) para contextualizar a relação gasto-resultado.
-
-6. **Validação cruzada** — Comparar os valores do FNS com os declarados no SIOPS para identificar discrepâncias e validar a consistência dos dados.
-
-7. **Séries temporais mais longas** — Expandir o período de análise para capturar tendências de longo prazo e reduzir o impacto de eventos pontuais (ex: pandemia COVID-19 em 2020-2021).
+1. **`OrcamentoPrograma` não respeita a janela com precisão**: o grão é o bloco plurianual.
+2. **`FaixaEtaria` não é comparável entre sistemas**: decisão deliberada, então não some nem compare faixas de SIM e SINASC.
+3. **`OrcamentoPrograma` não está ligado a `ProgramaGoverno`/`Acao`**: exigiria fuzzy-matching.
+4. **`emenda_parlamentar` não foi classificada** como própria ou federal.
+5. **CNES mensal foi reduzido a dezembro**: para granularidade mensal, é preciso reprocessar o xlsx.
+6. **2025 é preliminar** em SIM, SIH, SINASC e CNES Rede Assistencial. Conclusões que dependam desse ano devem sinalizar a ressalva.
+7. **SI-PNI tem duas séries distintas** (2015–2022 e 2023–2026), com fontes e nomenclaturas diferentes. Não trate como série contínua.
+8. **Valores nominais**: sem deflação (IPCA) nem normalização per capita. São melhorias possíveis para trabalhos futuros.
+9. **Orçamento sem data de extração**: os CSVs da LAI não registram quando foram exportados.
