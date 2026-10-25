@@ -321,13 +321,15 @@ class CoordenadorGeral(AgenteCoALA):
         """Persiste métricas dos agentes + 4 supervisores e emite evento
         `metric` (Req 10.8, 11.2).
 
-        Overhead = wall_clock - soma dos agentes FOLHA (nível 2).
-        Supervisores NÃO entram em workers_time porque seu tempo já
-        engloba o dos subordinados — somar ambos causaria dupla contagem.
-        O overhead captura: tempo dos supervisores fora dos subordinados
-        + instanciação (não há mais tempo de comunicação lateral a
-        capturar — a árvore agora é estrita).
+        Overhead = wall_clock determinístico - soma dos agentes FOLHA (nível 2),
+        a mesma definição da estrela. Supervisores NÃO entram em workers_time
+        porque seu tempo já engloba o dos subordinados — somar ambos causaria
+        dupla contagem; aparecem em `agent_metrics` só para exibição. O
+        overhead captura: tempo dos supervisores fora dos subordinados +
+        instanciação (não há mais tempo de comunicação lateral a capturar —
+        a árvore agora é estrita).
         """
+        persist_entry = time.time()  # fallback do relógio se o analítico não chegou a fechá-lo
         analysis_id = self.working_memory["analysis_id"]
         metrics_collectors: list[MetricsCollector] = self.working_memory.get(
             "_metrics_collectors", []
@@ -395,34 +397,17 @@ class CoordenadorGeral(AgenteCoALA):
                 except Exception:
                     pass
 
-        # Wall-clock total time — exclui tempo do sintetizador (LLM)
-        # porque depende da disponibilidade da API do LLM, não da arquitetura.
+        # Wall-clock determinístico: do início do coordenador até o fim da parte
+        # determinística do SupervisorAnalitico (`capturar_wallclock`) — o mesmo
+        # ponto em que a estrela fecha o relógio (`_orch_end`). Fica de fora
+        # tudo o que vem depois: priorização, síntese e verificação (LLM) e a
+        # própria gravação das métricas no Neo4j (que antes entrava no relógio
+        # só da hierárquica e aparecia como "overhead").
         coord_start = self.working_memory.get("_coord_start", time.time())
-        coord_end = time.time()
-        wall_clock_ms_raw = round((coord_end - coord_start) * 1000, 2)
-
-        # Subtrair tempo do sintetizador, da priorização (Etapa 3) e da
-        # verificação pós-síntese (Etapa 4) — todos os collectors do
-        # SupervisorAnalitico, todos incluem chamada LLM e rodam depois de
-        # capturar_wallclock.
-        sint_time_ms = 0.0
-        prior_time_ms = 0.0
-        verif_time_ms = 0.0
-        for agent_mc in getattr(sup_analitico, "_collectors", []):
-            try:
-                m = agent_mc.collect()
-                if m.get("agentType") == "sintetizador":
-                    sint_time_ms = m.get("executionTimeMs", 0)
-                elif m.get("agentType") == "priorizacao":
-                    prior_time_ms = m.get("executionTimeMs", 0)
-                elif m.get("agentType") == "verificacao":
-                    verif_time_ms = m.get("executionTimeMs", 0)
-            except Exception:
-                pass
-
-        wall_clock_ms = round(
-            max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms - verif_time_ms), 2
-        )
+        leaf_end = getattr(sup_analitico, "_coala_leaf_end_time", None)
+        has_leaf_end = isinstance(leaf_end, (int, float)) and leaf_end >= coord_start
+        coord_end = leaf_end if has_leaf_end else persist_entry
+        wall_clock_ms = round(max(0, (coord_end - coord_start) * 1000), 2)
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
 
         agent_metrics.append({

@@ -139,8 +139,13 @@ def _tokens_for_agent(agent_key: str) -> set[str]:
 
 # Correspondência subfunção orçamentária → tokens de indicador que a
 # tornam relevante (decisão tomada com o usuário na sessão da Fase 2):
-#   301 Atenção Básica            -> SI-PNI (vacinação)
-#   302 Assist. Hospitalar/Ambul. -> SIH (internações)
+#   301 Atenção Básica            -> SI-PNI (vacinação) + SINASC (nascidos
+#                                    vivos — Fase 3.5; sem este gatilho a
+#                                    despesa 301 nunca era buscada e o
+#                                    cruzamento 301 × nascidos_vivos, já
+#                                    previsto em data_crossing, nunca ocorria)
+#   302 Assist. Hospitalar/Ambul. -> SIH (internações) + SIA (produção
+#                                    ambulatorial — Fase 3.5, idem)
 #   303 Suporte Profilático/Terap.-> SINAN (qualquer agravo — "qualquer
 #                                    tratamento ou prevenção de doença
 #                                    se encaixa")
@@ -157,8 +162,8 @@ def _tokens_for_agent(agent_key: str) -> set[str]:
 #   306 Alimentação e Nutrição    -> qualquer subtipo do CNES (idem 122)
 _SUBFUNCAO_TOKENS: dict[int, set[str]] = {
     122: _tokens_for_agent("cnes"),
-    301: _tokens_for_agent("sipni"),
-    302: _tokens_for_agent("sih"),
+    301: _tokens_for_agent("sipni") | _tokens_for_agent("sinasc"),
+    302: _tokens_for_agent("sih") | _tokens_for_agent("sia"),
     303: _tokens_for_agent("sinan"),
     304: {"estabelecimentos_vigilancia_epidemiologica"} | _tokens_for_agent("sinan"),
     305: _tokens_for_agent("sinan") | _tokens_for_agent("covid"),

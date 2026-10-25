@@ -50,6 +50,32 @@ class Neo4jClient:
         self.query_log: list[dict] = []
 
     # ------------------------------------------------------------------
+    # Esquema dos nós gravados pela aplicação
+    # ------------------------------------------------------------------
+
+    # Constraints/índices das entidades de ETL ficam nos loaders; estes são
+    # os nós que a aplicação grava em tempo de execução. Sem a constraint, cada
+    # MERGE varre todos os nós do rótulo e o MERGE concorrente (estrela e
+    # hierárquica gravam em paralelo) pode duplicar o nó.
+    SCHEMA_STATEMENTS = (
+        "CREATE CONSTRAINT analise_id IF NOT EXISTS FOR (a:Analise) REQUIRE a.id IS UNIQUE",
+        "CREATE CONSTRAINT metrica_execucao_id IF NOT EXISTS FOR (m:MetricaExecucao) REQUIRE m.id IS UNIQUE",
+    )
+
+    def ensure_schema(self) -> None:
+        """Cria (se ainda não existirem) as constraints de Analise e MetricaExecucao.
+
+        Idempotente. Uma falha em um statement é logada e não impede os demais
+        (ex.: dados antigos duplicados fazem a constraint falhar).
+        """
+        with self._driver.session() as session:
+            for statement in self.SCHEMA_STATEMENTS:
+                try:
+                    session.run(statement).consume()
+                except Exception as exc:
+                    logger.warning("Neo4j: falha ao aplicar '%s' — %s", statement, exc)
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -362,7 +388,11 @@ class Neo4jClient:
         """
         recorded_at = metrica.get("recordedAt") or datetime.now(timezone.utc).isoformat()
 
+        # MATCH da Analise primeiro: se ela não existir (execução fora do fluxo
+        # de dispatch_analysis), nada é criado — antes o MERGE da métrica vinha
+        # antes e deixava nós órfãos.
         query = """
+        MATCH (a:Analise {id: $analysisId})
         MERGE (m:MetricaExecucao {id: $id})
         SET m.architecture    = $architecture,
             m.agentId         = $agentId,
@@ -370,8 +400,6 @@ class Neo4jClient:
             m.executionTimeMs = $executionTimeMs,
             m.cpuPercent      = $cpuPercent,
             m.recordedAt      = $recordedAt
-        WITH m
-        MATCH (a:Analise {id: $analysisId})
         MERGE (a)-[:GEROU_METRICA]->(m)
         """
         with self._driver.session() as session:

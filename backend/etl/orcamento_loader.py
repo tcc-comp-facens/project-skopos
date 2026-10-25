@@ -12,7 +12,8 @@ Fontes (ver docs/historico/PLANO_NOVO_MODELO_DADOS.md):
         → nós Empenho (granular, 1 nó por linha) + dimensões
         → agregado DespesaAnual (subfuncao x ano), calculado ao final
     Dados/orcamento/{periodo}/*_previsto_e_empenhado_por_programa_e_secretaria_*.csv
-        → nós OrcamentoPrograma (grão: bloco plurianual do arquivo, sem coluna de ano)
+        → NÃO é carregado (ignorado em `load`): grão plurianual sem coluna de ano e
+          sem ligação com ProgramaGoverno/Acao dos empenhos; nenhum agente o consumia
 
 Formato dos CSVs: delimitador '|', encoding latin-1.
 
@@ -177,7 +178,6 @@ _CONSTRAINTS = [
     # recurso Enterprise-only; MERGE funciona normalmente, só perde a garantia
     # de unicidade a nível de banco).
     "CREATE INDEX despesa_anual_lookup IF NOT EXISTS FOR (d:DespesaAnual) ON (d.subfuncaoCodigo, d.ano)",
-    "CREATE INDEX orcamento_programa_lookup IF NOT EXISTS FOR (o:OrcamentoPrograma) ON (o.periodoOrigem)",
 ]
 
 
@@ -332,69 +332,15 @@ def _persist_empenhos(session, records: list[dict]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Leitura — Previsto x Realizado (OrcamentoPrograma)
-# ---------------------------------------------------------------------------
-
-_PREVISTO_COLS = ["Programa de Governo", "Ação", "Órgão Responsável"]
-_PREVISTO_VALOR_COL = "Quanto foi previsto"
-_REALIZADO_VALOR_COL_PREFIX = "Quanto já foi realizado"
-
-
-def _read_previsto_realizado_csv(path: Path, periodo_origem: str) -> list[dict]:
-    df = pd.read_csv(path, sep=CSV_SEP, encoding=CSV_ENCODING, dtype=str)
-
-    missing = [c for c in _PREVISTO_COLS if c not in df.columns]
-    if missing:
-        raise ValueError(f"{path.name}: colunas ausentes: {missing}")
-
-    realizado_col = next(
-        (c for c in df.columns if c.startswith(_REALIZADO_VALOR_COL_PREFIX)), None
-    )
-    if realizado_col is None or _PREVISTO_VALOR_COL not in df.columns:
-        raise ValueError(f"{path.name}: colunas de valor previsto/realizado não encontradas")
-
-    previsto = pd.to_numeric(df[_PREVISTO_VALOR_COL], errors="coerce").fillna(0.0)
-    realizado = pd.to_numeric(df[realizado_col], errors="coerce").fillna(0.0)
-
-    imported_at = datetime.now(timezone.utc).isoformat()
-    records = []
-    for idx, row in df.iterrows():
-        records.append({
-            "programa": row["Programa de Governo"],
-            "acao": row["Ação"],
-            "orgao": row["Órgão Responsável"],
-            "periodoOrigem": periodo_origem,
-            "valorPrevisto": float(previsto.iloc[idx]),
-            "valorRealizado": float(realizado.iloc[idx]),
-            "fonte": "lai_transparencia",
-            "importedAt": imported_at,
-        })
-    return records
-
-
-_PERSIST_ORCAMENTO_PROGRAMA_QUERY = """
-UNWIND $rows AS row
-MERGE (o:OrcamentoPrograma {
-    programa: row.programa, acao: row.acao,
-    orgao: row.orgao, periodoOrigem: row.periodoOrigem
-})
-SET o.valorPrevisto  = row.valorPrevisto,
-    o.valorRealizado = row.valorRealizado,
-    o.fonte          = row.fonte,
-    o.importedAt     = row.importedAt
-"""
-
-
-def _persist_orcamento_programa(session, records: list[dict]) -> int:
-    for batch in _batches(records, BATCH_SIZE):
-        session.run(_PERSIST_ORCAMENTO_PROGRAMA_QUERY, rows=batch)
-    return len(records)
-
-
-# ---------------------------------------------------------------------------
 # Agregação — DespesaAnual
 # ---------------------------------------------------------------------------
 
+# Semântica das somas (conferida nas 52.904 linhas de Empenho):
+#   - `valorEstorno` é gravado NEGATIVO no CSV de origem (anulações).
+#   - `saldoEmpenho` == `valorEmpenhoOriginal` + `valorEstorno` em todas as linhas,
+#     ou seja, é o empenhado LÍQUIDO de anulações — não um "saldo a pagar".
+#   - Logo, `valorEmpenhado` (= Σ saldoEmpenho) é o valor empenhado líquido.
+#   - As análises usam `valorProcessado` como valor "oficial" (ver neo4j_client).
 _COMPUTE_DESPESA_ANUAL_QUERY = """
 MATCH (e:Empenho)-[:CLASSIFICADO_EM]->(s:Subfuncao)
 OPTIONAL MATCH (e)-[:FINANCIADO_POR]->(fr:FonteRecurso)
@@ -562,7 +508,6 @@ def load(neo4j_client) -> dict:
     """Lê todos os CSVs de orçamento em Dados/orcamento/ e persiste no Neo4j."""
     counts = {
         "empenhos": 0,
-        "orcamento_programa": 0,
         "despesa_anual": 0,
         "despesa_por_aplicacao": 0,
         "despesa_por_natureza": 0,
@@ -582,11 +527,9 @@ def load(neo4j_client) -> dict:
             name_lower = csv_path.name.lower()
             try:
                 if "previsto_e_empenhado" in name_lower:
-                    records = _read_previsto_realizado_csv(csv_path, periodo_origem)
-                    with neo4j_client._driver.session() as session:
-                        n = _persist_orcamento_programa(session, records)
-                    counts["orcamento_programa"] += n
-                    logger.info("%s → %d registros OrcamentoPrograma", csv_path.name, n)
+                    # Previsto × realizado não é carregado. Este ramo precisa vir ANTES
+                    # do de empenho: o nome do arquivo também contém "empenhado".
+                    logger.info("%s ignorado (previsto × realizado não é carregado)", csv_path.name)
                 elif "empenhado" in name_lower:
                     records = _read_empenho_csv(csv_path, periodo_origem)
                     with neo4j_client._driver.session() as session:
