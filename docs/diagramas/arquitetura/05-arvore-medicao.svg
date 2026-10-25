@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="451pt" height="253pt" viewBox="0 0 451 253" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="451" height="253" fill="#FFFFFF"/>
+<rect x="0.00" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="24.00" y="12.00" text-anchor="start" fill="#000000">agentes-folha (somados)</text>
+<rect x="174.72" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="198.72" y="12.00" text-anchor="start" fill="#000000">só exibidos</text>
+<rect x="276.74" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="276.74,3.00 294.74,3.00 294.74,13.00 276.74,13.00 276.74,3.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="300.74" y="12.00" text-anchor="start" fill="#000000">subtraídos</text>
+<polyline points="128.70,47.00 128.70,42.00 322.26,42.00 322.26,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="225.48" y="38.00" text-anchor="middle" fill="#000000">wall-clock da árvore</text>
+<polyline points="322.26,47.00 322.26,42.00 448.50,42.00 448.50,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="385.38" y="38.00" text-anchor="middle" fill="#000000">subtraído</text>
+<text x="0.00" y="63.80" text-anchor="start" fill="#000000">CoordenadorGeral</text>
+<rect x="128.70" y="54.50" width="319.80" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="78.80" text-anchor="start" fill="#000000">SupervisorOrcamento</text>
+<rect x="132.91" y="69.50" width="50.49" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="12.00" y="93.80" text-anchor="start" fill="#000000">Orçamento (× M)</text>
+<rect x="135.01" y="84.50" width="46.29" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="108.80" text-anchor="start" fill="#000000">SupervisorSaude</text>
+<rect x="187.61" y="99.50" width="58.91" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="12.00" y="123.80" text-anchor="start" fill="#000000">Saúde (× N)</text>
+<rect x="189.71" y="114.50" width="54.70" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="138.80" text-anchor="start" fill="#000000">SupervisorContexto</text>
+<rect x="257.04" y="129.50" width="25.25" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="12.00" y="153.80" text-anchor="start" fill="#000000">Contexto</text>
+<rect x="259.14" y="144.50" width="21.04" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="168.80" text-anchor="start" fill="#000000">SupervisorAnalitico</text>
+<rect x="286.50" y="159.50" width="35.77" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="12.00" y="183.80" text-anchor="start" fill="#000000">Analítico</text>
+<rect x="288.60" y="174.50" width="31.56" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="12.00" y="198.80" text-anchor="start" fill="#000000">Priorização</text>
+<rect x="324.37" y="189.50" width="31.56" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="324.37,189.50 355.93,189.50 355.93,199.50 324.37,199.50 324.37,189.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="12.00" y="213.80" text-anchor="start" fill="#000000">Síntese</text>
+<rect x="358.03" y="204.50" width="58.91" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="358.03,204.50 416.94,204.50 416.94,214.50 358.03,214.50 358.03,204.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="12.00" y="228.80" text-anchor="start" fill="#000000">Verificação</text>
+<rect x="419.04" y="219.50" width="27.35" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="419.04,219.50 446.40,219.50 446.40,229.50 419.04,229.50 419.04,219.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="322.26,42.00 322.26,236.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="322.26" y="248.59" text-anchor="middle" fill="#000000">_coala_leaf_end_time</text>
+</svg>

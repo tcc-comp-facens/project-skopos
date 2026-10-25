@@ -11,11 +11,11 @@
 7. [Agentes Analíticos](#agentes-analíticos)
 8. [Agente de Contexto Orçamentário](#agente-de-contexto-orçamentário)
 9. [Arquitetura Estrela](#arquitetura-estrela)
-10. [Arquitetura Hierárquica](#arquitetura-hierárquica)
+10. [Arquitetura em Árvore](#arquitetura-em-árvore)
 11. [Regras de Negócio](#regras-de-negócio)
 12. [Uso de LLM — resumo](#uso-de-llm--resumo)
 
-> Para o passo a passo de cada topologia, com o código de cada ação, ver [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md) e [arquitetura/arquitetura-hierarquica.md](arquitetura/arquitetura-hierarquica.md). Para a classe base e as chamadas ao LLM, ver [arquitetura/agente-coala-e-llm.md](arquitetura/agente-coala-e-llm.md).
+> Para o passo a passo de cada topologia, com o código de cada ação, ver [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md) e [arquitetura/arquitetura-arvore.md](arquitetura/arquitetura-arvore.md). Para a classe base e as chamadas ao LLM, ver [arquitetura/agente-coala-e-llm.md](arquitetura/agente-coala-e-llm.md).
 
 > **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/agentes/`](diagramas/agentes/), em PNG (300 dpi) e SVG, prontas para a monografia: até 16 × 9 cm, texto em Arial 12 quando inseridas a 100%, sem título nem legenda dentro da imagem. Convenção: retângulo branco = ação ou processo; arredondado cinza-claro = dado; cinza = componente externo (Neo4j, LLM, WebSocket); borda ou seta tracejada = etapa opcional, alternativa ou retorno. Para regenerar: `python docs/diagramas/agentes/gerar_diagramas_agentes.py`.
 
@@ -45,9 +45,11 @@ O modelo **CoALA** (Sumers, Yao, Narasimhan & Griffiths, 2023, arXiv:2309.02427)
 | Memória | Papel | No código |
 |---------|-------|-----------|
 | **Working** | Buffer ativo de curto prazo: parâmetros da análise, resultados parciais | `working_memory: dict` |
-| **Semantic** | Fatos/regras de domínio (subtipos de um sistema, dimensões válidas, limiares, polaridade de indicadores), lidos por *retrieval* explícito dentro de `propose_actions` | `semantic_memory: dict` |
-| **Episodic** | Histórico de ações executadas (sucesso e falha), gravado por `_observe_and_learn`. O agente de intenção também recupera análises passadas do Neo4j como episódios | `episodic_memory: list` |
+| **Semantic** | Fatos/regras de domínio (subtipos de um sistema, dimensões válidas, limiares, polaridade de indicadores), preenchidos no `__init__` e lidos por *retrieval* explícito — em `propose_actions`, em `evaluate_and_select` e dentro das próprias ações `_act_*` | `semantic_memory: dict` |
+| **Episodic** | Histórico de ações executadas (sucesso e falha), gravado por `_observe_and_learn`. **Volátil** (descartado com o processo) e nunca lido pelo próprio agente: é trilha de auditoria, não realimentação. O único retrieval episódico do sistema é o do agente de intenção, que recupera análises anteriores do Neo4j — entre sessões | `episodic_memory: list` |
 | **Procedural** | "Como fazer": lista ordenada de estratégias por goal (a primeira é a primária, as demais são fallbacks) | `procedural_memory: dict[str, list[Callable]]` |
+
+A `semantic_memory` é o que **fecha o espaço de decisão do LLM**: dimensões válidas, ângulos de ênfase e vocabulário de indicadores são listas que o agente enumera *antes* de perguntar, e qualquer resposta fora delas é descartada. É por isso que o LLM escolhe itens de um menu e nunca escreve Cypher. Os três papéis dessa memória — identidade do agente, menu fechado e regras de interpretação do número —, o inventário do que cada agente sabe e a comparação de aderência ao framework original estão em [arquitetura/agente-coala-e-llm.md](arquitetura/agente-coala-e-llm.md#os-três-papéis-da-memória-semântica).
 
 ### Espaço de ações
 
@@ -148,7 +150,7 @@ star-sinan-a1b2c3d4            ← agente de saúde SINAN na estrela
 star-orcamento-305-e5f6g7h8    ← agente de orçamento da subfunção 305
 hier-coord-9z8y7x6w            ← CoordenadorGeral
 hier-sup-saude-m3n4o5p6        ← SupervisorSaude
-hier-analitico-q7r8s9t0        ← AgenteAnalitico na hierárquica
+hier-analitico-q7r8s9t0        ← AgenteAnalitico na árvore
 intent-9f8e7d6c                ← agente de intenção (um por sessão de chat, fora das topologias)
 ```
 
@@ -292,7 +294,7 @@ Consolida os antigos `AgenteCorrelacao` e `AgenteAnomalias` num único agente Co
 | Polaridade | Indicadores |
 |------------|-------------|
 | Negativos (mais = pior) | `dengue`, `casos`, `obitos`, `internacoes`, `mortalidade` e os demais agravos do SINAN |
-| Positivos (mais = melhor) | `cobertura_vacinal`, `doses_aplicadas` |
+| Positivos (mais = melhor) | `cobertura_vacinal`, `doses_aplicadas` — e, por padrão, qualquer indicador fora da lista de negativos: a decisão é `tipo in indicadores_negativos` |
 
 - `alto_gasto_baixo_resultado` (ineficiência): despesa acima da mediana com resultado ruim.
 - `baixo_gasto_alto_resultado` (eficiência): despesa abaixo da mediana com resultado bom.
@@ -401,9 +403,11 @@ persistir_metricas       → MetricaExecucao por agente + evento WebSocket
 
 ---
 
-## Arquitetura Hierárquica
+## Arquitetura em Árvore
 
-![Topologia hierárquica: coordenador, supervisores e agentes-folha](diagramas/agentes/13-topologia-hierarquica.png)
+![Topologia em árvore: coordenador, supervisores e agentes-folha](diagramas/agentes/13-topologia-arvore.png)
+
+> **Nome no código:** no código e na interface, a topologia em árvore aparece como `hierarchical` (módulo `agents/hierarchical/`, chave `hierarchical` nos eventos e no payload) e como "Hierárquica" nos rótulos da tela e no relatório.
 
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `supervisors.py`
 
@@ -424,7 +428,7 @@ Subfuncao (≤ 7)       (≤ 8)               Orcamentario             AgentePri
 
 ### Pipeline do `CoordenadorGeral`
 
-![Sequência de chamadas do CoordenadorGeral aos supervisores](diagramas/agentes/14-hierarquica-fluxo.png)
+![Sequência de chamadas do CoordenadorGeral aos supervisores](diagramas/agentes/14-arvore-fluxo.png)
 
 ```
 delegar_orcamento   → SupervisorOrcamento.run()   → {despesas, tendencias}

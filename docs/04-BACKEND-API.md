@@ -29,7 +29,7 @@ Demais módulos de `api/`:
 | Arquivo | Papel |
 |---------|-------|
 | `chat_runner.py` | `run_chat_analysis()`: ponte entre o chat e `dispatch_analysis()` |
-| `dispatch.py` | `dispatch_analysis()` persiste o nó `Analise` e dispara as threads estrela e hierárquica. `get_available_year_range()` |
+| `dispatch.py` | `dispatch_analysis()` persiste o nó `Analise` e dispara as threads estrela e árvore. `get_available_year_range()` |
 | `runners.py` | `run_star()` / `run_hierarchical()`: uma thread por topologia, com `TokenBucket` próprio. `_persist_topology_result()` |
 | `state.py` | Estado em memória compartilhado (ver abaixo) |
 
@@ -121,7 +121,7 @@ servidor → cliente:
 
 **Endpoint:** `WS /ws/{analysisId}`. **Arquivo:** `api/websocket.py`
 
-As duas threads (estrela e hierárquica) escrevem na mesma `ws_queue`. O WebSocket multiplexa os eventos num único stream, marcados por `architecture`.
+As duas threads (estrela e árvore) escrevem na mesma `ws_queue`. O WebSocket multiplexa os eventos num único stream, marcados por `architecture`.
 
 ### Formato de evento
 
@@ -265,9 +265,9 @@ Sintetizador, priorização e verificação rodam **depois** de `capturar_wallcl
 | Topologia | Estratégia |
 |-----------|-----------|
 | **Estrela** | `_orch_end` é capturado em `capturar_wallclock`, antes da priorização. O wall-clock mede só o trecho determinístico |
-| **Hierárquica** | O coordenador mede até o fim e **subtrai** os tempos de `sintetizador`, `priorizacao` e `verificacao` dos collectors do `SupervisorAnalitico`. O tempo do supervisor analítico termina em `_coala_leaf_end_time` |
+| **Árvore** | O coordenador mede até o fim e **subtrai** os tempos de `sintetizador`, `priorizacao` e `verificacao` dos collectors do `SupervisorAnalitico`. O tempo do supervisor analítico termina em `_coala_leaf_end_time` |
 
-Detalhes em [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md#9-persistir_metricas) e [arquitetura/arquitetura-hierarquica.md](arquitetura/arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead).
+Detalhes em [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md#9-persistir_metricas) e [arquitetura/arquitetura-arvore.md](arquitetura/arquitetura-arvore.md#contabilização-de-métricas-e-overhead).
 
 ### StreamingAdapter (`backend/core/streaming_adapter.py`)
 

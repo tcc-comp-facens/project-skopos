@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="325pt" height="247pt" viewBox="0 0 325 247" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="325" height="247" fill="#FFFFFF"/>
+<polygon points="178.04,19.00 172.04,22.20 172.04,15.80" fill="#000000" stroke="none"/>
+<polyline points="118.04,19.00 172.04,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="118.04,62.00 121.83,56.35 124.84,62.00" fill="#000000" stroke="none"/>
+<polyline points="178.04,30.00 123.34,59.18" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="123.70" y="39.20" width="48.69" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="148.04" y="50.30" text-anchor="middle" fill="#000000">exceção</text>
+<polygon points="178.04,73.00 172.04,76.20 172.04,69.80" fill="#000000" stroke="none"/>
+<polyline points="118.04,73.00 172.04,73.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="59.02,115.50 55.82,109.50 62.22,109.50" fill="#000000" stroke="none"/>
+<polyline points="59.02,92.00 59.02,109.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="178.04,142.00 172.04,145.20 172.04,138.80" fill="#000000" stroke="none"/>
+<polyline points="118.04,142.00 172.04,142.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="250.41,192.00 247.21,186.00 253.61,186.00" fill="#000000" stroke="none"/>
+<polyline points="250.41,176.00 250.41,186.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="118.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="59.02" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">delegar_saude</text>
+<text x="59.02" y="30.80" text-anchor="middle" fill="#000000">CoordenadorGeral</text>
+<rect x="178.04" y="0.00" width="144.73" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="178.04,0.00 322.77,0.00 322.77,38.00 178.04,38.00 178.04,0.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="250.41" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">SupervisorSaude.run()</text>
+<text x="250.41" y="30.80" text-anchor="middle" fill="#000000">lança exceção</text>
+<rect x="0.00" y="54.00" width="118.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="59.02" y="69.80" text-anchor="middle" fill="#000000" font-weight="bold">Captura a exceção</text>
+<text x="59.02" y="84.80" text-anchor="middle" fill="#000000">CoordenadorGeral</text>
+<rect x="178.04" y="54.00" width="144.73" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="250.41" y="69.80" text-anchor="middle" fill="#000000" font-weight="bold">Evento error</text>
+<text x="250.41" y="84.80" text-anchor="middle" fill="#000000">enviado pelo WebSocket</text>
+<rect x="0.00" y="115.50" width="118.04" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="59.02" y="131.30" text-anchor="middle" fill="#000000" font-weight="bold">Retorno vazio</text>
+<text x="59.02" y="146.30" text-anchor="middle" fill="#000000">despesas: []</text>
+<text x="59.02" y="161.30" text-anchor="middle" fill="#000000">indicadores: []</text>
+<rect x="178.04" y="108.00" width="144.73" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="250.41" y="123.80" text-anchor="middle" fill="#000000" font-weight="bold">Pipeline continua</text>
+<text x="250.41" y="138.80" text-anchor="middle" fill="#000000">combinar_despesas</text>
+<text x="250.41" y="153.80" text-anchor="middle" fill="#000000">delegar_contexto</text>
+<text x="250.41" y="168.80" text-anchor="middle" fill="#000000">delegar_analitico</text>
+<rect x="178.04" y="192.00" width="144.73" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="250.41" y="207.80" text-anchor="middle" fill="#000000" font-weight="bold">Resultado parcial</text>
+<text x="250.41" y="222.80" text-anchor="middle" fill="#000000">sem correlações</text>
+<text x="250.41" y="237.80" text-anchor="middle" fill="#000000">nem anomalias</text>
+</svg>

@@ -58,7 +58,7 @@ frontend/src/
 │   ├── ArchitecturePanel.tsx    # Texto + benchmarks + dados por agente
 │   ├── AgentDataCard.tsx        # Consulta Cypher, gráfico e linhas de um agente
 │   ├── QualityMetricsSection.tsx# Cards E1/E2/Q1/Q3/R1
-│   ├── ScoreCard.tsx            # Card de uma métrica (estrela × hierárquica)
+│   ├── ScoreCard.tsx            # Card de uma métrica (estrela × árvore)
 │   └── ComparativeSection.tsx   # RAGAS + relatório comparativo
 ├── hooks/
 │   ├── useWebSocket.ts          # WS de resultados (/ws/{analysisId})
@@ -129,7 +129,7 @@ Pontinhos animados só com CSS.
 | `TechTab` | Contêiner da aba. Renderiza `<RoundOverview rounds={rounds} />` |
 | `RoundOverview` | Lista **todas** as rodadas da sessão. A mais recente começa expandida, e as anteriores mantêm seu próprio estado de expansão. Sem rodadas, mostra "Nenhuma pergunta feita ainda — use o chat na aba Saúde." |
 | `RoundCard` | Cabeçalho sempre visível (Rodada N, horário, pergunta truncada, vencedor via `parseWinner`, tempo total de cada topologia). O `RoundDetail` só monta quando expandido, para não pesar a página |
-| `RoundDetail` | Dois `ArchitecturePanel` (Hierárquica e Estrela), `QualityMetricsSection` e `ComparativeSection`, todos alimentados pelo `snapshot` da rodada |
+| `RoundDetail` | Dois `ArchitecturePanel` (árvore, com o título "Hierárquica", e estrela), `QualityMetricsSection` e `ComparativeSection`, todos alimentados pelo `snapshot` da rodada |
 
 ### ArchitecturePanel (`src/components/ArchitecturePanel.tsx`)
 
@@ -146,7 +146,7 @@ interface ArchitecturePanelProps {
 
 | Elemento | Descrição |
 |----------|-----------|
-| Cabeçalho | Ícone (🏛 hierárquica / ⭐ estrela) + título |
+| Cabeçalho | Ícone (🏛 árvore / ⭐ estrela) + título |
 | Erro | Mensagem com `role="alert"` |
 | Caixa de texto | Texto da análise com auto-scroll e `aria-live="polite"`. Spinner "Gerando análise..." enquanto carrega |
 | Benchmarks | Tempo total + tabela com tempo (ms) e CPU (%) por agente (do evento `metric`) |
@@ -161,7 +161,7 @@ Card expansível por agente de saúde ou de orçamento, com o total de registros
 
 ### QualityMetricsSection + ScoreCard
 
-`QualityMetricsSection` extrai o valor numérico principal de cada métrica do payload `quality_metrics` e renderiza `ScoreCard`s (estrela × hierárquica, 2 casas decimais, `—` quando ausente) em três grupos:
+`QualityMetricsSection` extrai o valor numérico principal de cada métrica do payload `quality_metrics` e renderiza `ScoreCard`s (estrela × árvore, 2 casas decimais, `—` quando ausente) em três grupos:
 - **Eficiência**: E1 (overhead de coordenação), E2 (breakdown de latência)
 - **Qualidade**: Q1 (consistência determinística), Q3 (completude)
 - **Resiliência**: R1 (cobertura de resultado parcial)

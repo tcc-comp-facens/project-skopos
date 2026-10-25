@@ -1,6 +1,6 @@
 # Project Skopos
 
-Sistema de comparação de duas arquiteturas multiagente CoALA (Cognitive Architectures for Language Agents — Estrela e Hierárquica) aplicado à análise de eficiência dos gastos públicos em saúde de Sorocaba-SP.
+Sistema de comparação de duas arquiteturas multiagente CoALA (Cognitive Architectures for Language Agents — Estrela e Árvore) aplicado à análise de eficiência dos gastos públicos em saúde de Sorocaba-SP.
 
 **TCC** — Engenharia de Computação, FACENS.
 
@@ -45,7 +45,7 @@ project-skopos/
 │   │   ├── analytical/       # AgenteAnalitico (Spearman + anomalias), priorização + TextSynthesizer (serviço)
 │   │   ├── context/          # Agente de contexto orçamentário (tendência/CAGR)
 │   │   ├── star/             # Topologia estrela (OrquestradorEstrela)
-│   │   └── hierarchical/     # Topologia hierárquica — árvore estrita (CoordenadorGeral + 4 supervisores)
+│   │   └── hierarchical/     # Topologia em árvore (CoordenadorGeral + 4 supervisores)
 │   ├── core/                 # LLM, métricas de execução e qualidade, RAGAS, verificação, streaming
 │   ├── db/                   # Cliente Neo4j + construção segura de Cypher
 │   ├── etl/                  # Loaders de orçamento (LAI) e indicadores de saúde (TabNet)
@@ -243,7 +243,7 @@ Aprofundamento em [`docs/arquitetura/`](docs/arquitetura/):
 |---------|----------|
 | [ciclo-completo.md](docs/arquitetura/ciclo-completo.md) | Da mensagem do usuário ao relatório comparativo |
 | [arquitetura-estrela.md](docs/arquitetura/arquitetura-estrela.md) | Pipeline do OrquestradorEstrela |
-| [arquitetura-hierarquica.md](docs/arquitetura/arquitetura-hierarquica.md) | Pipeline do CoordenadorGeral e dos supervisores (árvore estrita) |
+| [arquitetura-arvore.md](docs/arquitetura/arquitetura-arvore.md) | Pipeline do CoordenadorGeral e dos supervisores (topologia em árvore) |
 | [agente-coala-e-llm.md](docs/arquitetura/agente-coala-e-llm.md) | Classe base CoALA e como um agente chama o LLM |
 | [metricas-de-avaliacao.md](docs/arquitetura/metricas-de-avaliacao.md) | Métricas, RAGAS e justificativa acadêmica de cada uma |
 

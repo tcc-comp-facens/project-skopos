@@ -1,8 +1,12 @@
-# Arquitetura Hierárquica — Ciclo Completo
+# Arquitetura em Árvore — Ciclo Completo
 
-> Este documento cobre o pipeline interno da topologia hierárquica, do momento em que `CoordenadorGeral.run()` é chamado até o resultado final ser retornado. Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md). Para o fluxo de ponta a ponta antes e depois deste pipeline (chat, disparo da análise, WebSocket de resultados), ver [ciclo-completo.md](ciclo-completo.md).
+> Este documento cobre o pipeline interno da topologia em árvore, do momento em que `CoordenadorGeral.run()` é chamado até o resultado final ser retornado. Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md). Para o fluxo de ponta a ponta antes e depois deste pipeline (chat, disparo da análise, WebSocket de resultados), ver [ciclo-completo.md](ciclo-completo.md).
 
 **Arquivos:** `backend/agents/hierarchical/coordinator.py`, `backend/agents/hierarchical/supervisors.py`
+
+> **Nome no código:** no código e na interface, a topologia em árvore aparece como `hierarchical` (módulo `agents/hierarchical/`, chave `hierarchical` nos eventos e no payload, prefixo `hier-` nos IDs) e como "Hierárquica" nos rótulos da tela e no relatório comparativo.
+
+> **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/arquitetura/`](../diagramas/arquitetura/) e [`docs/diagramas/agentes/`](../diagramas/agentes/), em PNG (300 dpi) e SVG, até 16 × 9 cm, com texto em Arial 12 quando inseridas a 100%. Para regenerar: `python docs/diagramas/arquitetura/gerar_diagramas_arquitetura.py` e `python docs/diagramas/agentes/gerar_diagramas_agentes.py`.
 
 ## Visão geral
 
@@ -10,18 +14,9 @@ Os agentes ficam em **3 níveis**: um coordenador geral (nível 0), quatro super
 
 A estrutura é uma **árvore estrita**: cada supervisor só troca dados com o `CoordenadorGeral`, seu pai, e nunca com outro supervisor. O coordenador colhe o retorno de cada supervisor e repassa o necessário ao próximo como **parâmetro direto** de `run()`.
 
-```
-                                  CoordenadorGeral (nível 0)
-                                            │
-       ┌────────────────────┬───────────────┴────┬─────────────────────────┐
-       ▼                    ▼                    ▼                         ▼
-SupervisorOrcamento   SupervisorSaude     SupervisorContexto       SupervisorAnalitico    (nível 1)
-       │                    │                    │                         │
-AgenteOrcamento-      agentes de saúde    AgenteContexto-          AgenteAnalitico,
-Subfuncao (≤ 7)       (≤ 8)               Orcamentario             AgentePriorizacao,       (nível 2)
-                                                                   TextSynthesizer (serviço),
-                                                                   verificação (opcional)
-```
+![Topologia em árvore: coordenador, supervisores e agentes-folha](../diagramas/agentes/13-topologia-arvore.png)
+
+Os números indicam a ordem em que o coordenador aciona cada supervisor; o passo 3 (`combinar_despesas`) é executado pelo próprio coordenador.
 
 `CoordenadorGeral` e os 4 supervisores herdam de `AgenteCoALA`. Como na estrela, `evaluate_and_select()` é passthrough neles: a ordem é imposta pela dependência de dados. A deliberação real fica nos agentes-folha.
 
@@ -42,6 +37,12 @@ def propose_actions(self) -> list[dict]:
         {"goal": "persistir_metricas"},
     ]
 ```
+
+![Ações do CoordenadorGeral e o que cada uma recebe e devolve](../diagramas/arquitetura/03-arvore-pipeline-coordenador.png)
+
+A sequência de chamadas deixa explícito que os dados só circulam pela relação pai–filho: cada supervisor devolve seu resultado ao coordenador, que o repassa como parâmetro ao próximo.
+
+![Sequência de chamadas do CoordenadorGeral aos supervisores](../diagramas/agentes/14-arvore-fluxo.png)
 
 ### 1. `delegar_orcamento` → `SupervisorOrcamento.run()`
 
@@ -67,6 +68,12 @@ Recebe como parâmetros diretos as despesas combinadas, os indicadores do `Super
 
 Persiste as métricas dos agentes-folha e dos 4 supervisores e emite os eventos `metric` e `agent_data`. Ver [Contabilização](#contabilização-de-métricas-e-overhead).
 
+### O que cada supervisor executa
+
+Cada supervisor também roda o ciclo CoALA, com as próprias ações em `procedural_memory`. Os supervisores de orçamento e de saúde consultam seus agentes e agregam os resultados; o de contexto delega a um único agente:
+
+![Ações dos supervisores de orçamento, saúde e contexto](../diagramas/arquitetura/04a-arvore-supervisores.png)
+
 ## O pipeline do `SupervisorAnalitico`
 
 ```python
@@ -84,6 +91,8 @@ def propose_actions(self) -> list[dict]:
     return actions
 ```
 
+![Pipeline do SupervisorAnalitico, com o marco capturar_wallclock](../diagramas/arquitetura/04b-arvore-supervisor-analitico.png)
+
 O mecanismo de cada ação é o mesmo da estrela (ver [arquitetura-estrela.md](arquitetura-estrela.md#o-pipeline-passo-a-passo)). As particularidades desta topologia:
 
 - **`capturar_wallclock`** grava `self._coala_leaf_end_time`. O coordenador usa esse marco como fim da medição do `SupervisorAnalitico`, sem incluir priorização, síntese e verificação.
@@ -92,6 +101,10 @@ O mecanismo de cada ação é o mesmo da estrela (ver [arquitetura-estrela.md](a
 ## Contabilização de métricas e overhead
 
 É a parte que mais difere da estrela: existe uma camada real de supervisores, cujo custo precisa ser separado do trabalho de fato.
+
+![Linha do tempo da medição na árvore: supervisores, agentes-folha e tempo subtraído](../diagramas/arquitetura/05-arvore-medicao.png)
+
+Cada barra branca de supervisor engloba as barras cinza-escuro dos seus agentes-folha. Só os agentes-folha somam `workers_time_ms`; os supervisores aparecem no breakdown, mas não são somados. Priorização, síntese e verificação, que rodam depois de `_coala_leaf_end_time`, são subtraídas do tempo bruto do coordenador. As durações da figura são ilustrativas.
 
 ```python
 overhead = wall_clock - soma dos agentes FOLHA (nível 2)
@@ -117,19 +130,9 @@ overhead_ms   = max(0, wall_clock_ms - workers_time_ms)
 
 Cada supervisor pode falhar sozinho, e o coordenador continua com dados parciais para os demais:
 
-```
-    SupervisorSaude falha!
-              │
-              ▼
-    CoordenadorGeral:
-    ├── Captura a exceção e envia evento "error" pelo WebSocket
-    ├── saude_data = {despesas: [], indicadores: []}
-    └── CONTINUA com combinar_despesas, SupervisorContexto e SupervisorAnalitico
-              │
-              ▼
-    Resultado final: parcial mas válido
-    (sem indicadores → sem correlações/anomalias; texto gerado mesmo assim)
-```
+![Degradação graciosa: falha do SupervisorSaude](../diagramas/arquitetura/06-arvore-degradacao.png)
+
+No exemplo, o `SupervisorSaude` falha: o coordenador captura a exceção, envia o evento `error` pelo WebSocket, segue com o retorno vazio e entrega um resultado parcial (sem indicadores, não há correlações nem anomalias, mas o texto é gerado mesmo assim).
 
 Os valores vazios usados por supervisor são `{"despesas": [], "tendencias": {}}` (orçamento), `{"despesas": [], "indicadores": []}` (saúde), `{"contexto_orcamentario": {}}` (contexto) e `{"correlacoes": [], "anomalias": [], "texto_analise": ""}` (analítico).
 
@@ -152,4 +155,4 @@ Mesma garantia da estrela: `correlacoes`/`anomalias` no retorno são os dados br
 - **Overhead de coordenação mensurável**: `overhead_ms` isola o custo da camada de supervisores.
 - **Mais entidades monitoradas**: agentes-folha + 4 supervisores, contra só os agentes-folha na estrela.
 
-> **Histórico — comunicação lateral removida.** Até o commit `38df7be`, os supervisores trocavam dados diretamente entre si (`receive_from_peer`/`peer_data`, inclusive com resumos textuais gerados por LLM, Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md)). Mesmo mediada pelo coordenador, essa troca entre nós do mesmo nível fazia a hierárquica deixar de ser uma árvore no sentido estrito, que é o modelo documentado na literatura e usado como referência no TCC. A troca foi substituída pela passagem de parâmetros pelo coordenador, descrita acima, e a cobertura de testes correspondente está em `backend/tests/test_hierarchical_tree.py`.
+> **Histórico — comunicação lateral removida.** Até o commit `38df7be`, os supervisores trocavam dados diretamente entre si (`receive_from_peer`/`peer_data`, inclusive com resumos textuais gerados por LLM, Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md)). Mesmo mediada pelo coordenador, essa troca entre nós do mesmo nível fazia a topologia deixar de ser uma árvore no sentido estrito, que é o modelo documentado na literatura e usado como referência no TCC. A troca foi substituída pela passagem de parâmetros pelo coordenador, descrita acima, e a cobertura de testes correspondente está em `backend/tests/test_hierarchical_tree.py`.

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="451pt" height="209pt" viewBox="0 0 451 209" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="451" height="209" fill="#FFFFFF"/>
+<rect x="0.00" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="24.00" y="12.00" text-anchor="start" fill="#000000">agentes (somados)</text>
+<rect x="144.71" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="168.71" y="12.00" text-anchor="start" fill="#000000">overhead</text>
+<rect x="236.74" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="236.74,3.00 254.74,3.00 254.74,13.00 236.74,13.00 236.74,3.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="260.74" y="12.00" text-anchor="start" fill="#000000">fora da medição</text>
+<polyline points="103.02,47.00 103.02,42.00 302.60,42.00 302.60,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="202.81" y="38.00" text-anchor="middle" fill="#000000">wall-clock = Σ agentes + overhead</text>
+<polyline points="302.60,47.00 302.60,42.00 448.50,42.00 448.50,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="375.55" y="38.00" text-anchor="middle" fill="#000000">fora do wall-clock</text>
+<text x="0.00" y="64.80" text-anchor="start" fill="#000000">Saúde (× N)</text>
+<rect x="105.35" y="55.50" width="60.69" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="81.80" text-anchor="start" fill="#000000">Orçamento (× M)</text>
+<rect x="168.38" y="72.50" width="51.36" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="98.80" text-anchor="start" fill="#000000">Orquestrador</text>
+<rect x="222.07" y="89.50" width="18.67" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="115.80" text-anchor="start" fill="#000000">Contexto</text>
+<rect x="243.08" y="106.50" width="23.34" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="132.80" text-anchor="start" fill="#000000">Analítico</text>
+<rect x="268.76" y="123.50" width="32.68" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="0.00" y="149.80" text-anchor="start" fill="#000000">Priorização</text>
+<rect x="303.77" y="140.50" width="37.35" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="303.77,140.50 341.12,140.50 341.12,150.50 303.77,150.50 303.77,140.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="0.00" y="166.80" text-anchor="start" fill="#000000">Síntese</text>
+<rect x="343.46" y="157.50" width="70.03" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="343.46,157.50 413.49,157.50 413.49,167.50 343.46,167.50 343.46,157.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="0.00" y="183.80" text-anchor="start" fill="#000000">Verificação</text>
+<rect x="415.82" y="174.50" width="32.68" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="415.82,174.50 448.50,174.50 448.50,184.50 415.82,184.50 415.82,174.50" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="302.60,42.00 302.60,192.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="302.60" y="204.59" text-anchor="middle" fill="#000000">capturar_wallclock</text>
+</svg>

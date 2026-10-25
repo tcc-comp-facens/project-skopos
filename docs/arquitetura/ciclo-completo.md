@@ -1,6 +1,6 @@
 # Ciclo Completo — da Mensagem do Usuário ao Relatório Comparativo
 
-> Este documento cobre o fluxo de ponta a ponta do sistema, **sem** entrar nos detalhes internos de cada topologia — esses estão em [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md). Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md).
+> Este documento cobre o fluxo de ponta a ponta do sistema, **sem** entrar nos detalhes internos de cada topologia — esses estão em [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-arvore.md](arquitetura-arvore.md). Para a base comum a qualquer agente (ciclo CoALA, chamada ao LLM), ver [agente-coala-e-llm.md](agente-coala-e-llm.md).
 
 **Arquivos:** `backend/api/chat_websocket.py`, `backend/api/chat_runner.py`, `backend/api/dispatch.py`, `backend/api/runners.py`, `backend/api/websocket.py`, `backend/core/quality_metrics.py`
 
@@ -88,11 +88,11 @@ Enviado ao cliente como um evento `quality_metrics`. Internamente calcula E1 (ov
 
 ### Avaliação RAGAS (sempre, antes do relatório)
 
-Roda em toda análise — não há toggle. Vem **antes** do relatório porque o veredito do relatório depende da fidelidade que ela mede. O servidor chama `evaluate_architecture()` uma vez para cada arquitetura (concorrentes, cada uma com seu `TokenBucket`) — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e precisão do contexto entregue ao sintetizador. O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` (o custo em `quality_metrics["cost"]["ragas"]`) e transmitido em chunks de 80 caracteres pelos eventos `ragas`/`ragas_done`. Sem a chave de `RAGAS_PROVIDER`, a avaliação devolve `available=false` com o motivo e o resto segue normalmente. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
+Roda em toda análise — não há toggle. Vem **antes** do relatório porque o veredito do relatório depende da fidelidade que ela mede. O servidor chama `evaluate_architecture()` uma vez para cada arquitetura (concorrentes, cada uma com seu `TokenBucket`) — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e relevância do contexto entregue ao sintetizador (`faithfulness`, `answer_relevancy` e `context_relevance`). O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` (o custo em `quality_metrics["cost"]["ragas"]`) e transmitido em chunks de 80 caracteres pelos eventos `ragas`/`ragas_done`. Sem a chave de `RAGAS_PROVIDER`, a avaliação devolve `available=false` com o motivo e o resto segue normalmente. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
 
 ### Relatório comparativo
 
-`generate_comparative_report()` monta o texto final (estrela vs. hierárquica lado a lado) a partir das métricas de qualidade, das métricas de agente, da cobertura de dados e do RAGAS, e o transmite em chunks de 80 caracteres via eventos `chunk` com `architecture: "both"`, seguido de um `done` final.
+`generate_comparative_report()` monta o texto final (estrela vs. árvore lado a lado) a partir das métricas de qualidade, das métricas de agente, da cobertura de dados e do RAGAS, e o transmite em chunks de 80 caracteres via eventos `chunk` com `architecture: "both"`, seguido de um `done` final.
 
 ## Onde o LLM entra, em ordem cronológica de uma análise via chat
 
@@ -105,4 +105,4 @@ Roda em toda análise — não há toggle. Vem **antes** do relatório porque o 
 | 5 | Verificação pós-síntese | `core/claim_verifier.py` | Só se `use_self_check=True` (e `use_llm=True`) |
 | 6 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (exige a chave de `RAGAS_PROVIDER`; sem ela reporta indisponível) |
 
-Pelo chat, `use_llm` é sempre `True`. A etapa 1 roda uma única vez por mensagem (antes de qualquer topologia começar) e a 6 uma vez por arquitetura, depois das duas terminarem; as etapas 2–5 rodam **dentro** de cada topologia — uma vez na estrela, outra na hierárquica — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.
+Pelo chat, `use_llm` é sempre `True`. A etapa 1 roda uma única vez por mensagem (antes de qualquer topologia começar) e a 6 uma vez por arquitetura, depois das duas terminarem; as etapas 2–5 rodam **dentro** de cada topologia — uma vez na estrela, outra na árvore — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.

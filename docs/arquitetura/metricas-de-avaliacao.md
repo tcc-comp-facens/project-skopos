@@ -1,6 +1,6 @@
 # Métricas de Avaliação — Arquitetura e Justificativa Acadêmica
 
-> Este documento cobre o módulo de métricas comparativas entre as topologias estrela e hierárquica: o que cada métrica mede, como é calculada (com o código real) e — seguindo o mesmo padrão da Seção 3 ("Justificativa Acadêmica por Decisão") do [`PLANO_REFATORACAO.md`](../historico/PLANO_REFATORACAO.md) — qual é o embasamento acadêmico de cada uma, com citação direta da fonte ou a marcação explícita **"decisão de engenharia, sem embasamento acadêmico direto"** quando não há fonte (nunca uma citação inventada). Para o pipeline que produz os dados que essas métricas consomem, ver [arquitetura-estrela.md](arquitetura-estrela.md), [arquitetura-hierarquica.md](arquitetura-hierarquica.md) e [ciclo-completo.md](ciclo-completo.md).
+> Este documento cobre o módulo de métricas comparativas entre as topologias estrela e árvore: o que cada métrica mede, como é calculada (com o código real) e — seguindo o mesmo padrão da Seção 3 ("Justificativa Acadêmica por Decisão") do [`PLANO_REFATORACAO.md`](../historico/PLANO_REFATORACAO.md) — qual é o embasamento acadêmico de cada uma, com citação direta da fonte ou a marcação explícita **"decisão de engenharia, sem embasamento acadêmico direto"** quando não há fonte (nunca uma citação inventada). Para o pipeline que produz os dados que essas métricas consomem, ver [arquitetura-estrela.md](arquitetura-estrela.md), [arquitetura-arvore.md](arquitetura-arvore.md) e [ciclo-completo.md](ciclo-completo.md).
 
 **Arquivos principais:** `backend/core/quality_metrics.py` (métricas determinísticas), `backend/core/ragas_metrics.py` (avaliação da resposta via biblioteca RAGAS), `backend/core/llm_client.py` (`TokenBucket`), `backend/core/guardrail_stats.py`, `backend/agents/domain/query_planning.py` (contadores de cache).
 
@@ -28,7 +28,7 @@ core/guardrail_stats.py               compute_guardrail_rejection_rate   (proces
 agents/domain/query_planning.py       compute_cache_hit_rate             (process-wide)
 ```
 
-A distinção entre **por-análise** (as seis primeiras — calculadas a cada comparação estrela-vs-hierárquica, no payload de `/api/analysis/{id}/quality`) e **process-wide** (as duas últimas — contadores acumulados ao longo de várias análises, expostas em `GET /api/metrics/guardrail` e `GET /api/metrics/query-planning-cache`) é proposital: guardrail e cache não descrevem uma análise isolada, descrevem uma tendência de comportamento do sistema ao longo do tempo.
+A distinção entre **por-análise** (as seis primeiras — calculadas a cada comparação estrela-vs-árvore, no payload de `/api/analysis/{id}/quality`) e **process-wide** (as duas últimas — contadores acumulados ao longo de várias análises, expostas em `GET /api/metrics/guardrail` e `GET /api/metrics/query-planning-cache`) é proposital: guardrail e cache não descrevem uma análise isolada, descrevem uma tendência de comportamento do sistema ao longo do tempo.
 
 ## Ordem de execução (medir → avaliar → concluir)
 
@@ -86,7 +86,7 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     return {"supervisor_time_ms": ..., "worker_time_ms": ..., "overhead_ratio": ratio, "overhead_percent": ratio * 100}
 ```
 
-Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, a única entrada de coordenação é `orquestrador_estrela`, que carrega o overhead `wall_clock − soma dos agentes` (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)) e tende a ser pequena. Na hierárquica entram os 4 supervisores, com o tempo total de cada um (que já engloba o dos subordinados), mais `coordenador_geral` com o overhead residual (ver [arquitetura-hierarquica.md](arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead)).
+Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, a única entrada de coordenação é `orquestrador_estrela`, que carrega o overhead `wall_clock − soma dos agentes` (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)) e tende a ser pequena. Na árvore entram os 4 supervisores, com o tempo total de cada um (que já engloba o dos subordinados), mais `coordenador_geral` com o overhead residual (ver [arquitetura-arvore.md](arquitetura-arvore.md#contabilização-de-métricas-e-overhead)).
 
 ### E2 — Breakdown de latência por fase
 
@@ -241,6 +241,8 @@ Ordem lexicográfica, não média ponderada: cada nível só é consultado se o 
     (critério: completude (fidelidade não medida)).
 ```
 
+(O relatório é texto gerado pelo backend, que ainda usa o nome "Hierárquica" para a topologia em árvore.)
+
 ---
 
 ## Eixo C — Resiliência
@@ -254,7 +256,7 @@ components = {"despesas": bool(...), "indicadores": bool(...), "dados_cruzados":
 score = completed / total  # total = 7
 ```
 
-Mede quantos dos 7 componentes do resultado estão presentes e não-vazios — reflete diretamente a degradação graciosa que ambas as arquiteturas implementam (falha de um agente não derruba a análise inteira, ver seções de degradação graciosa em [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md)). Base de `compute_analysis_success` (Eixo E).
+Mede quantos dos 7 componentes do resultado estão presentes e não-vazios — reflete diretamente a degradação graciosa que ambas as arquiteturas implementam (falha de um agente não derruba a análise inteira, ver seções de degradação graciosa em [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-arvore.md](arquitetura-arvore.md)). Base de `compute_analysis_success` (Eixo E).
 
 ---
 
@@ -271,7 +273,7 @@ def compute_token_cost(token_usage: dict[str, int] | None) -> dict[str, Any]:
 
 Função quase trivial — o trabalho real está em capturar o `token_usage` corretamente por segmento, o que exigiu resolver um problema de concorrência real antes de implementar a métrica (ver caixa "Pré-requisito" abaixo).
 
-**Pré-requisito técnico: `TokenBucket`.** Estrela e hierárquica rodam em threads concorrentes (`api/runners.py`); um contador global simples não distingue qual topologia gastou quais tokens. A solução implementada:
+**Pré-requisito técnico: `TokenBucket`.** Estrela e árvore rodam em threads concorrentes (`api/runners.py`); um contador global simples não distingue qual topologia gastou quais tokens. A solução implementada:
 
 ```python
 # core/llm_client.py
@@ -308,9 +310,9 @@ def compute_communication_volume(architecture, agent_metrics, despesas_count=0, 
             "payload_records": despesas_count + indicadores_count}
 ```
 
-O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente (ou supervisor, na hierárquica) efetivamente invocado, contado como 1 chamada + 1 retorno = 2 mensagens. Como a hierárquica é uma **árvore estrita** — supervisores só trocam dados com o `CoordenadorGeral`, nunca entre si —, o proxy é o mesmo para as duas topologias; a diferença real de volume aparece em `agent_invocations`, porque a hierárquica invoca também os 4 supervisores além dos agentes-folha.
+O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente (ou supervisor, na árvore) efetivamente invocado, contado como 1 chamada + 1 retorno = 2 mensagens. Como a árvore é **estrita** — supervisores só trocam dados com o `CoordenadorGeral`, nunca entre si —, o proxy é o mesmo para as duas topologias; a diferença real de volume aparece em `agent_invocations`, porque a árvore invoca também os 4 supervisores além dos agentes-folha.
 
-> Até `38df7be`, a hierárquica somava 3 "hops laterais" fixos entre supervisores (`lateral_hops`) e 2 resumos textuais via LLM (`lateral_summaries`), da Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md). Ambos saíram do payload junto com a comunicação lateral.
+> Até `38df7be`, a árvore somava 3 "hops laterais" fixos entre supervisores (`lateral_hops`) e 2 resumos textuais via LLM (`lateral_summaries`), da Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md). Ambos saíram do payload junto com a comunicação lateral.
 
 ---
 
@@ -415,7 +417,7 @@ Registradas explicitamente porque afetam a leitura dos números:
 1. **O pipeline não é um RAG clássico.** Não há retriever nem corpus; `retrieved_contexts` são os achados determinísticos que os agentes entregaram ao sintetizador. O mapeamento é defensável (ver Eixo B) mas é decisão de engenharia, não algo prescrito pela fonte.
 2. **A relevância do contexto não discrimina as topologias.** Ela julga contexto × pergunta sem ver a resposta, e o Q1 verifica que as duas arquiteturas produzem correlações e anomalias idênticas — logo `build_contexts` gera os mesmos chunks para ambas e o score sai igual. Os dois números no relatório são **iguais por construção, não um empate medido**: a métrica descreve a qualidade do conjunto de achados que o pipeline produz, que é o mesmo nas duas topologias. Só divergem sob falha parcial, quando uma arquitetura entrega menos achados que a outra.
 3. **O juiz é um LLM.** O próprio paper registra a limitação: "It relies heavily on the performance of the LLMs used for evaluating the different components" (Seção 8). Os scores são estimativas, não medidas exatas — diferente de Q1, que é uma igualdade numérica.
-4. **Q3 e a fidelidade mudaram de valor mais de uma vez.** As correções D19 (cobertura de anomalias), D21 (truncagem) e D23 (contexto incompleto) tornam os números atuais incomparáveis com execuções anteriores. A fidelidade, em particular, esteve subestimada duas vezes: uma medição de 0.28 (estrela) / 0.10 (hierárquica) obtida antes de D23 refletia sobretudo a lacuna entre o contexto do gerador e o do juiz, não infidelidade do texto.
+4. **Q3 e a fidelidade mudaram de valor mais de uma vez.** As correções D19 (cobertura de anomalias), D21 (truncagem) e D23 (contexto incompleto) tornam os números atuais incomparáveis com execuções anteriores. A fidelidade, em particular, esteve subestimada duas vezes: uma medição de 0.28 (estrela) / 0.10 (árvore) obtida antes de D23 refletia sobretudo a lacuna entre o contexto do gerador e o do juiz, não infidelidade do texto.
 5. **O juiz depende de acesso a embeddings.** Projetos da OpenAI restringem modelos individualmente e devolvem 403 `model_not_found`; a cadeia de fallback e o contorno do cabeçalho cobrem os casos comuns, mas se nenhum modelo estiver acessível, `answer_relevancy` fica indisponível e o payload diz isso — o pilar de relevância da resposta não é coberto naquela execução. Diagnóstico: `python -m scripts.check_embeddings`.
 6. **O custo dos embeddings é contabilizado, mas por outra rota.** O endpoint de embeddings não passa por `generate()`; `SkoposRagasEmbeddings` registra o consumo à mão via `llm_client.record_token_usage`, para que `cost.ragas` não subestime o custo real da avaliação.
 
@@ -431,7 +433,7 @@ Registradas aqui porque afetam a leitura de **todos** os resultados do eixo anal
 
 **3. A classificação não considera nada disso.** [`_classify`](../../backend/agents/analytical/analitico.py) rotula alta/média/baixa só por limiares de |ρ| (0,7 e 0,4), sem teste de significância e sem n mínimo. Uma correlação ρ=−1,0 com n=2 e uma ρ=−0,8 com n=4 recebem o mesmo rótulo "alta" que uma correlação robusta receberia.
 
-**Impacto na leitura dos resultados.** Os coeficientes devem ser lidos como **descritivos e exploratórios**, não inferenciais: descrevem o comportamento conjunto observado naquela janela de anos, e não sustentam afirmação sobre associação populacional. A comparação estrela × hierárquica não é afetada — as duas topologias recebem exatamente os mesmos números (é o que Q1 verifica) —, mas qualquer conclusão substantiva sobre gasto e resultado em saúde extraída desses coeficientes precisa carregar essa ressalva.
+**Impacto na leitura dos resultados.** Os coeficientes devem ser lidos como **descritivos e exploratórios**, não inferenciais: descrevem o comportamento conjunto observado naquela janela de anos, e não sustentam afirmação sobre associação populacional. A comparação estrela × árvore não é afetada — as duas topologias recebem exatamente os mesmos números (é o que Q1 verifica) —, mas qualquer conclusão substantiva sobre gasto e resultado em saúde extraída desses coeficientes precisa carregar essa ressalva.
 
 Correções possíveis, caso o escopo se abra: guard de n mínimo (n≥3 elimina o caso degenerado), cálculo e exposição do p-valor (o `scipy.stats.spearmanr` já o retorna — hoje é descartado em `_safe_correlation`), e uma classificação que incorpore n e significância.
 

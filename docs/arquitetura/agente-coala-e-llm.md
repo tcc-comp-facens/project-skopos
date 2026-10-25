@@ -1,17 +1,19 @@
 # Arquitetura Base de um Agente CoALA (e como ele chama o LLM)
 
-> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (DeepSeek por default, OpenAI opcional — ver `LLM_PROVIDER`). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md).
+> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (DeepSeek por default, OpenAI opcional — ver `LLM_PROVIDER`). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-arvore.md](arquitetura-arvore.md).
 
 ## Sumário
 
 1. [A classe base — `AgenteCoALA`](#a-classe-base--agentecoala)
 2. [As quatro memórias](#as-quatro-memórias)
-3. [O ciclo cognitivo](#o-ciclo-cognitivo)
-4. [Ações e `procedural_memory`](#ações-e-procedural_memory)
-5. [Recuperação de falha](#recuperação-de-falha)
-6. [Como um agente chama o LLM](#como-um-agente-chama-o-llm)
-7. [Exemplo completo de ponta a ponta](#exemplo-completo-de-ponta-a-ponta)
-8. [Quem herda de `AgenteCoALA` hoje](#quem-herda-de-agentecoala-hoje)
+3. [Os três papéis da memória semântica](#os-três-papéis-da-memória-semântica)
+4. [O ciclo cognitivo](#o-ciclo-cognitivo)
+5. [Ações e `procedural_memory`](#ações-e-procedural_memory)
+6. [Recuperação de falha](#recuperação-de-falha)
+7. [Como um agente chama o LLM](#como-um-agente-chama-o-llm)
+8. [Exemplo completo de ponta a ponta](#exemplo-completo-de-ponta-a-ponta)
+9. [Quem herda de `AgenteCoALA` hoje](#quem-herda-de-agentecoala-hoje)
+10. [Aderência ao CoALA original](#aderência-ao-coala-original)
 
 ---
 
@@ -37,17 +39,94 @@ Nenhum agente concreto reimplementa essas quatro estruturas do zero — todos he
 
 ## As quatro memórias
 
-| Memória | O que guarda | Exemplo real no código |
-|---|---|---|
-| **`working_memory`** | Buffer ativo de curto prazo — parâmetros da análise em andamento, resultados parciais de outros agentes. Equivalente às antigas "beliefs" de um design BDI. | `AgenteSINAN.working_memory["indicadores"]` — indicadores retornados pela consulta ao Neo4j |
-| **`semantic_memory`** | Fatos/regras declarativas de domínio, lidos via *retrieval* explícito — nunca hardcoded direto do módulo no meio da lógica de decisão. | `AgenteAnalitico.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4, "indicadores_negativos": {...}, ...}` |
-| **`episodic_memory`** | Histórico de ações executadas nesta instância (sucesso e falha), gravado automaticamente pela classe base a cada tentativa. Só em memória — descartado ao fim do processo. | Cada entrada: `{"action": goal, "status": "completed"/"failed", "detail": ..., "timestamp": ...}` |
-| **`procedural_memory`** | "Como fazer" — lista ordenada de estratégias (métodos `_act_*`) por `goal`. A primeira é a estratégia primária; as demais são fallbacks tentados em ordem se a anterior falhar. | `{"consultar_indicadores": [self._act_consultar_indicadores, self._act_fallback_indicadores]}` |
+O CoALA separa a informação de um agente por **tempo de vida**: uma memória de curto prazo (`working`) e três de longo prazo (`semantic`, `episodic`, `procedural`), lidas por ações internas de *retrieval* e escritas por ações internas de *learning*. As subseções abaixo seguem a mesma forma — o que o framework propõe, o que este projeto implementa, e por quê.
+
+### `working_memory` — o estado do ciclo atual
+
+**No CoALA:** é o hub. Tudo que vem de uma memória de longo prazo passa por ela antes de ser usado, e tudo que uma ação produz é depositado nela — é o equivalente ao contexto que o LLM enxerga.
+
+**Neste projeto:** `dict` vazio no `__init__`, com um protocolo fixo — o método público do agente (`query()`, `analyze_trends()`, `parse()`) deposita os parâmetros via `update_working_memory(...)`, chama `run_coala_cycle()` e lê o resultado de volta. Cumpre três papéis:
+
+- **Insumo do ciclo.** O `perceive()` dos agentes de domínio lê da própria working memory: a "percepção do ambiente" ali é a percepção do que o caller depositou. O grounding de verdade (Neo4j) só acontece depois, dentro das estratégias.
+- **Canal entre ações do mesmo ciclo.** Em `AgenteInterpretacaoIntencao`, `classificar_escopo` grava `working_memory["escopo"]`; `extrair_parametros`, proposta junto e executada depois, já enxerga esse valor. Nenhuma das duas conhece a outra.
+- **Canal entre agentes.** Os agentes periféricos não conversam entre si. Cada um escreve na sua working memory, o orquestrador/supervisor recolhe e deposita na dele, e o agente seguinte recebe isso já como estado inicial. A "circulação pela working memory" do CoALA atravessa aqui também a hierarquia de agentes.
+
+### `semantic_memory` — os fatos de domínio
+
+**No CoALA:** o conhecimento do agente sobre o mundo e sobre si mesmo — fatos, não experiências. Tipicamente inicializada a partir de um corpus e consultada sob demanda (o caso canônico é uma base vetorial); o framework também prevê escrita, para o agente aprender fatos novos.
+
+**Neste projeto:** `dict` preenchido **no `__init__` e nunca mais alterado**, montado a partir de constantes de módulo. Não é vetorial, não tem busca por similaridade, não cresce em runtime.
+
+A disciplina que dá sentido à estrutura é a regra de que **nenhuma lógica de decisão lê a constante direto**:
+
+```python
+# Evitado — a decisão consome a constante do módulo
+if abs(r) >= 0.7: ...
+
+# Adotado — AgenteAnalitico._act_calcular_correlacao
+limiar_alta = self.semantic_memory["limiar_alta"]
+limiar_media = self.semantic_memory["limiar_media"]
+```
+
+Funcionalmente é idêntico; arquiteturalmente não. A constante no módulo é o corpus; o agente só a acessa como conteúdo de memória. O efeito prático é que o conhecimento de domínio fica inspecionável de fora — é exatamente isso que os testes de todos os agentes de domínio verificam (`assert agente.semantic_memory["dimensoes_validas"] == [...]`) — e substituível por instância sem tocar na lógica.
+
+**Onde o retrieval acontece:** em `propose_actions` (dimensões válidas, ângulos de ênfase, mapa indicador → agente), em `evaluate_and_select` (a arbitragem de dimensão opera sobre os candidatos montados a partir dela) e dentro das próprias ações `_act_*` (limiares e polaridade no agente analítico, `subfuncao_codigo` na consulta de despesas, vocabulário válido na extração de parâmetros).
+
+### `episodic_memory` — o histórico de ações
+
+**No CoALA:** guarda experiências de ciclos de decisão anteriores — o que foi tentado, o que deu certo, o que falhou. É a base do aprendizado: o agente recupera episódios para fazer *few-shot* em si mesmo, ou para refletir sobre um erro e não repeti-lo.
+
+**Neste projeto:** a escrita é automática e completa; a leitura é quase inexistente. `_observe_and_learn` grava uma entrada por tentativa de ação, sem que a subclasse precise fazer nada. Mas a lista é **por instância e volátil** — não é persistida — e **nenhum agente lê a própria episodic memory para alterar uma decisão**. Na prática, ela é trilha de auditoria do ciclo, não realimentação.
+
+A exceção, e o único retrieval episódico do sistema, é `AgenteInterpretacaoIntencao._act_buscar_memoria_episodica`: recupera as 3 análises anteriores já registradas no grafo (nós `Analise`, via `neo4j_client.get_past_analises`), anexa o conteúdo recuperado como episódio próprio e o injeta como contexto opcional no prompt que interpreta a pergunta atual. É retrieval **entre sessões** — mais ambicioso que a memória em processo —, mas melhor esforço: se o banco não responder, o ciclo segue sem esse contexto.
+
+### `procedural_memory` — as estratégias
+
+**No CoALA:** o "como fazer", em duas partes — a **implícita**, nos pesos do LLM (a capacidade de raciocinar, que ninguém inspeciona), e a **explícita**, que é o próprio código do agente. O framework observa que alterar essa memória é a modificação mais arriscada que um agente pode fazer em si mesmo, e recomenda cautela.
+
+**Neste projeto:** em vez de deixar o "como fazer" implícito na sequência de chamadas do código, a procedural memory é **materializada como dado inspecionável** — um mapa `goal → lista ordenada de estratégias` que `execute()` percorre em runtime. É mais explícito do que o framework exige, e é o que sustenta duas propriedades: o fallback em cadeia (a primeira estratégia é a primária, as seguintes são planos B) e a degradação graciosa em todos os níveis — inclusive na coordenação, já que orquestrador e supervisores também têm o pipeline inteiro registrado como goals. Não há auto-modificação: as estratégias são registradas no `__init__` e não mudam, alinhado à cautela do próprio CoALA.
+
+### Espaço de ações: internas e externas
 
 O espaço de ações de um agente é dividido em duas categorias (terminologia do próprio CoALA):
 
 - **Internas** (*reasoning*/*retrieval*/*learning*) — processamento sobre a `working_memory`, leitura de `semantic_memory`, gravação em `episodic_memory`. Inclui chamadas ao LLM para raciocinar sobre o estado atual — o LLM é parte da procedural memory implícita do agente, não do ambiente (terminologia do próprio CoALA). Ex.: calcular Spearman, cruzar dados, classificar tendência, reordenar achados, `core.llm_client.generate(...)`.
 - **Externas** (*grounding*) — interação com o ambiente fora da cognição do agente: Neo4j, o WebSocket, a delegação a outro agente. Ex.: `neo4j_client.get_indicadores_por_sistema(...)`.
+
+---
+
+## Os três papéis da memória semântica
+
+Descrever a `semantic_memory` como "fatos de domínio" numa única linha esconde que ela faz três trabalhos diferentes no sistema:
+
+| Papel | O que carrega | Efeito |
+|---|---|---|
+| **Identidade e competência** | `sistema`, `subtipos`, `subfuncao_codigo`/`subfuncao_nome` | Define o que o agente é e até onde vai o seu domínio |
+| **Menu fechado de opções** | `dimensoes_validas`, `angulos_possiveis`, `valid_health_params`, `indicador_to_agent` | Converte o LLM de gerador livre em selecionador de item enumerado |
+| **Regras de interpretação** | `limiar_alta`/`limiar_media`, `indicadores_negativos`, `stagnation_threshold`, `min_consecutive_years` | Diz o que o número significa — o que a estatística não responde |
+
+**1. Identidade e competência.** O `AgenteSINAN` sabe que é o especialista do sistema `sinan` e que seu domínio são 9 agravos; o `AgenteCNES`, que cuida de 12 subtipos da rede assistencial. Não é configuração, é o que o agente é. O caso mais eloquente é o `AgenteOrcamentoSubfuncao`: existe **uma única classe** para as 7 subfunções orçamentárias, e o que diferencia a instância da Atenção Básica da instância da Vigilância Epidemiológica é só o conteúdo da semantic memory, injetado no nascimento pelo caller. A identidade do agente mora inteiramente ali.
+
+**2. Menu fechado de opções.** O sistema usa LLM para decidir, **nunca para gerar livremente**, e a semantic memory é o mecanismo que fecha a escolha. Na deliberação de dimensão, o agente não pergunta ao LLM "como eu deveria consultar isso?": lê as dimensões válidas do próprio sistema, transforma cada uma num candidato explícito (mais o candidato "sem quebra"), entrega a lista fechada e descarta qualquer resposta fora dela. É por isso que o LLM **nunca escreve Cypher** — ele escolhe um item de um menu que a memória montou.
+
+E a mesma lista cumpre um segundo papel: é a allowlist contra a qual `db/query_builder.py` valida o nome do relacionamento antes de interpolá-lo na query — o único trecho do sistema que entra em Cypher como texto, porque o Neo4j não parametriza reltype. Um fato de domínio e uma fronteira de segurança são, aqui, a mesma estrutura. O padrão se repete nos ângulos de ênfase do `AgentePriorizacaoAnalitica`, no vocabulário do agente de intenção (filtra o que o LLM extraiu da pergunta) e no mapa indicador → agente do orquestrador, que decide quais agentes nem chegam a ser instanciados.
+
+**3. Regras de interpretação.** A estatística produz um número; ela não diz se o número é boa ou má notícia. `indicadores_negativos` responde a isso: é a lista de indicadores em que valor alto é resultado ruim. O fato existe por causa de um erro observado em produção — Spearman devolveu r = +0,77 entre gasto e mortalidade (mais gasto acompanhando mais mortes) e o LLM sintetizador narrou isso como "mais investimento = menos mortes", o oposto do dado. A correção foi usar a polaridade para anexar uma leitura explícita a cada correlação antes de o texto chegar ao LLM. Em vez de confiar que o modelo inferiria o sinal, o agente entrega a interpretação já resolvida — o papel mais característico de uma memória semântica: carregar o conhecimento que o LLM não tem como derivar do dado bruto.
+
+### Inventário — o que cada agente sabe
+
+| Agente | Conteúdo da `semantic_memory` |
+|---|---|
+| 8 agentes de saúde | `sistema`, `subtipos`, `dimensoes_validas` |
+| `AgenteOrcamentoSubfuncao` (7 instâncias) | `subfuncao_codigo`, `subfuncao_nome`, `dimensoes_validas` (`POR_NATUREZA`, `POR_APLICACAO`) |
+| `AgenteAnalitico` | `limiar_alta` (0.7), `limiar_media` (0.4), `indicadores_negativos`, `indicadores_positivos`, `subfuncao_nomes` |
+| `AgenteContextoOrcamentario` | `stagnation_threshold` (5.0), `min_consecutive_years` (2) |
+| `AgentePriorizacaoAnalitica` | `angulos_possiveis` (5 ângulos, nome → descrição) |
+| `AgenteInterpretacaoIntencao` | `valid_health_params` (27 tokens) |
+| `OrquestradorEstrela`, `SupervisorSaude` | `indicador_to_agent` |
+| `CoordenadorGeral`, `SupervisorOrcamento`, `SupervisorAnalitico`, `SupervisorContexto` | **vazia** — recebem tudo pronto e só encadeiam |
+
+> `indicadores_positivos` está declarado mas não é lido: a decisão de polaridade é `tipo in indicadores_negativos`, tratando como positivo tudo que não esteja na lista de negativos.
 
 ---
 
@@ -215,7 +294,7 @@ Qual provedor responde é decidido pela variável `LLM_PROVIDER` — lida a cada
 | Esforço de raciocínio | — | `OPENAI_REASONING_EFFORT` (default `low`) e `OPENAI_MAX_COMPLETION_TOKENS` (default 16384) — com esforço alto e teto apertado, o modelo gasta o orçamento pensando e devolve resposta vazia |
 | Opcionais | — | `OPENAI_BASE_URL` (proxy/gateway compatível), `OPENAI_STORE_LOGS=true` (retém as chamadas na aba Logs da OpenAI, filtráveis por `caller`) |
 
-Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e hierárquica) correm em paralelo de verdade.
+Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e árvore) correm em paralelo de verdade.
 
 ### O que acontece a cada chamada
 
@@ -315,4 +394,22 @@ Esse mesmo padrão — uma ação chama o LLM via `core.llm_client.generate(...,
 | `AgentePriorizacaoAnalitica` | Condicional — só se `use_llm=True` na análise | `agents/analytical/priorizacao.py` |
 | `OrquestradorEstrela`, `CoordenadorGeral`, `SupervisorOrcamento`, `SupervisorSaude`, `SupervisorAnalitico`, `SupervisorContexto` | Não diretamente — delegam a agentes/serviços que chamam | `agents/star/orchestrator.py`, `agents/hierarchical/*.py` |
 
-`TextSynthesizer` (`agents/analytical/sintetizador.py`) também chama o LLM, mas **não** herda de `AgenteCoALA` — é modelado como serviço comum porque não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas (quem decide isso é o caller). Ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md) para onde ele entra no pipeline.
+`TextSynthesizer` (`agents/analytical/sintetizador.py`) também chama o LLM, mas **não** herda de `AgenteCoALA` — é modelado como serviço comum porque não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas (quem decide isso é o caller). Ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-arvore.md](arquitetura-arvore.md) para onde ele entra no pipeline.
+
+---
+
+## Aderência ao CoALA original
+
+| Memória | Previsto no framework | Implementado aqui | Lacuna assumida |
+|---|---|---|---|
+| **`working_memory`** | Hub de tudo que circula no ciclo atual | Idem, inclusive como canal entre agentes | — |
+| **`semantic_memory`** | Leitura e escrita (aprender fatos), tipicamente com retrieval por similaridade | Leitura por chave, em todas as decisões | Sem escrita e sem busca vetorial: o conhecimento é curado por humano, em código |
+| **`episodic_memory`** | Experiências passadas realimentam decisões futuras | Escrita automática e completa; leitura num único agente, entre sessões | Ciclo de aprendizado truncado: nenhum agente usa o próprio histórico |
+| **`procedural_memory`** | Pesos implícitos do LLM + o código do agente | Materializada como dado inspecionável, com fallback ordenado | — vai além do exigido; sem auto-modificação, por decisão |
+
+As duas lacunas são deliberadas e têm a mesma raiz.
+
+- **Semantic memory sem escrita.** Nenhum fato que sustenta uma conclusão sobre dinheiro público ou indicador de saúde é inventado em runtime: todos são curados em código e versionados com ele. Um agente que aprendesse fatos novos sozinho tornaria a origem de cada afirmação do texto final não rastreável.
+- **Episodic memory não realimentada.** Uma decisão que mudasse em função do histórico da instância faria duas execuções da mesma pergunta depender da ordem em que as análises aconteceram. A comparação entre topologias exige que as duas recebam exatamente os mesmos números — é o que a métrica Q1 verifica (ver [metricas-de-avaliacao.md](metricas-de-avaliacao.md)).
+
+Em uma frase: o CoALA é usado aqui como arquitetura de **contenção**, não de autonomia. As quatro memórias estão implementadas, mas o papel que cumprem é restringir o espaço de decisão do LLM a escolhas enumeradas e auditáveis — não deixá-lo aprender e se reconfigurar sozinho. Para um sistema que responde sobre orçamento público e indicadores de saúde, é a troca pretendida; o que esta seção faz é nomeá-la, em vez de deixá-la implícita.

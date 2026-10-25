@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="426pt" height="250pt" viewBox="0 0 426 250" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="426" height="250" fill="#FFFFFF"/>
+<rect x="0.00" y="0.00" width="424.13" height="122.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="14.30" text-anchor="start" fill="#000000" font-weight="bold">Dentro do wall-clock</text>
+<rect x="0.00" y="156.00" width="424.13" height="92.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="416.13" y="170.30" text-anchor="end" fill="#000000" font-weight="bold">Fora do wall-clock</text>
+<polygon points="150.04,39.00 144.04,42.20 144.04,35.80" fill="#000000" stroke="none"/>
+<polyline points="132.04,39.00 144.04,39.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="292.09,39.00 286.09,42.20 286.09,35.80" fill="#000000" stroke="none"/>
+<polyline points="274.09,39.00 286.09,39.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="354.11,76.00 350.91,70.00 357.31,70.00" fill="#000000" stroke="none"/>
+<polyline points="354.11,58.00 354.11,70.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="274.09,95.00 280.09,91.80 280.09,98.20" fill="#000000" stroke="none"/>
+<polyline points="292.09,95.00 280.09,95.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="132.04,95.00 138.04,91.80 138.04,98.20" fill="#000000" stroke="none"/>
+<polyline points="150.04,95.00 138.04,95.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="70.02,127.50 66.82,121.50 73.22,121.50" fill="#000000" stroke="none"/>
+<polyline points="70.02,114.00 70.02,121.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="70.02,176.00 66.82,170.00 73.22,170.00" fill="#000000" stroke="none"/>
+<polyline points="70.02,150.50 70.02,170.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="150.04,187.50 144.04,190.70 144.04,184.30" fill="#000000" stroke="none"/>
+<polyline points="132.04,187.50 144.04,187.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="292.09,187.50 286.09,190.70 286.09,184.30" fill="#000000" stroke="none"/>
+<polyline points="274.09,187.50 286.09,187.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="354.11,217.00 350.91,211.00 357.31,211.00" fill="#000000" stroke="none"/>
+<polyline points="354.11,199.00 354.11,211.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="140.04" y="143.30" text-anchor="start" fill="#000000">fim da medição (_orch_end)</text>
+<rect x="8.00" y="20.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="70.02" y="35.80" text-anchor="middle" fill="#000000">consultar_saude</text>
+<text x="70.02" y="50.80" text-anchor="middle" fill="#000000">× N sistemas</text>
+<rect x="150.04" y="20.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="212.07" y="35.80" text-anchor="middle" fill="#000000">consultar_orcamento</text>
+<text x="212.07" y="50.80" text-anchor="middle" fill="#000000">× M subfunções</text>
+<rect x="292.09" y="20.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="354.11" y="43.30" text-anchor="middle" fill="#000000">cruzar_dados</text>
+<rect x="292.09" y="76.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="354.11" y="99.30" text-anchor="middle" fill="#000000">detectar_gaps</text>
+<rect x="150.04" y="76.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="212.07" y="99.30" text-anchor="middle" fill="#000000">analisar_contexto</text>
+<rect x="8.00" y="76.00" width="124.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="70.02" y="99.30" text-anchor="middle" fill="#000000">analisar</text>
+<rect x="8.00" y="176.00" width="124.04" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="70.02" y="191.80" text-anchor="middle" fill="#000000">priorizar_achados</text>
+<rect x="150.04" y="176.00" width="124.04" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="212.07" y="191.80" text-anchor="middle" fill="#000000">sintetizar_texto</text>
+<rect x="292.09" y="176.00" width="124.04" height="23.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="292.09,176.00 416.13,176.00 416.13,199.00 292.09,199.00 292.09,176.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="354.11" y="191.80" text-anchor="middle" fill="#000000">verificar_afirmacoes</text>
+<rect x="292.09" y="217.00" width="124.04" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="354.11" y="232.80" text-anchor="middle" fill="#000000">persistir_metricas</text>
+<rect x="8.00" y="127.50" width="124.04" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="70.02" y="143.30" text-anchor="middle" fill="#000000">capturar_wallclock</text>
+</svg>

@@ -16,7 +16,7 @@ Uso (Windows, precisa só de Pillow e da Arial instalada):
     python docs/diagramas/agentes/gerar_diagramas_agentes.py
 
 O conteúdo segue o código em backend/agents/ (base.py, domain/, analytical/,
-context/, intent/, star/, hierarchical/) e backend/core/ — se o comportamento
+context/, intent/, star/, hierarchical/ — a topologia em árvore) e backend/core/ — se o comportamento
 de algum agente mudar, ajuste a figura correspondente e rode de novo.
 """
 
@@ -222,10 +222,10 @@ def uniform(nodes: list[Node]):
 def fig_coala_estrutura():
     c = Canvas()
     mems = [
-        Node("Memória de trabalho", ["working_memory", "estado da análise"], "data"),
-        Node("Memória semântica", ["semantic_memory", "fatos e limiares"], "data"),
-        Node("Memória episódica", ["episodic_memory", "histórico de ações"], "data"),
-        Node("Memória procedural", ["procedural_memory", "estratégias e LLM"], "data"),
+        Node("Memória de trabalho", ["working_memory", "volátil"], "data"),
+        Node("Memória semântica", ["semantic_memory", "só leitura"], "data"),
+        Node("Memória episódica", ["episodic_memory", "volátil"], "data"),
+        Node("Memória procedural", ["procedural_memory", "só leitura"], "data"),
     ]
     uniform(mems)
     cyc = Node("Ciclo de decisão", ["perceive", "propose_actions", "evaluate_and_select",
@@ -608,7 +608,7 @@ def fig_topologia_estrela():
     return c
 
 
-def fig_topologia_hierarquica():
+def fig_topologia_arvore():
     c = Canvas()
     co = Node("CoordenadorGeral", ["3. combinar_despesas", "persistir_metricas"])
     sups = [Node("1. Supervisor", ["Orçamento"]), Node("2. Supervisor", ["Saúde"]),
@@ -633,7 +633,7 @@ def fig_topologia_hierarquica():
     return c
 
 
-def fig_hierarquica_fluxo():
+def fig_arvore_fluxo():
     """Sequência de chamadas do CoordenadorGeral: dados só passam pelo pai."""
     c = Canvas()
     parts = [Node("Coordenador", ["Geral"]), Node("Supervisor", ["Saúde"]),
@@ -702,8 +702,8 @@ FIGURES = {
     "10-agente-priorizacao": fig_agente_priorizacao,
     "11-sintese-verificacao": fig_sintese_verificacao,
     "12-topologia-estrela": fig_topologia_estrela,
-    "13-topologia-hierarquica": fig_topologia_hierarquica,
-    "14-hierarquica-fluxo": fig_hierarquica_fluxo,
+    "13-topologia-arvore": fig_topologia_arvore,
+    "14-arvore-fluxo": fig_arvore_fluxo,
 }
 
 if __name__ == "__main__":

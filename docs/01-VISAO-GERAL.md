@@ -19,7 +19,7 @@ Este sistema compara duas arquiteturas multiagente baseadas no framework **CoALA
 
 O sistema cruza a **execução orçamentária municipal real** (empenhos por subfunção de saúde, extraídos via Lei de Acesso à Informação) com **indicadores do DATASUS/TabNet** (SINAN, SIM, SIH, SI-PNI, SINASC, SIA, CNES e COVID-19) para avaliar a relação entre gasto e resultado em saúde. A entrada é sempre um **chat em linguagem natural**, interpretado por um agente dedicado, sem regex.
 
-As duas arquiteturas, **Estrela** e **Hierárquica**, rodam em paralelo sobre os mesmos dados. Isso permite uma comparação objetiva de eficiência, overhead de coordenação, qualidade da resposta e resiliência.
+As duas arquiteturas, **Estrela** e **Árvore**, rodam em paralelo sobre os mesmos dados. Isso permite uma comparação objetiva de eficiência, overhead de coordenação, qualidade da resposta e resiliência.
 
 ## Problema
 
@@ -35,7 +35,7 @@ Avaliar comparativamente duas topologias de sistemas multiagente CoALA:
 | Topologia | Descrição | Característica principal |
 |-----------|-----------|--------------------------|
 | **Estrela** | Um orquestrador central instancia e chama todos os agentes (ativação condicional conforme a pergunta) | Ponto único de coordenação, comunicação sempre hub ↔ agente |
-| **Hierárquica** | Árvore estrita em 3 níveis: coordenador, 4 supervisores e agentes-folha | Degradação graciosa por supervisor, overhead de coordenação mensurável |
+| **Árvore** | Árvore estrita em 3 níveis: coordenador, 4 supervisores e agentes-folha | Degradação graciosa por supervisor, overhead de coordenação mensurável |
 
 Critérios de comparação (detalhes em [arquitetura/metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md)):
 - **Eficiência**: tempo total e por agente, CPU, overhead de coordenação, breakdown por fase.
@@ -245,7 +245,7 @@ project-skopos/
 │   ├── 03-DADOS-ETL.md              # Fontes, ETL e modelo Neo4j
 │   ├── 04-BACKEND-API.md            # API, WebSockets, LLM, métricas
 │   ├── 05-FRONTEND.md               # Interface React
-│   ├── arquitetura/                 # Ciclo completo, estrela, hierárquica, base CoALA, métricas
+│   ├── arquitetura/                 # Ciclo completo, estrela, árvore, base CoALA, métricas
 │   └── historico/                   # Planos e changelogs de sessões anteriores (não refletem o estado atual)
 │
 ├── backend/

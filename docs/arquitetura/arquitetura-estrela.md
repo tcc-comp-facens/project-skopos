@@ -4,22 +4,15 @@
 
 **Arquivo:** `backend/agents/star/orchestrator.py`
 
+> **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/arquitetura/`](../diagramas/arquitetura/) e [`docs/diagramas/agentes/`](../diagramas/agentes/), em PNG (300 dpi) e SVG, até 16 × 9 cm, com texto em Arial 12 quando inseridas a 100%. Para regenerar: `python docs/diagramas/arquitetura/gerar_diagramas_arquitetura.py` e `python docs/diagramas/agentes/gerar_diagramas_agentes.py`.
+
 ## Visão geral
 
 Um único agente central, o `OrquestradorEstrela`, instancia e chama todos os demais. Nenhum agente periférico se comunica com outro: tudo passa pelo hub. O orquestrador herda de `AgenteCoALA` e executa pelo ciclo CoALA (`run_coala_cycle()`), mas `evaluate_and_select()` é um passthrough aqui: a ordem das macro-ações é imposta por **dependência de dados** (o cruzamento só pode vir depois das consultas, a síntese só depois da análise), e não por arbitragem entre candidatos. A deliberação real acontece nos agentes-folha (escolha de dimensão nos agentes de saúde e de orçamento, escolha de ângulo na priorização).
 
-```
-                                OrquestradorEstrela (hub)
-                                          │
-   ┌───────────────┬──────────────┬───────┴──────┬──────────────┬──────────────┬─────────────┐
-   ▼               ▼              ▼              ▼              ▼              ▼             ▼
-Agentes de      Agentes de     Contexto       Analítico     Priorização    Sintetizador   (Verificação)
-saúde (≤ 8)     orçamento      orçamentário   (Spearman +   (ângulo, LLM)  (LLM,          (opcional,
-                (≤ 7)          (tendências)   anomalias)                   streaming)     LLM)
-   │               │                 ▲              ▲              ▲              ▲
-   │ indicadores   │ despesas        │ despesas     │ dados        │ correlações, │ achados
-   └───────────────┴──► hub ─────────┴──────────────┴─ cruzados ───┴─ anomalias ──┴─ priorizados
-```
+![Topologia estrela: OrquestradorEstrela e agentes, na ordem de execução](../diagramas/agentes/12-topologia-estrela.png)
+
+O orquestrador chama cada grupo de agentes em sequência (a numeração indica a ordem) e recebe o retorno de cada um; as setas duplas representam essa ida e volta.
 
 ## Ativação condicional
 
@@ -78,7 +71,9 @@ def propose_actions(self) -> list[dict]:
     return actions
 ```
 
-`execute()`, herdado da base, percorre a lista em ordem e chama o `_act_*` de cada goal.
+`execute()`, herdado da base, percorre a lista em ordem e chama o `_act_*` de cada goal. A figura abaixo mostra a mesma sequência, separando o que entra no wall-clock do que fica fora dele:
+
+![Pipeline do OrquestradorEstrela, com a fronteira capturar_wallclock](../diagramas/arquitetura/01-estrela-pipeline.png)
 
 ### 1. `consultar_saude` (uma vez por sistema ativo)
 
@@ -135,6 +130,10 @@ Só é proposta com `use_self_check=True` e `use_llm=True`. Aplica `core/claim_v
 
 Persiste `MetricaExecucao` (tempo e CPU) de cada agente no Neo4j e emite dois eventos no `ws_queue`: `metric` (breakdown agregado) e `agent_data` (consultas por agente).
 
+![Linha do tempo da medição na estrela: wall-clock, agentes, overhead e o que fica de fora](../diagramas/arquitetura/02-estrela-medicao.png)
+
+As barras cinza-escuro (agentes) somam `workers_time_ms`; o restante do wall-clock, até `capturar_wallclock`, é o overhead do orquestrador (cruzamento, detecção de lacunas, instanciação). Priorização, síntese e verificação rodam depois da fronteira e ficam fora da medição. As durações da figura são ilustrativas.
+
 ```python
 for _, agent_type, mc in collectors:
     if agent_type in ("sintetizador", "priorizacao", "verificacao"):
@@ -156,7 +155,7 @@ result = {
 }
 ```
 
-`correlacoes`/`anomalias` são sempre os dados **brutos**, nunca a versão reordenada pela priorização. É isso que garante que a métrica Q1 (consistência determinística entre estrela e hierárquica) compare exatamente os mesmos números, qualquer que seja o ângulo escolhido por cada topologia.
+`correlacoes`/`anomalias` são sempre os dados **brutos**, nunca a versão reordenada pela priorização. É isso que garante que a métrica Q1 (consistência determinística entre estrela e árvore) compare exatamente os mesmos números, qualquer que seja o ângulo escolhido por cada topologia.
 
 ## Características-chave desta topologia
 
