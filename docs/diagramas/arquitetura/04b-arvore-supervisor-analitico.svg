@@ -3,7 +3,7 @@
 <rect x="0.00" y="0.00" width="410.06" height="51.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
 <text x="8.00" y="14.30" text-anchor="start" fill="#000000" font-weight="bold">Medido (até _coala_leaf_end_time)</text>
 <rect x="0.00" y="85.00" width="410.06" height="51.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
-<text x="8.00" y="99.30" text-anchor="start" fill="#000000" font-weight="bold">Fora da medição (subtraído)</text>
+<text x="8.00" y="99.30" text-anchor="start" fill="#000000" font-weight="bold">Fora do wall-clock</text>
 <polygon points="145.35,31.50 139.35,34.70 139.35,28.30" fill="#000000" stroke="none"/>
 <polyline points="127.35,31.50 139.35,31.50" fill="none" stroke="#000000" stroke-width="1.0"/>
 <polygon points="282.70,31.50 276.70,34.70 276.70,28.30" fill="#000000" stroke="none"/>

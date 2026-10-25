@@ -63,12 +63,17 @@ As duas arquiteturas continuam sendo avaliadas **concorrentemente** (`asyncio.ga
 ### E1 — Overhead de coordenação
 
 ```python
+NOS_RAIZ = {"orquestrador_estrela", "coordenador_geral"}
+
 def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     supervisor_time = 0.0
     worker_time = 0.0
     for m in agent_metrics:
-        if m.get("agentName", "") in FASE_SUPERVISORES:
-            supervisor_time += m.get("executionTimeMs", 0)
+        name = m.get("agentName", "")
+        if name in NOS_RAIZ:
+            supervisor_time += m.get("executionTimeMs", 0)   # já é o overhead
+        elif name.startswith("supervisor_"):
+            continue                                         # contém o tempo dos subordinados
         else:
             worker_time += m.get("executionTimeMs", 0)
     total = supervisor_time + worker_time
@@ -76,27 +81,27 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     return {"supervisor_time_ms": ..., "worker_time_ms": ..., "overhead_ratio": ratio, "overhead_percent": ratio * 100}
 ```
 
-Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, a única entrada de coordenação é `orquestrador_estrela`, que carrega o overhead `wall_clock − soma dos agentes` (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)) e tende a ser pequena. Na árvore entram os 4 supervisores, com o tempo total de cada um (que já engloba o dos subordinados), mais `coordenador_geral` com o overhead residual (ver [arquitetura-arvore.md](arquitetura-arvore.md#contabilização-de-métricas-e-overhead)).
+A entrada-raiz de cada topologia (`orquestrador_estrela` ou `coordenador_geral`) já traz o overhead calculado por quem coordena: `wall-clock − Σ agentes-folha`. O relógio fecha no mesmo ponto nas duas topologias, o fim da parte determinística (`capturar_wallclock`): `_orch_end` na estrela e o `_coala_leaf_end_time` do `SupervisorAnalitico` na árvore. Por isso a definição é a mesma nas duas:
+
+```
+overhead_ratio = overhead / (overhead + Σ agentes-folha)
+```
+
+O que o overhead captura muda com a topologia. Na estrela, é o trabalho do próprio orquestrador: cruzamento, detecção de lacunas e instanciação (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)). Na árvore, é o tempo dos supervisores fora dos subordinados, incluindo o cruzamento e a detecção de lacunas feitos pelo `SupervisorAnalitico`, mais a instanciação (ver [arquitetura-arvore.md](arquitetura-arvore.md#contabilização-de-métricas-e-overhead)). Os `supervisor_*` continuam em `agent_metrics` para exibição, mas ficam fora da conta: o tempo de cada um já contém o dos seus agentes-folha, e somá-lo dobraria a contagem.
 
 ![Linha do tempo da medição na estrela: wall-clock, agentes, overhead e o que fica de fora](../diagramas/arquitetura/02-estrela-medicao.png)
 
-![Linha do tempo da medição na árvore: supervisores, agentes-folha e tempo subtraído](../diagramas/arquitetura/05-arvore-medicao.png)
+![Linha do tempo da medição na árvore: supervisores, agentes-folha e o que fica fora do wall-clock](../diagramas/arquitetura/05-arvore-medicao.png)
 
-**Ressalva — na árvore, o E1 conta duas vezes o tempo dos agentes-folha.** Cada supervisor entra em `agent_metrics` com o tempo total da sua execução, que já inclui o dos agentes-folha, e os agentes-folha também entram, como entradas próprias. `compute_coordination_overhead` soma supervisores e `coordenador_geral` em `supervisor_time` e os agentes-folha em `worker_time`, então o tempo das folhas aparece dos dois lados da razão:
-
-```
-overhead_ratio = (folhas + parte própria dos supervisores + overhead) / (2 × folhas + parte própria dos supervisores + overhead)
-```
-
-O resultado fica acima de 50% por construção. Na estrela não há essa sobreposição: a única entrada de coordenação é o overhead residual. Por isso o E1 da árvore **não é comparável em valor absoluto** com o da estrela. A comparação direta do custo de coordenação é o overhead residual (`coordenador_geral` × `orquestrador_estrela`), que nas duas topologias é `wall-clock − Σ agentes-folha`. O código não foi alterado; a ressalva vale para todos os números de E1 e E2 da árvore medidos até agora.
+> **Mudança em `61950f6`.** Antes desse commit, o E1 da árvore somava os 4 supervisores como coordenação, então o tempo dos agentes-folha entrava dos dois lados da razão e o overhead passava de 50% por construção. Além disso, o relógio da árvore ia até o fim de `persistir_metricas`, depois descontava priorização, síntese e verificação, e por isso incluía a gravação das métricas no Neo4j, que a estrela não conta. Valores de E1, E2 e do wall-clock da árvore medidos antes desse commit não são comparáveis com os atuais (D27).
 
 ### E2 — Breakdown de latência por fase
 
-Divide o tempo em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os mesmos conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO`/`FASE_SUPERVISORES`, e retorna o tempo absoluto e o percentual de cada fase — usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo. Três detalhes de leitura:
+Divide o tempo em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO` e o mesmo `NOS_RAIZ` do E1, e retorna o tempo absoluto e o percentual de cada fase — usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo. Três detalhes de leitura:
 
+- A fase `supervisores` contém só a entrada-raiz, ou seja, o overhead de coordenação. O nome ficou por compatibilidade com o payload; os `supervisor_*` da árvore não entram em nenhuma fase.
 - `FASE_ANALITICO` lista `priorizacao`, `sintetizador` e `verificacao`, mas os orquestradores excluem esses três serviços de LLM de `agentMetrics` (eles rodam depois de `capturar_wallclock`). Na prática, a fase analítica contém só o `AgenteAnalitico`.
-- Os percentuais são calculados sobre a **soma das fases**, não sobre o wall-clock. Depois, `compute_all_quality_metrics` sobrescreve `total_ms` com o wall-clock real, então `total_ms` e a soma dos `time_ms` não coincidem.
-- Na árvore vale a mesma sobreposição do E1: a fase `supervisores` inclui o tempo dos agentes-folha, que também aparece em `dominio`, `contexto` e `analitico`, e o percentual de `supervisores` sai inflado.
+- Os percentuais são calculados sobre a **soma das fases**, não sobre o wall-clock. Depois, `compute_all_quality_metrics` sobrescreve `total_ms` com o wall-clock real. Como a soma das fases é `Σ agentes-folha + overhead`, os dois valores agora coincidem, a menos de arredondamento e de agentes que não pertencem a nenhuma fase.
 
 **Nenhuma das duas métricas usa limiar fixo** (ex.: "overhead > 30% é ruim") — a comparação é sempre relativa entre as duas topologias na mesma análise, nunca contra um corte absoluto. Essa é uma decisão deliberada (D12, ver tabela).
 
@@ -405,6 +410,56 @@ def compute_cache_hit_rate() -> dict[str, Any]:
 
 ---
 
+## Avaliação em lote (scripts de resultados)
+
+O harness acima valida invariantes com dados sintéticos e sem LLM. Os números do capítulo de resultados vêm de outra ferramenta: uma bateria de perguntas reais, rodada várias vezes contra o banco carregado e o LLM de produção, e consolidada com estatística. São três scripts em `backend/scripts/`.
+
+![Fluxo da avaliação em lote: batch_eval, arquivos de saída, batch_report e analise_rodadas](../diagramas/ciclo-metricas/08-avaliacao-lote.png)
+
+**`batch_eval`** reproduz, fora da interface, o que o sistema faz numa conversa de chat:
+
+1. Recusa mensagens acima de `MAX_MESSAGE_LENGTH`, como o chat.
+2. Interpreta a pergunta com `AgenteInterpretacaoIntencao.parse()` dentro de um `TokenBucket`, com a memória episódica ligada.
+3. Dispara as duas topologias concorrentes por `run_chat_analysis()` → `dispatch_analysis()`, com os runners reais.
+4. Lê a fila como o WebSocket faz.
+5. Roda `compute_all_quality_metrics()`, a avaliação RAGAS (`_run_ragas_evaluation`) e o veredito (`_decide_winner`).
+
+Nenhuma métrica é reimplementada: os números são os mesmos do payload de `/api/analysis/{id}/quality`. A única diferença deliberada é que o nó `Analise` não é gravado no Neo4j, para o lote não deixar dados nem alterar a memória episódica do chat.
+
+- **Cenários:** 51 perguntas em 11 categorias. As categorias variam tema, período, objetividade e quão óbvio é o sistema a consultar: explícitas, ambíguas no sistema ou no período, sistemas raros, comparações complexas, multissistema, datas estreitas ou inválidas. Todas foram desenhadas para passar da interpretação. O guardrail de escopo fica com os testes unitários.
+- **Falhas injetadas:** 3 cenários reaproveitam uma pergunta-base e quebram uma parte do sistema com `unittest.mock`:
+  - `saude_todos`: todos os agentes de saúde falham, uma falha de folha que serve de controle, porque as duas topologias degradam igual;
+  - `supervisor_analitico`: o supervisor inteiro falha; é a única falha que separa as topologias, porque leva o texto junto;
+  - `llm_fora`: o LLM cai depois da interpretação, e o texto sai pelo fallback determinístico.
+
+  O catálogo `FAULT_SPECS` tem outros tipos para quem quiser ampliar a bateria.
+- **Saídas:** `--out resultados.xlsx` grava o relatório e, ao lado, `<saída>.jsonl` (uma linha por cenário × topologia) e `<saída>.payloads.jsonl` (o payload completo de qualidade, RAGAS e relatório de cada análise).
+- **Custo:** cada cenário aceito dispara as duas topologias e o RAGAS, todos com chamadas reais de LLM. Comece com `--limit` ou `--categories`. `--no-ragas` pula a avaliação; `--intent-only` roda só a interpretação (~2 s por cenário), útil para conferir quantos cenários passam antes da bateria completa.
+
+```bash
+cd backend
+python -m scripts.batch_eval --limit 5
+python -m scripts.batch_eval --categories falha_injetada --no-ragas   # só resiliência
+python -m scripts.batch_report resultados.jsonl resultados.xlsx      # refaz o XLSX sem rodar de novo
+```
+
+**`batch_report`** gera o XLSX a partir do `.jsonl`: tabelas, gráficos e a comparação estrela × árvore. As abas de resumo usam fórmulas sobre a aba `Resultados`, então filtrar os dados brutos recalcula tudo no Excel.
+
+**`analise_rodadas`** consolida N rodadas (um `.jsonl` por rodada, com o `.payloads.jsonl` ao lado) e produz `analise.json`, `analise.xlsx` e as figuras `fig_*.png` do capítulo de resultados. Não recalcula nada a partir do sistema, só agrega o que as rodadas mediram. O tratamento estatístico:
+
+- mediana e amplitude interquartil;
+- Mann-Whitney bilateral por pergunta, com as repetições de uma topologia contra as da outra, e o tamanho de efeito A12 de Vargha-Delaney;
+- teste exato de Fisher para desfechos dicotômicos;
+- como complemento, Wilcoxon de postos sinalizados sobre as medianas por pergunta, que aproveita o pareamento.
+
+Não há correção para comparações múltiplas; todos os p-valores são gravados. O script precisa de `numpy`, `scipy`, `matplotlib` e `openpyxl`. O `matplotlib` **não está** no `requirements.txt` e precisa ser instalado à parte, ou use `--sem-figuras`.
+
+```bash
+python backend/scripts/analise_rodadas.py --rodada rodada1.jsonl --rodada rodada2.jsonl --out analise_rodadas
+```
+
+---
+
 ## Justificativa Acadêmica por Métrica
 
 Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às decisões que dizem respeito diretamente às métricas (os IDs D1–D5, D13–D15 dizem respeito a decisões de arquitetura de agentes, não de medição, e por isso não estão repetidos aqui — ver o plano para o conjunto completo).
@@ -429,6 +484,7 @@ Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às dec
 | D24 | Uso de `text-embedding-3-large` no `answer_relevancy`, divergindo do `text-embedding-ada-002` do paper | Es et al. (2024), Seção 3; OpenAI, *New embedding models and API updates*; Stekel (MTEB-BR, arXiv:2607.04581) | O paper especifica o *procedimento* ("obtemos embeddings para todas as perguntas... calculamos a similaridade de cosseno"), não o modelo — a definição de `AR` não depende de qual encoder produz os vetores; o `ada-002` foi simplesmente o disponível em 2023. Aqui os textos comparados são todos em português, e o `ada-002` é o pior dos três nesse eixo (31,4% no MIRACL, contra 54,9% do `3-large`), com custo 5× maior que o `3-small`. Manter o modelo do paper degradaria a medida sem ganho de comparabilidade. **Ressalva:** os scores de `answer_relevancy` não são numericamente comparáveis com os do paper nem com implementações que usem `ada-002`. |
 | D25 | Terceiro pilar medido por `ContextRelevance` em vez de `ContextPrecisionWithoutReference` | Es et al. (2024), Seção 3 | A definição do paper é uma **proporção** ("número de sentenças extraídas / total de sentenças no contexto"), não uma *average precision* ranqueada. A precisão de contexto da biblioteca calcula AP, que pressupõe um resultado de retrieval **ordenado por relevância** e pontua conforme a posição dos chunks úteis. Aqui não há retriever nem ranking: `build_contexts` emite numa ordem estrutural fixa, então o score virava função dessa ordem arbitrária. Medido com os 77 chunks de uma execução real, variando **só** a posição dos mesmos 6 chunks úteis: AP **1,00** no início, **0,09** dispersos, **0,05** no fim. `ContextRelevance` concatena o contexto e o avalia com dois juízes (escala 0/1/2), sem depender de ordem. **Consequência:** torna obsoleto o teto de contextos de D21, e as medições de precisão de contexto anteriores (0,09 / 0,23) não são comparáveis com as atuais. |
 | D26 | Limiar de 0,05 no desempate por fidelidade (`FAITHFULNESS_TIE_THRESHOLD`) | — | **Decisão de engenharia, sem embasamento acadêmico direto.** Nenhuma fonte consultada prescreve limiar de indiferença para comparação entre sistemas. O argumento é a natureza do instrumento: o juiz é um LLM e reavaliar o mesmo texto produz variação, então uma diferença de 0,01 — como a observada numa execução real (0,79 × 0,80) — distingue ruído, não arquitetura. Abaixo do limiar o veredito cai para a completude e o relatório diz explicitamente "fidelidade tecnicamente empatada", para não confundir com o caso em que a fidelidade não pôde ser medida. |
+| D27 | Definição única de overhead (`NOS_RAIZ`) e fim de relógio comum às duas topologias (`61950f6`) | — | **Decisão de engenharia, sem embasamento acadêmico direto — correção de viés de medição.** Dois artefatos favoreciam a estrela sem relação com a arquitetura: o E1 da árvore somava os supervisores, cujo tempo já contém o dos agentes-folha, e o relógio da árvore incluía a gravação das métricas no Neo4j, que o da estrela não inclui. Agora as duas topologias fecham o relógio no fim da parte determinística (`capturar_wallclock`), e o overhead é `wall-clock − Σ agentes-folha` nas duas, coberto por `tests/test_overhead_definition.py`. **Ressalva:** valores de E1, E2 e do wall-clock da árvore anteriores à correção não são comparáveis com os atuais. |
 | — | Q1 (consistência determinística), Q3 (completude), R1 (cobertura parcial), pesos de Q3 (40/40/20) | — | **Decisões de engenharia pré-existentes, sem embasamento acadêmico direto** — não fizeram parte da Etapa 6 nem de nenhuma decisão citada no plano; documentadas aqui por completude do eixo de métricas, não por terem justificativa acadêmica a reportar. |
 
 ---

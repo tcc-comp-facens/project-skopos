@@ -54,7 +54,9 @@ Dois tipos de CSV por bloco plurianual (`2015-2019`, `2020-2022`, `2023-2025`):
 | Arquivo | Conteúdo | Vira no grafo |
 |---------|----------|---------------|
 | `guestuser_lai_-_empenhado_(extraçao_de_dados)_<hash>.csv` | Uma linha por empenho (data, subfunção, natureza, fonte de recurso, fornecedor, ação, aplicação, valores) | `Empenho` + dimensões, agregado em `DespesaAnual` |
-| `guestuser_lai_-_previsto_e_empenhado_por_programa_e_secretaria_(extraçao_dados)_<hash>.csv` | Previsto vs. realizado por programa/ação/órgão | `OrcamentoPrograma` |
+| `guestuser_lai_-_previsto_e_empenhado_por_programa_e_secretaria_(extraçao_dados)_<hash>.csv` | Previsto vs. realizado por programa/ação/órgão | **Não é carregado** (ver abaixo) |
+
+O CSV de previsto × realizado fica na pasta, mas o loader o ignora desde `61950f6`. O grão é o bloco plurianual inteiro, sem coluna de ano; os textos de programa e ação não se ligam a `ProgramaGoverno`/`Acao` dos empenhos; e nenhum agente consumia o nó `OrcamentoPrograma` que ele gerava.
 
 A proveniência é limitada ao que o nome dos arquivos indica: extração de um portal de transparência/LAI (Lei de Acesso à Informação) de Sorocaba, acessado como usuário convidado. Os CSVs **não têm data de extração embutida**. É uma assimetria real em relação ao lado saúde: se os números do orçamento precisarem ser auditados, não há como saber pelo arquivo quando nem por qual ferramenta foram exportados.
 
@@ -95,8 +97,6 @@ Todas as planilhas têm uma aba **"Notas"** com a proveniência. Município: sem
 **Todos os dados, de orçamento e de saúde, ficam restritos a 01/01/2016 – 31/12/2025 (10 anos).** O corte é feito **no ETL**, por linha, e não em tempo de consulta (`PERIODO_ANO_MIN = 2016` e `PERIODO_ANO_MAX = 2025` em ambos os loaders).
 
 Os arquivos de origem extrapolam a janela: os extratos DATASUS começam em 2015 e as doses do SI-PNI vão até 2026, e essas linhas são descartadas. Nos empenhos, os dados reais começam em 2016 apesar da pasta se chamar `2015-2019`.
-
-**Exceção:** `OrcamentoPrograma` não tem coluna de ano por linha. O grão é o bloco plurianual inteiro, mantido integralmente, sabendo que `"2015-2019"` nominalmente inclui 2015.
 
 O endpoint `GET /api/data-range` devolve o intervalo efetivamente carregado (`min`/`max` de `ano` entre `Empenho` e `IndicadorSaude`), usado para validar períodos pedidos no chat.
 
@@ -140,7 +140,7 @@ O `run_etl.py` lê o `.env` da raiz e troca automaticamente o hostname Docker (`
 
 **Fluxo:**
 1. Garante constraints e índices (`CREATE ... IF NOT EXISTS`).
-2. Itera `Dados/orcamento/<bloco>/*.csv` e decide o tipo pelo nome (`previsto_e_empenhado` → `OrcamentoPrograma`, `empenhado` → `Empenho`).
+2. Itera `Dados/orcamento/<bloco>/*.csv` e decide o tipo pelo nome: `previsto_e_empenhado` é ignorado (só registra no log) e `empenhado` vira `Empenho`. O teste de `previsto_e_empenhado` precisa vir antes, porque esse nome também contém "empenhado".
 3. Lê com pandas (`sep="|"`, `encoding="latin-1"`).
 4. Para `Empenho`: filtra a janela, mapeia subfunção/fonte de recurso/fornecedor/ação e persiste em lotes de 2.000 via `UNWIND` (dimensões, nó e relacionamentos numa query por lote).
 5. Ao final, quatro agregações sobre o grafo já carregado:
@@ -179,14 +179,14 @@ Há uma função `_load_<sistema>` por sistema (`_load_sim`, `_load_sih`, `_load
 O banco é um grafo Neo4j, mas a modelagem é apresentada abaixo como diagrama entidade-relacionamento, com uma entidade por *label* de nó. As figuras ficam em [`docs/diagramas/`](diagramas/), em PNG (300 dpi) e SVG, e foram dimensionadas para a monografia, seguindo os exemplos do Manual de Textos Técnicos:
 
 - largura ≤ 16 cm;
-- altura ≤ 9 cm (a visão geral tem 11,3 cm);
+- altura ≤ 9 cm (a visão geral tem 11 cm);
 - todo o texto em Arial 12 pt, desde que a imagem seja inserida a 100%;
 - sem título, fonte ou legenda dentro da imagem, porque isso fica no texto do documento.
 
-Para regenerar depois de mudar o modelo, rode `python docs/diagramas/gerar_diagramas.py`.
+Para regenerar depois de mudar o modelo, rode `python docs/diagramas/gerar_diagramas.py`. A figura da conferência do ETL, na seção de validações, fica em `docs/diagramas/ciclo-metricas/` e é gerada por `python docs/diagramas/ciclo-metricas/gerar_diagramas_ciclo_metricas.py`.
 
 **Como ler:**
-- **Entidade** = label de nó, com propriedades e tipos. O atributo **sublinhado** é a chave do nó: constraint `UNIQUE` ou, em `DespesaAnual`/`OrcamentoPrograma`, chave lógica composta.
+- **Entidade** = label de nó, com propriedades e tipos. O atributo **sublinhado** é a chave do nó: constraint `UNIQUE` ou, em `DespesaAnual`, chave lógica composta.
 - Os diagramas mostram **só os atributos principais**. Uma linha **"…"** indica atributos omitidos, e as dimensões aparecem só com a chave. A lista completa de propriedades está nas seções [Orçamento](#modelo-de-dados-neo4j--orçamento) e [Indicadores de Saúde](#modelo-de-dados-neo4j--indicadores-de-saúde) abaixo.
 - **Linha contínua** = relacionamento gravado no grafo, com o nome do tipo. **1**/**N** = cardinalidade.
 - **Linha tracejada** = vínculo lógico **sem** relacionamento no grafo.
@@ -197,10 +197,9 @@ Os dois domínios **não são ligados por relacionamentos**. O cruzamento entre 
 
 ![Visão geral do modelo de dados](diagramas/01-visao-geral.png)
 
-As 25 entidades, agrupadas por domínio. Na visão geral:
+As 24 entidades, agrupadas por domínio. Na visão geral:
 - a linha tracejada entre `Empenho` e `DespesaAnual` indica que `DespesaAnual` é calculada a partir dos empenhos;
-- o laço em `DespesaAnual` é o relacionamento `VARIACAO_ANUAL`;
-- `OrcamentoPrograma` não tem relacionamentos.
+- o laço em `DespesaAnual` é o relacionamento `VARIACAO_ANUAL`.
 
 ### Orçamento — Empenho e classificação
 
@@ -219,12 +218,6 @@ Cada empenho tem exatamente um fornecedor, uma fonte de recurso, uma subfunção
 ![DespesaAnual, Empenho, Aplicacao e Natureza](diagramas/04-orcamento-agregados.png)
 
 `DespesaAnual` é calculada no fim do ETL a partir de `Empenho`, por subfunção e ano. A linha tracejada indica essa agregação, que não é gravada como relacionamento. `POR_APLICACAO` e `POR_NATUREZA` guardam a propriedade `valor`. O laço `VARIACAO_ANUAL` liga o ano atual ao anterior da mesma subfunção e guarda `percentual` e `classificacao`.
-
-### Orçamento — previsto × realizado
-
-![OrcamentoPrograma](diagramas/05-orcamento-previsto-realizado.png)
-
-`OrcamentoPrograma` fica isolado de propósito: os textos de programa e ação do CSV de previsto × realizado não batem com os de `Acao`/`ProgramaGoverno`.
 
 ### Saúde — IndicadorSaude e dimensões
 
@@ -312,16 +305,18 @@ Grão `(subfuncaoCodigo, ano)`, calculado a partir de `Empenho` no fim do ETL. �
 | Propriedade | Observação |
 |-------------|------------|
 | `subfuncaoCodigo`, `subfuncaoNome`, `ano` | Índice composto (Neo4j Community não tem constraint composta) |
-| `valorProcessado`, `valorPago`, `valorEmpenhado` | Somas de `Empenho` |
+| `valorProcessado`, `valorPago`, `valorEmpenhado` | Somas de `Empenho` (ver a semântica abaixo) |
 | `valorProprio`, `valorFederal`, `valorEstadual`, `valorCredito`, `valorEmendaParlamentar`, `valorOutros` | Breakdown por `tipoRecurso`, que soma exatamente o `valorProcessado` |
+
+**Semântica das somas**, conferida nas 52.904 linhas de `Empenho`:
+- `valorEstorno` vem **negativo** no CSV de origem: são as anulações.
+- `saldoEmpenho = valorEmpenhoOriginal + valorEstorno` em todas as linhas. É o empenhado **líquido** de anulações, não um "saldo a pagar".
+- Por isso `valorEmpenhado` (`Σ saldoEmpenho`) é o valor empenhado líquido.
+- As análises usam `valorProcessado` como valor oficial do gasto.
 
 Relacionamentos derivados:
 - **`POR_APLICACAO` / `POR_NATUREZA`** `{valor}`: quebra dimensional do gasto, no mesmo padrão do lado saúde (o valor vive na relação). Consumidos via `db/query_builder.py::build_despesa_cypher`, com `dimensao` validada contra `DESPESA_DIMENSOES`.
 - **`VARIACAO_ANUAL`** `{percentual, classificacao}`: variação ano a ano pré-computada. "Consecutivo" significa consecutivo na lista de anos com despesa para a subfunção. Lida por `neo4j_client.get_variacao_anual` (ação `consultar_variacao_anual` dos agentes de orçamento).
-
-### `OrcamentoPrograma` (~940 nós)
-
-Previsto vs. realizado por `programa`, `acao`, `orgao` e `periodoOrigem` (bloco inteiro), com `valorPrevisto` e `valorRealizado`. **Não** está ligado a `ProgramaGoverno`/`Acao`, porque os textos não batem entre os dois CSVs.
 
 ### Constraints e índices (orçamento)
 
@@ -329,8 +324,9 @@ Previsto vs. realizado por `programa`, `acao`, `orgao` e `periodoOrigem` (bloco 
 fornecedor_documento, subfuncao_codigo, fonte_recurso_nome, programa_governo_nome, acao_codigo,
 unidade_orcamentaria_nome, aplicacao_nome, natureza_nome, empenho_id        (UNIQUE)
 despesa_anual_lookup (DespesaAnual: subfuncaoCodigo, ano)                    (índice composto)
-orcamento_programa_lookup (OrcamentoPrograma: periodoOrigem)                 (índice)
 ```
+
+> Bancos carregados antes de `61950f6` ainda podem ter nós `OrcamentoPrograma` e o índice `orcamento_programa_lookup`. O ETL atual não os cria nem os remove, e nenhum agente os consulta.
 
 ---
 
@@ -407,6 +403,15 @@ Além dos dados carregados pelo ETL, o backend grava o histórico das análises:
 | `Analise` | `id`, `dateFrom`, `dateTo`, `healthParams` (JSON), `starStatus`/`hierStatus`, `starTextAnalysis`/`hierTextAnalysis`, `starCompletedAt`/`hierCompletedAt`, `createdAt`, `sourceQuestion`, `interpretedVia` |
 | `MetricaExecucao` | `id`, `architecture`, `agentId`, `agentType`, `executionTimeMs`, `cpuPercent`, `recordedAt` |
 
+As constraints desses nós não vêm do ETL. A API as cria no startup, com `Neo4jClient.ensure_schema()` (melhor esforço, idempotente):
+
+```
+analise_id            (Analise: id)            UNIQUE
+metrica_execucao_id   (MetricaExecucao: id)    UNIQUE
+```
+
+Sem elas, cada `MERGE` varre todos os nós do rótulo, e as duas topologias gravando em paralelo podem duplicar o nó. Se já houver dados duplicados de antes, a constraint falha, a falha vai para o log e a outra constraint é aplicada mesmo assim. `save_metrica` faz o `MATCH` da `Analise` antes do `MERGE` da métrica, então uma execução sem `Analise` não deixa `MetricaExecucao` órfã.
+
 As análises passadas também alimentam a memória episódica do agente de interpretação de intenção (`neo4j_client.get_past_analises`).
 
 **Consultas seguras.** O LLM nunca escreve Cypher. Quando um agente decide uma quebra dimensional (ex.: `POR_FAIXA_ETARIA`), `db/query_builder.py` monta uma query parametrizada e só interpola o nome do relacionamento depois de validá-lo contra a allowlist. Uma dimensão inválida levanta `DimensaoInvalida`, e `Neo4jClient` cai para a consulta sem quebra, sem erro fatal. Cada consulta é registrada em `neo4j_client.query_log` e anexada ao resultado do agente, de onde o `AgentDataCard` da aba técnica a exibe.
@@ -428,16 +433,34 @@ Feitas na implementação do ETL (2026-08-04), contra um Neo4j populado:
 | Correlação gasto × indicador | Subfunção 305 × dengue revela o surto de 2024 (46.635 casos), coincidindo com o pico de gasto em vigilância epidemiológica |
 | Multi-hop SIM × SIH por capítulo CID | Doenças circulatórias lideram óbitos e internações em 2020 |
 
+### Conferência independente (`scripts/conferencia_etl.py`)
+
+Para os resultados do TCC, o ETL também é conferido por um leitor próprio das fontes (xlsx do TabNet e CSVs de empenho da LAI), que não reaproveita nenhuma função de `etl/`. A comparação cobre **todos** os valores, não uma amostra.
+
+![Conferência do ETL: fontes, leitor independente, saída dos loaders ou grafo, e saídas](diagramas/ciclo-metricas/09-conferencia-etl.png)
+
+São dois modos:
+
+1. **Fonte × saída do ETL** (padrão, sem Neo4j). Os loaders rodam com uma sessão falsa que só registra as linhas que seriam gravadas. A agregação `DespesaAnual`, que o loader faz em Cypher, é refeita em Python.
+2. **Fonte × grafo** (`--neo4j`). Lê do banco `IndicadorSaude`, as quebras dimensionais e `DespesaAnual`, e compara com as mesmas fontes.
+
+A saída, em `--out`, tem `resumo.json`, `divergencias.csv` e `amostra.csv`. A amostra traz valores sorteados com a célula de origem, para conferência manual no TabNet; `--amostra` define o tamanho e `--seed` a semente.
+
+```bash
+cd backend
+python -m scripts.conferencia_etl --out ../conferencia_etl
+python -m scripts.conferencia_etl --neo4j --out ../conferencia_etl
+```
+
 ---
 
 ## Limitações Conhecidas
 
-1. **`OrcamentoPrograma` não respeita a janela com precisão**: o grão é o bloco plurianual.
-2. **`FaixaEtaria` não é comparável entre sistemas**: decisão deliberada, então não some nem compare faixas de SIM e SINASC.
-3. **`OrcamentoPrograma` não está ligado a `ProgramaGoverno`/`Acao`**: exigiria fuzzy-matching.
-4. **`emenda_parlamentar` não foi classificada** como própria ou federal.
-5. **CNES mensal foi reduzido a dezembro**: para granularidade mensal, é preciso reprocessar o xlsx.
-6. **2025 é preliminar** em SIM, SIH, SINASC e CNES Rede Assistencial. Conclusões que dependam desse ano devem sinalizar a ressalva.
-7. **SI-PNI tem duas séries distintas** (2015–2022 e 2023–2026), com fontes e nomenclaturas diferentes. Não trate como série contínua.
-8. **Valores nominais**: sem deflação (IPCA) nem normalização per capita. São melhorias possíveis para trabalhos futuros.
-9. **Orçamento sem data de extração**: os CSVs da LAI não registram quando foram exportados.
+1. **`FaixaEtaria` não é comparável entre sistemas**: decisão deliberada, então não some nem compare faixas de SIM e SINASC.
+2. **`emenda_parlamentar` não foi classificada** como própria ou federal.
+3. **CNES mensal foi reduzido a dezembro**: para granularidade mensal, é preciso reprocessar o xlsx.
+4. **2025 é preliminar** em SIM, SIH, SINASC e CNES Rede Assistencial. Conclusões que dependam desse ano devem sinalizar a ressalva.
+5. **SI-PNI tem duas séries distintas** (2015–2022 e 2023–2026), com fontes e nomenclaturas diferentes. Não trate como série contínua.
+6. **Valores nominais**: sem deflação (IPCA) nem normalização per capita. São melhorias possíveis para trabalhos futuros.
+7. **Orçamento sem data de extração**: os CSVs da LAI não registram quando foram exportados.
+8. **Previsto × realizado fora do grafo**: o CSV não é carregado. Comparar orçamento previsto com executado exigiria um grão anual e a ligação com `Acao`/`ProgramaGoverno`.

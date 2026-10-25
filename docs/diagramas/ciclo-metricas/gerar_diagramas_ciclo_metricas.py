@@ -15,8 +15,9 @@ Uso (Windows, precisa só de Pillow e da Arial instalada):
     python docs/diagramas/ciclo-metricas/gerar_diagramas_ciclo_metricas.py
 
 O conteúdo segue backend/api/{chat_websocket,dispatch,runners,websocket}.py,
-backend/core/quality_metrics.py, backend/core/ragas_metrics.py e
-backend/core/llm_client.py.
+backend/core/quality_metrics.py, backend/core/ragas_metrics.py,
+backend/core/llm_client.py e, nas figuras 08-09, os scripts de avaliação em
+backend/scripts/ (batch_eval, batch_report, analise_rodadas, conferencia_etl).
 """
 
 from __future__ import annotations
@@ -381,6 +382,91 @@ def fig_metricas_custo():
     return c
 
 
+# ---------------------------------------------------------------------------
+# Scripts de avaliação (backend/scripts/)
+# ---------------------------------------------------------------------------
+
+
+def bus_many(c, srcs, dsts, y_bus):
+    """Várias origens alimentando várias caixas abaixo por um barramento comum."""
+    for s in srcs:
+        c.line([(s.cx, s.bottom), (s.cx, y_bus)])
+    xs = [n.cx for n in list(srcs) + list(dsts)]
+    c.line([(min(xs), y_bus), (max(xs), y_bus)])
+    for d in dsts:
+        arrow(c, [(d.cx, y_bus), (d.cx, d.y)])
+
+
+def fig_avaliacao_lote():
+    c = Canvas()
+    inner, gap = 8.0, 14.0
+    passos = [Node("Cenários", ["51 perguntas", "+ 3 com falha"], "data"),
+              Node("Intenção", ["parse()"]),
+              Node("Topologias", ["estrela ‖ árvore"]),
+              Node("Avaliação", ["métricas, RAGAS", "e veredito"])]
+    uniform(passos)
+    fill_row(passos, inner, RIGHT - inner, FRAME_TITLE, gap)
+    fh = FRAME_TITLE + passos[0].h + inner
+    frame(c, 0, 0, RIGHT, fh, "batch_eval (o mesmo fluxo do chat)")
+    for a, b in zip(passos, passos[1:]):
+        h_link(c, a, b)
+    jsonl = Node("<saída>.jsonl", ["linha por cenário"], "data")
+    payloads = Node("<saída>.payloads.jsonl", ["payload por análise"], "data")
+    report = Node("batch_report", ["XLSX"])
+    rodadas = Node("analise_rodadas", ["N rodadas → estatísticas e figuras"])
+    for n in (jsonl, report):
+        n.h = payloads.h      # mesma altura; larguras naturais
+    y2 = fh + GY
+    payloads.at(RIGHT - payloads.w, y2)
+    jsonl.at(payloads.x - 40 - jsonl.w, y2)
+    report.at(jsonl.x - 50 - report.w, y2)
+    if report.x < 0:
+        raise ValueError("linha de saídas não cabe")
+    rodadas.at((jsonl.cx + payloads.cx) / 2 - rodadas.w / 2, jsonl.bottom + GY)
+    bus_down(c, Pt((jsonl.cx + payloads.cx) / 2, fh), [jsonl, payloads], fh + GY / 2)
+    h_link(c, jsonl, report)
+    bus_in(c, [jsonl, payloads], rodadas, jsonl.bottom + GY / 2)
+    for n in passos + [jsonl, payloads, report, rodadas]:
+        n.draw(c)
+    return c
+
+
+def fig_conferencia_etl():
+    c = Canvas()
+    fontes = [Node("Extratos TabNet", ["xlsx por sistema"], "data"),
+              Node("Empenhos LAI", ["CSVs por bloco"], "data")]
+    leitor = Node("Leitor independente", ["não usa etl/"])
+    loaders = Node("Saída dos loaders", ["sessão falsa (padrão)"])
+    grafo = Node("Grafo Neo4j", ["--neo4j"], "ext")
+    comp = Node("Comparação", ["todos os valores"])
+    saidas = [Node(None, ["resumo.json"], "data"), Node(None, ["divergencias.csv"], "data"),
+              Node(None, ["amostra.csv"], "data")]
+    uniform(fontes)
+    for n in (leitor, grafo):
+        n.h = loaders.h       # mesma altura; larguras naturais
+    gap_ou = tw("ou") + 24
+    row2 = leitor.w + 2 * GX + loaders.w + gap_ou + grafo.w
+    x = (RIGHT - row2) / 2
+    if x < 0:
+        raise ValueError("linha leitor/loaders/grafo não cabe")
+    y1 = fontes[0].h + GY
+    leitor.at(x, y1)
+    loaders.at(leitor.right + 2 * GX, y1)
+    grafo.at(loaders.right + gap_ou, y1)
+    span = fontes[0].w * 2 + 2 * GX
+    fontes[0].at((leitor.cx + loaders.cx) / 2 - span / 2, 0)
+    fontes[1].at(fontes[0].right + 2 * GX, 0)
+    comp.at(RIGHT / 2 - comp.w / 2, leitor.bottom + GY)
+    fill_row(saidas, 40, RIGHT - 40, comp.bottom + GY, 2 * GX)
+    bus_many(c, fontes, [leitor, loaders], y1 - GY / 2)
+    c.text((loaders.right + grafo.x) / 2, loaders.cy + CAP / 2, "ou", anchor="m")
+    bus_in(c, [leitor, loaders, grafo], comp, comp.y - GY / 2)
+    bus_down(c, comp, saidas, comp.bottom + GY / 2)
+    for n in fontes + [leitor, loaders, grafo, comp] + saidas:
+        n.draw(c)
+    return c
+
+
 FIGURES = {
     "01-ciclo-fluxo": fig_ciclo_fluxo,
     "02a-ciclo-ws-chat": fig_ciclo_ws_chat,
@@ -390,6 +476,8 @@ FIGURES = {
     "05-metricas-veredito": fig_metricas_veredito,
     "06-metricas-ragas": fig_metricas_ragas,
     "07-metricas-custo": fig_metricas_custo,
+    "08-avaliacao-lote": fig_avaliacao_lote,
+    "09-conferencia-etl": fig_conferencia_etl,
 }
 
 if __name__ == "__main__":

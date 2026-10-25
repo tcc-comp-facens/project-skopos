@@ -40,14 +40,16 @@ Os agentes ativos rodam na ordem fixa `covid → sih → sipni → sim → sinan
 | Subfunção | Ativada por |
 |-----------|-------------|
 | 122 Administração Geral | Qualquer subtipo do CNES |
-| 301 Atenção Básica | `vacinacao` (SI-PNI) |
-| 302 Assistência Hospitalar e Ambulatorial | `internacoes` (SIH) |
+| 301 Atenção Básica | `vacinacao` (SI-PNI), `nascidos_vivos` (SINASC) |
+| 302 Assistência Hospitalar e Ambulatorial | `internacoes` (SIH), `producao_ambulatorial` (SIA) |
 | 303 Suporte Profilático e Terapêutico | Qualquer agravo do SINAN |
 | 304 Vigilância Sanitária | SINAN + `estabelecimentos_vigilancia_epidemiologica` |
 | 305 Vigilância Epidemiológica | SINAN + `covid` |
 | 306 Alimentação e Nutrição | Qualquer subtipo do CNES |
 
 `mortalidade` também ativa 301, 302, 303 e 305, porque o indicador de mortalidade cruza com o gasto dessas subfunções.
+
+Os gatilhos de SINASC (301) e SIA (302) entraram em `61950f6`. O cruzamento já previa 301 × nascidos vivos e 302 × produção ambulatorial (`data_crossing.SUBFUNCAO_INDICADOR_MAP`), mas sem o gatilho a despesa nunca era buscada, e perguntas como "nascidos vivos × orçamento da atenção básica" voltavam sem dado cruzado. A tabela vale igual para a árvore (`SupervisorOrcamento`), para não criar diferença de comportamento entre as topologias.
 
 ## O pipeline, passo a passo
 

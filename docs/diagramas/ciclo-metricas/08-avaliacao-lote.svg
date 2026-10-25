@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="203pt" viewBox="0 0 453 203" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="203" fill="#FFFFFF"/>
+<rect x="0.00" y="0.00" width="450.50" height="81.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="14.30" text-anchor="start" fill="#000000" font-weight="bold">batch_eval (o mesmo fluxo do chat)</text>
+<polygon points="118.15,46.50 112.15,49.70 112.15,43.30" fill="#000000" stroke="none"/>
+<polyline points="104.15,46.50 112.15,46.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="205.27,46.50 199.27,49.70 199.27,43.30" fill="#000000" stroke="none"/>
+<polyline points="191.27,46.50 199.27,46.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="324.70,46.50 318.70,49.70 318.70,43.30" fill="#000000" stroke="none"/>
+<polyline points="310.70,46.50 318.70,46.50" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="297.77,81.00 297.77,92.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="216.75,92.00 378.80,92.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="216.75,103.00 213.55,97.00 219.95,97.00" fill="#000000" stroke="none"/>
+<polyline points="216.75,92.00 216.75,97.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="378.80,103.00 375.60,97.00 382.00,97.00" fill="#000000" stroke="none"/>
+<polyline points="378.80,92.00 378.80,97.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="116.40,122.00 122.40,118.80 122.40,125.20" fill="#000000" stroke="none"/>
+<polyline points="166.40,122.00 122.40,122.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="216.75,141.00 216.75,152.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="378.80,141.00 378.80,152.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="216.75,152.00 378.80,152.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="297.77,163.00 294.57,157.00 300.97,157.00" fill="#000000" stroke="none"/>
+<polyline points="297.77,152.00 297.77,157.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="20.00" width="96.15" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="56.08" y="35.80" text-anchor="middle" fill="#000000" font-weight="bold">Cenários</text>
+<text x="56.08" y="50.80" text-anchor="middle" fill="#000000">51 perguntas</text>
+<text x="56.08" y="65.80" text-anchor="middle" fill="#000000">+ 3 com falha</text>
+<rect x="118.15" y="20.00" width="73.12" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="154.71" y="43.30" text-anchor="middle" fill="#000000" font-weight="bold">Intenção</text>
+<text x="154.71" y="58.30" text-anchor="middle" fill="#000000">parse()</text>
+<rect x="205.27" y="20.00" width="105.43" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="257.99" y="43.30" text-anchor="middle" fill="#000000" font-weight="bold">Topologias</text>
+<text x="257.99" y="58.30" text-anchor="middle" fill="#000000">estrela ‖ árvore</text>
+<rect x="324.70" y="20.00" width="117.80" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="383.60" y="35.80" text-anchor="middle" fill="#000000" font-weight="bold">Avaliação</text>
+<text x="383.60" y="50.80" text-anchor="middle" fill="#000000">métricas, RAGAS</text>
+<text x="383.60" y="65.80" text-anchor="middle" fill="#000000">e veredito</text>
+<rect x="166.40" y="103.00" width="100.70" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="216.75" y="118.80" text-anchor="middle" fill="#000000" font-weight="bold">&lt;saída&gt;.jsonl</text>
+<text x="216.75" y="133.80" text-anchor="middle" fill="#000000">linha por cenário</text>
+<rect x="307.10" y="103.00" width="143.40" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="378.80" y="118.80" text-anchor="middle" fill="#000000" font-weight="bold">&lt;saída&gt;.payloads.jsonl</text>
+<text x="378.80" y="133.80" text-anchor="middle" fill="#000000">payload por análise</text>
+<rect x="31.05" y="103.00" width="85.34" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="73.72" y="118.80" text-anchor="middle" fill="#000000" font-weight="bold">batch_report</text>
+<text x="73.72" y="133.80" text-anchor="middle" fill="#000000">XLSX</text>
+<rect x="200.07" y="163.00" width="195.41" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="297.77" y="178.80" text-anchor="middle" fill="#000000" font-weight="bold">analise_rodadas</text>
+<text x="297.77" y="193.80" text-anchor="middle" fill="#000000">N rodadas → estatísticas e figuras</text>
+</svg>

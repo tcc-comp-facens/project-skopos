@@ -378,7 +378,7 @@ saúde (≤ 8)     orçamento      orçamentário   (Spearman +   (ângulo)     
 Só os agentes relevantes aos `health_params` são instanciados:
 
 - **Saúde**: `INDICADOR_TO_AGENT` mapeia cada token para um sistema (`dengue` e demais agravos → `sinan`; `covid` → `covid`; `internacoes` → `sih`; `vacinacao` → `sipni`; `mortalidade` → `sim`; `nascidos_vivos` → `sinasc`; `producao_ambulatorial` → `sia`; subtipos do CNES → `cnes`).
-- **Orçamento**: `_SUBFUNCAO_TOKENS` ativa cada subfunção pelos tokens com par temático: 301 ← SI-PNI · 302 ← SIH · 303 ← SINAN · 304 ← SINAN + `estabelecimentos_vigilancia_epidemiologica` · 305 ← SINAN + COVID · 122/306 ← CNES. `mortalidade` ativa também 301/302/303/305 (é transversal).
+- **Orçamento**: `_SUBFUNCAO_TOKENS` ativa cada subfunção pelos tokens com par temático: 301 ← SI-PNI + SINASC · 302 ← SIH + SIA · 303 ← SINAN · 304 ← SINAN + `estabelecimentos_vigilancia_epidemiologica` · 305 ← SINAN + COVID · 122/306 ← CNES. `mortalidade` ativa também 301/302/303/305 (é transversal).
 
 ### Pipeline (ações em `procedural_memory`)
 
@@ -452,9 +452,9 @@ O coordenador colhe o retorno de cada supervisor e o **repassa como parâmetro d
 
 ### Métricas e overhead
 
-- O tempo do `SupervisorAnalitico` é medido até o **fim da parte determinística** (`_coala_leaf_end_time`), sem o sintetizador.
-- `workers_time_ms` soma só os **agentes-folha** (nível 2). Supervisores aparecem no breakdown, mas não são somados, para evitar contar o tempo duas vezes.
-- Overhead = `wall_clock − soma dos agentes-folha`. Captura o tempo dos supervisores fora dos subordinados e a instanciação.
+- O tempo do `SupervisorAnalitico` é medido até o **fim da parte determinística** (`_coala_leaf_end_time`), sem priorização, síntese e verificação. O relógio do coordenador fecha no mesmo marco, o ponto equivalente ao `_orch_end` da estrela, e a gravação das métricas fica de fora.
+- `workers_time_ms` soma só os **agentes-folha** (nível 2). Supervisores aparecem no breakdown, mas não são somados, nem em `workers_time_ms` nem nas métricas E1/E2, para evitar contar o tempo duas vezes.
+- Overhead = `wall_clock − soma dos agentes-folha`, a mesma definição da estrela. Captura o tempo dos supervisores fora dos subordinados e a instanciação.
 
 ### Degradação graciosa
 

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="433pt" height="205pt" viewBox="0 0 433 205" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="433" height="205" fill="#FFFFFF"/>
+<polyline points="94.39,38.00 94.39,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="238.40,38.00 238.40,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="82.88,49.00 249.91,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="82.88,60.00 79.68,54.00 86.08,54.00" fill="#000000" stroke="none"/>
+<polyline points="82.88,49.00 82.88,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="249.91,60.00 246.71,54.00 253.11,54.00" fill="#000000" stroke="none"/>
+<polyline points="249.91,49.00 249.91,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="332.27" y="83.30" text-anchor="middle" fill="#000000">ou</text>
+<polyline points="82.88,98.00 82.88,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="249.91,98.00 249.91,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="390.95,98.00 390.95,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="82.88,109.00 390.95,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="225.25,120.00 222.05,114.00 228.45,114.00" fill="#000000" stroke="none"/>
+<polyline points="225.25,109.00 225.25,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="225.25,158.00 225.25,169.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="84.64,169.00 366.20,169.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="84.64,180.00 81.44,174.00 87.84,174.00" fill="#000000" stroke="none"/>
+<polyline points="84.64,169.00 84.64,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="225.59,180.00 222.39,174.00 228.79,174.00" fill="#000000" stroke="none"/>
+<polyline points="225.59,169.00 225.59,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="366.20,180.00 363.00,174.00 369.40,174.00" fill="#000000" stroke="none"/>
+<polyline points="366.20,169.00 366.20,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="42.39" y="0.00" width="104.00" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="94.39" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Extratos TabNet</text>
+<text x="94.39" y="30.80" text-anchor="middle" fill="#000000">xlsx por sistema</text>
+<rect x="186.40" y="0.00" width="104.00" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="238.40" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Empenhos LAI</text>
+<text x="238.40" y="30.80" text-anchor="middle" fill="#000000">CSVs por bloco</text>
+<rect x="19.54" y="60.00" width="126.68" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="82.88" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">Leitor independente</text>
+<text x="82.88" y="90.80" text-anchor="middle" fill="#000000">não usa etl/</text>
+<rect x="186.22" y="60.00" width="127.38" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="249.91" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">Saída dos loaders</text>
+<text x="249.91" y="90.80" text-anchor="middle" fill="#000000">sessão falsa (padrão)</text>
+<rect x="350.95" y="60.00" width="80.02" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="390.95" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">Grafo Neo4j</text>
+<text x="390.95" y="90.80" text-anchor="middle" fill="#000000">--neo4j</text>
+<rect x="175.56" y="120.00" width="99.37" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="135.80" text-anchor="middle" fill="#000000" font-weight="bold">Comparação</text>
+<text x="225.25" y="150.80" text-anchor="middle" fill="#000000">todos os valores</text>
+<rect x="40.00" y="180.00" width="89.28" height="23.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="84.64" y="195.80" text-anchor="middle" fill="#000000">resumo.json</text>
+<rect x="169.28" y="180.00" width="112.62" height="23.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="225.59" y="195.80" text-anchor="middle" fill="#000000">divergencias.csv</text>
+<rect x="321.89" y="180.00" width="88.61" height="23.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="366.20" y="195.80" text-anchor="middle" fill="#000000">amostra.csv</text>
+</svg>

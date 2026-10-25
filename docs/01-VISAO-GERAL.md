@@ -195,7 +195,11 @@ docker compose down                                              # parar
 docker compose exec backend python -m etl.orcamento_loader        # recarregar orçamento
 docker compose exec backend python -m etl.saude_indicadores_loader
 docker compose exec backend python -m scripts.check_embeddings    # diagnóstico de acesso aos embeddings do RAGAS
+docker compose exec backend python -m scripts.batch_eval --limit 5   # bateria de avaliação (chamadas LLM reais)
+docker compose exec backend python -m scripts.conferencia_etl        # confere o ETL contra as planilhas de origem
 ```
+
+Os scripts de avaliação (`batch_eval`, `batch_report`, `analise_rodadas`) estão em [arquitetura/metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md#avaliação-em-lote-scripts-de-resultados), e a conferência do ETL em [03-DADOS-ETL.md](03-DADOS-ETL.md#conferência-independente-scriptsconferencia_etlpy).
 
 ---
 
@@ -218,9 +222,10 @@ Unitários e de integração com mocks de Neo4j e LLM, sem dependências externa
 | Agente de orçamento | `test_agente_orcamento.py` |
 | Deliberação de dimensão / consultas | `test_query_planning.py`, `test_query_builder.py` |
 | Analíticos e contexto | `test_analitico.py`, `test_priorizacao.py`, `test_sintetizador.py`, `test_contexto_orcamentario.py`, `test_data_crossing.py` |
-| Topologias | `test_orchestrator_star.py`, `test_hierarchical_tree.py`, `test_scalability_benchmark.py` |
+| Topologias | `test_orchestrator_star.py`, `test_hierarchical_tree.py`, `test_scalability_benchmark.py`, `test_subfuncao_activation.py` |
 | Verificação pós-síntese | `test_claim_verifier.py` |
-| LLM e métricas | `test_llm_client.py`, `test_quality_metrics_etapa6.py`, `test_ragas_metrics.py`, `test_guardrail_stats.py` |
+| LLM e métricas | `test_llm_client.py`, `test_quality_metrics_etapa6.py`, `test_overhead_definition.py`, `test_ragas_metrics.py`, `test_guardrail_stats.py` |
+| ETL e banco | `test_orcamento_loader_dispatch.py`, `test_neo4j_client_schema.py` |
 | API e streaming | `test_dispatch_analysis.py`, `test_chat_websocket.py`, `test_websocket.py`, `test_websocket_ragas.py`, `test_streaming_adapter.py` |
 
 ### Frontend
@@ -237,7 +242,7 @@ project-skopos/
 ├── docker-compose.yml               # Neo4j + backend + frontend
 ├── README.md
 ├── Dados/                           # Dados de entrada do ETL (montados em /Dados no container)
-│   ├── orcamento/{2015-2019,2020-2022,2023-2025}/   # CSVs da LAI (empenhos, previsto × realizado)
+│   ├── orcamento/{2015-2019,2020-2022,2023-2025}/   # CSVs da LAI (empenhos; previsto × realizado não é carregado)
 │   └── Sorocaba_DATASUS_2015-2025/                  # xlsx do TabNet por sistema
 ├── docs/
 │   ├── 01-VISAO-GERAL.md            # Este arquivo
@@ -252,7 +257,7 @@ project-skopos/
 │   ├── Dockerfile                   # python:3.11-slim
 │   ├── entrypoint.sh                # Aguarda Neo4j → ETL → uvicorn
 │   ├── requirements.txt
-│   ├── main.py                      # App FastAPI, CORS, routers, logging
+│   ├── main.py                      # App FastAPI, CORS, routers, logging, constraints no startup
 │   ├── conftest.py                  # sys.path para o pytest
 │   ├── run_etl.py                   # ETL completo fora do Docker
 │   ├── api/                         # routes, websocket, chat_websocket, chat_runner, dispatch, runners, state
@@ -269,7 +274,7 @@ project-skopos/
 │   │                                # claim_verifier, guardrail_stats, streaming_adapter
 │   ├── db/                          # neo4j_client, query_builder
 │   ├── etl/                         # orcamento_loader, saude_indicadores_loader
-│   ├── scripts/                     # check_embeddings (diagnóstico do RAGAS)
+│   ├── scripts/                     # check_embeddings, batch_eval, batch_report, analise_rodadas, conferencia_etl
 │   ├── data/                        # Montado em /app/data no container (sem arquivos versionados)
 │   └── tests/
 │

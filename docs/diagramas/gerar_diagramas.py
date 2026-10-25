@@ -384,10 +384,6 @@ DESPESA_ANUAL = [
     ("subfuncaoCodigo", I, True), ("ano", I, True), ("valorProcessado", F, False),
     ("valorProprio", F, False), ("valorFederal", F, False), ("valorEstadual", F, False), ELLIPSIS,
 ]
-ORCAMENTO_PROGRAMA = [
-    ("programa", S, True), ("acao", S, True), ("orgao", S, True), ("periodoOrigem", S, True),
-    ("valorPrevisto", F, False), ("valorRealizado", F, False), ELLIPSIS,
-]
 INDICADOR = [
     ("chave", S, True), ("sistema", S, False), ("subtipo", S, False), ("ano", I, False),
     ("valorTotal", F, False), ELLIPSIS,
@@ -434,7 +430,7 @@ def fig_visao_geral():
     y0 = 0.0
     col1 = ["Fornecedor", "FonteRecurso", "Subfuncao", "UnidadeOrcamentaria"]
     col3 = ["Acao", "ProgramaGoverno", "Aplicacao", "Natureza"]
-    w1 = col_width(col1 + ["OrcamentoPrograma"])
+    w1 = col_width(col1)
     w3 = col_width(col3)
     w2 = col_width(["Empenho", "DespesaAnual"])
     x1, x3 = gx + inner, gx + gw - inner - w3
@@ -447,8 +443,7 @@ def fig_visao_geral():
     aplicacao = Entity("Aplicacao", width=w3).at(x3, programa.bottom + 10)
     natureza = Entity("Natureza", width=w3).at(x3, aplicacao.bottom + 10)
     despesa = Entity("DespesaAnual", width=w2).at(x2, (aplicacao.y + natureza.bottom) / 2 - BH / 2)
-    orc_prog = Entity("OrcamentoPrograma", width=w1).at(x1, max(natureza.y, b1[-1].bottom + 4))
-    g1_h = max(natureza.bottom, orc_prog.bottom) + 5 - y0
+    g1_h = max(natureza.bottom, b1[-1].bottom) + 5 - y0
     group(y0, g1_h, "Orçamento (LAI)")
     for b in b1:
         straight(c, empenho, b)
@@ -461,7 +456,7 @@ def fig_visao_geral():
     lx = despesa.x - 11    # laço VARIACAO_ANUAL
     c.line([(despesa.x, despesa.y + 4), (lx, despesa.y + 4), (lx, despesa.bottom - 4),
             (despesa.x, despesa.bottom - 4)])
-    for e in b1 + [empenho, acao, programa, aplicacao, natureza, despesa, orc_prog]:
+    for e in b1 + [empenho, acao, programa, aplicacao, natureza, despesa]:
         e.draw(c)
 
     # --- Saúde ---
@@ -563,12 +558,6 @@ def fig_orcamento_agregados():
     return c
 
 
-def fig_orcamento_previsto_realizado():
-    c = Canvas()
-    Entity("OrcamentoPrograma", ORCAMENTO_PROGRAMA).at(0, 0).draw(c)
-    return c
-
-
 def fig_saude_dimensoes():
     return rel_figure(
         Entity("IndicadorSaude", INDICADOR),
@@ -623,7 +612,8 @@ FIGURES = {
     "02-orcamento-empenho-classificacao": (fig_orcamento_empenho_classificacao, MAX_H_DETALHE),
     "03-orcamento-empenho-acao": (fig_orcamento_empenho_acao, MAX_H_DETALHE),
     "04-orcamento-agregados": (fig_orcamento_agregados, MAX_H_DETALHE),
-    "05-orcamento-previsto-realizado": (fig_orcamento_previsto_realizado, MAX_H_DETALHE),
+    # 05 (OrcamentoPrograma) saiu: o ETL não carrega mais o CSV previsto × realizado.
+    # Os demais números ficam como estão para não quebrar referências já feitas.
     "06-saude-dimensoes": (fig_saude_dimensoes, MAX_H_DETALHE),
     "07a-saude-cnes": (fig_saude_cnes_a, MAX_H_DETALHE),
     "07b-saude-cnes": (fig_saude_cnes_b, MAX_H_DETALHE),

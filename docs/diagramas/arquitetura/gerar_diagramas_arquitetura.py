@@ -249,7 +249,7 @@ def fig_arvore_supervisor_analitico():
         n.w, n.h = w, h
         n.at(inner + k * (w + GX), fb_y + FRAME_TITLE)
     fb_h = FRAME_TITLE + h + 8
-    frame(c, 0, fb_y, fw, fb_h, "Fora da medição (subtraído)")
+    frame(c, 0, fb_y, fw, fb_h, "Fora do wall-clock")
     h_link(c, dentro[0], dentro[1])
     h_link(c, dentro[1], dentro[2])
     v_link(c, dentro[2], cap)
@@ -285,11 +285,12 @@ def fig_arvore_medicao():
     y_leg = 12.0
     lx = legend_item(c, 0, y_leg, "agente", "agentes-folha (somados)")
     lx = legend_item(c, lx, y_leg, "coord", "só exibidos")
-    legend_item(c, lx, y_leg, "excl", "subtraídos")
+    legend_item(c, lx, y_leg, "excl", "fora da medição")
     y_br = y_leg + 30
     t_cap = 92.0
+    # o relógio do coordenador fecha em _coala_leaf_end_time, o mesmo ponto da estrela
     bracket(c, x0, x0 + t_cap * unit, y_br, "wall-clock da árvore")
-    bracket(c, x0 + t_cap * unit, x0 + end * unit, y_br, "subtraído")
+    bracket(c, x0 + t_cap * unit, x0 + end * unit, y_br, "fora do wall-clock")
     y0 = y_br + 10
     ys = _gantt(c, rows, x_lab, x0, unit, row_h, y0)
     xb = x0 + t_cap * unit

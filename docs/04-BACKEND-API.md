@@ -16,7 +16,7 @@
 
 ## Visão Geral do Backend
 
-`backend/main.py` cria o app FastAPI, configura CORS e logging (nível via `LOG_LEVEL`) e registra três routers:
+`backend/main.py` cria o app FastAPI, configura CORS e logging (nível via `LOG_LEVEL`) e registra três routers. No startup, um `lifespan` chama `Neo4jClient.ensure_schema()`, que cria as constraints de unicidade de `Analise.id` e `MetricaExecucao.id` (`CREATE CONSTRAINT ... IF NOT EXISTS`). Sem elas, cada `MERGE` varre todos os nós do rótulo, e as duas topologias gravando em paralelo podem duplicar o nó. É melhor esforço: com o Neo4j fora do ar, a API sobe mesmo assim, e a falha de uma constraint não impede a outra.
 
 | Router | Arquivo | Papel |
 |--------|---------|-------|
@@ -258,14 +258,16 @@ mc.persist(neo4j_client, analysis_id, "star")   # MetricaExecucao + (:Analise)-[
 
 Também funciona como context manager (`with MetricsCollector(...) as mc:`).
 
+`Neo4jClient.save_metrica` faz o `MATCH` da `Analise` antes do `MERGE` da métrica: uma execução fora de `dispatch_analysis`, sem nó `Analise`, não grava nada, em vez de deixar uma `MetricaExecucao` órfã.
+
 ### Wall-clock: o que fica de fora
 
-Sintetizador, priorização e verificação rodam **depois** de `capturar_wallclock` e envolvem LLM. Por isso ficam fora de `workers_time_ms` e do `totalExecutionTimeMs`: a latência da API não reflete a eficiência da arquitetura.
+Sintetizador, priorização e verificação rodam **depois** de `capturar_wallclock` e envolvem LLM. Por isso ficam fora de `workers_time_ms` e do `totalExecutionTimeMs`: a latência da API não reflete a eficiência da arquitetura. A gravação das métricas no Neo4j também fica de fora. As duas topologias fecham o relógio no mesmo ponto, e o overhead é `wall-clock − Σ agentes-folha` nas duas.
 
 | Topologia | Estratégia |
 |-----------|-----------|
 | **Estrela** | `_orch_end` é capturado em `capturar_wallclock`, antes da priorização. O wall-clock mede só o trecho determinístico |
-| **Árvore** | O coordenador mede até o fim e **subtrai** os tempos de `sintetizador`, `priorizacao` e `verificacao` dos collectors do `SupervisorAnalitico`. O tempo do supervisor analítico termina em `_coala_leaf_end_time` |
+| **Árvore** | O relógio do coordenador fecha em `_coala_leaf_end_time`, gravado pelo `capturar_wallclock` do `SupervisorAnalitico`. Se o analítico não chegar a gravá-lo, o fallback é a entrada de `persistir_metricas` |
 
 Detalhes em [arquitetura/arquitetura-estrela.md](arquitetura/arquitetura-estrela.md#9-persistir_metricas) e [arquitetura/arquitetura-arvore.md](arquitetura/arquitetura-arvore.md#contabilização-de-métricas-e-overhead).
 
@@ -296,7 +298,7 @@ adapter.stream_tokens(token_generator) # tokens do LLM; retorna o texto completo
 
 Métricas process-wide (fora do payload por análise): taxa de rejeição do guardrail (`core/guardrail_stats.py`) e taxa de acerto do cache de planejamento (inativa).
 
-Fórmulas, código, justificativa acadêmica de cada métrica (D5–D26), configuração do juiz RAGAS (`RAGAS_PROVIDER`, `RAGAS_MODEL`, `RAGAS_EMBEDDING_MODEL`, `RAGAS_EMBEDDING_FALLBACKS`, diagnóstico com `python -m scripts.check_embeddings`) e ressalvas estatísticas: **[arquitetura/metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md)**.
+Fórmulas, código, justificativa acadêmica de cada métrica (D6–D27), configuração do juiz RAGAS (`RAGAS_PROVIDER`, `RAGAS_MODEL`, `RAGAS_EMBEDDING_MODEL`, `RAGAS_EMBEDDING_FALLBACKS`, diagnóstico com `python -m scripts.check_embeddings`) e ressalvas estatísticas: **[arquitetura/metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md)**.
 
 ---
 

@@ -49,7 +49,7 @@ project-skopos/
 │   ├── core/                 # LLM, métricas de execução e qualidade, RAGAS, verificação, streaming
 │   ├── db/                   # Cliente Neo4j + construção segura de Cypher
 │   ├── etl/                  # Loaders de orçamento (LAI) e indicadores de saúde (TabNet)
-│   ├── scripts/              # Diagnóstico (check_embeddings)
+│   ├── scripts/              # Diagnóstico (check_embeddings) e avaliação (batch_eval, analise_rodadas, conferencia_etl…)
 │   └── tests/                # pytest
 ├── frontend/                 # React 18 + TypeScript + Vite
 │   └── src/
@@ -121,7 +121,7 @@ Todas vivem num único `.env` na raiz do repo (`cp .env.example .env`) — não 
 
 ```
 backend/
-├── main.py                       # Entry point — cria app, CORS, registra routers, logging
+├── main.py                       # Entry point — cria app, CORS, registra routers, logging, constraints no startup
 ├── run_etl.py                    # ETL completo fora do Docker
 ├── entrypoint.sh                 # Container: aguarda Neo4j → ETL → uvicorn
 ├── conftest.py                   # sys.path para o pytest
@@ -158,7 +158,11 @@ backend/
 │   ├── orcamento_loader.py       # Dados/orcamento/ → Empenho, DespesaAnual, VARIACAO_ANUAL, ...
 │   └── saude_indicadores_loader.py # Dados/Sorocaba_DATASUS_2015-2025/ → IndicadorSaude + dimensões
 ├── scripts/
-│   └── check_embeddings.py       # Diagnóstico de acesso aos embeddings do RAGAS
+│   ├── check_embeddings.py       # Diagnóstico de acesso aos embeddings do RAGAS
+│   ├── batch_eval.py             # Bateria de cenários: fluxo do chat + métricas + RAGAS + veredito, fora da UI
+│   ├── batch_report.py           # XLSX com tabelas e gráficos a partir do .jsonl do batch_eval
+│   ├── analise_rodadas.py        # Consolida N rodadas: estatísticas, tabelas e figuras do capítulo de resultados
+│   └── conferencia_etl.py        # Confere o ETL contra as planilhas de origem, com leitor independente
 ├── data/                         # Montado como volume no container (sem arquivos versionados)
 └── tests/                        # Testes pytest (unitários + integração com mocks)
 ```

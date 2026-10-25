@@ -95,36 +95,41 @@ def propose_actions(self) -> list[dict]:
 
 O mecanismo de cada ação é o mesmo da estrela (ver [arquitetura-estrela.md](arquitetura-estrela.md#o-pipeline-passo-a-passo)). As particularidades desta topologia:
 
-- **`capturar_wallclock`** grava `self._coala_leaf_end_time`. O coordenador usa esse marco como fim da medição do `SupervisorAnalitico`, sem incluir priorização, síntese e verificação.
+- **`capturar_wallclock`** grava `self._coala_leaf_end_time`. Esse marco fecha a medição do `SupervisorAnalitico` e também o relógio do coordenador inteiro, o mesmo ponto em que a estrela fecha o dela. Priorização, síntese e verificação ficam fora.
 - **`priorizar_achados`** recebe o `intent_summary` como parâmetro de `run()`, repassado pelo coordenador. O dado atravessa a árvore de cima para baixo, sem canal entre supervisores.
 
 ## Contabilização de métricas e overhead
 
 É a parte que mais difere da estrela: existe uma camada real de supervisores, cujo custo precisa ser separado do trabalho de fato.
 
-![Linha do tempo da medição na árvore: supervisores, agentes-folha e tempo subtraído](../diagramas/arquitetura/05-arvore-medicao.png)
+![Linha do tempo da medição na árvore: supervisores, agentes-folha e o que fica fora do wall-clock](../diagramas/arquitetura/05-arvore-medicao.png)
 
-Cada barra branca de supervisor engloba as barras cinza-escuro dos seus agentes-folha. Só os agentes-folha somam `workers_time_ms`; os supervisores aparecem no breakdown, mas não são somados. Priorização, síntese e verificação, que rodam depois de `_coala_leaf_end_time`, são subtraídas do tempo bruto do coordenador. As durações da figura são ilustrativas.
+Cada barra branca de supervisor engloba as barras cinza-escuro dos seus agentes-folha. Só os agentes-folha somam `workers_time_ms`; os supervisores aparecem no breakdown, mas não são somados. O wall-clock termina em `_coala_leaf_end_time`, e priorização, síntese e verificação rodam depois, fora da medição. As durações da figura são ilustrativas.
+
+A definição de overhead é a mesma da estrela:
 
 ```python
 overhead = wall_clock - soma dos agentes FOLHA (nível 2)
 ```
 
-- Supervisores aparecem no breakdown **para exibição**, mas **não** são somados em `workers_time_ms`. O tempo de um supervisor já engloba o dos subordinados, e somar os dois contaria o mesmo tempo duas vezes.
-- `overhead_ms` (no breakdown como `coordenador_geral`) captura o tempo dos supervisores fora dos subordinados e a instanciação. É a métrica que quantifica o custo de ter uma camada extra de coordenação.
-- `sintetizador`, `priorizacao` e `verificacao` ficam fora de `workers_time_ms` e são **subtraídos** do wall-clock. A subtração é explícita porque o coordenador só captura o próprio `time.time()` depois que tudo já rodou:
+- Supervisores aparecem no breakdown **para exibição**, mas **não** são somados em `workers_time_ms`, e as métricas E1/E2 também os ignoram. O tempo de um supervisor já engloba o dos subordinados, e somar os dois contaria o mesmo intervalo duas vezes.
+- `overhead_ms` (no breakdown como `coordenador_geral`) captura o tempo dos supervisores fora dos subordinados, incluindo o cruzamento e a detecção de lacunas feitos pelo `SupervisorAnalitico`, e a instanciação. É a métrica que quantifica o custo de ter uma camada extra de coordenação.
+- O relógio do coordenador fecha no **fim da parte determinística** do `SupervisorAnalitico`, como a estrela fecha em `_orch_end`. Ficam de fora priorização, síntese e verificação, que usam LLM, e a própria gravação das métricas no Neo4j:
 
 ```python
 # CoordenadorGeral._act_persistir_metricas
-for agent_mc in sup_analitico._collectors:
-    m = agent_mc.collect()
-    if m["agentType"] == "sintetizador":   sint_time_ms  = m["executionTimeMs"]
-    elif m["agentType"] == "priorizacao":  prior_time_ms = m["executionTimeMs"]
-    elif m["agentType"] == "verificacao":  verif_time_ms = m["executionTimeMs"]
-
-wall_clock_ms = max(0, wall_clock_ms_raw - sint_time_ms - prior_time_ms - verif_time_ms)
+persist_entry = time.time()              # fallback, se o analítico não fechou o relógio
+...
+leaf_end = getattr(sup_analitico, "_coala_leaf_end_time", None)
+has_leaf_end = isinstance(leaf_end, (int, float)) and leaf_end >= coord_start
+coord_end = leaf_end if has_leaf_end else persist_entry
+wall_clock_ms = max(0, (coord_end - coord_start) * 1000)
 overhead_ms   = max(0, wall_clock_ms - workers_time_ms)
 ```
+
+Se o `SupervisorAnalitico` falhar antes de `capturar_wallclock`, o fallback é a entrada de `persistir_metricas`, de modo que a gravação nunca entra no relógio.
+
+> **Mudança em `61950f6`.** Antes, o coordenador media até o fim de `persistir_metricas` e depois subtraía os tempos de síntese, priorização e verificação. A gravação das métricas no Neo4j continuava dentro do relógio e aparecia como overhead só da árvore. Wall-clock e overhead da árvore medidos antes desse commit não são comparáveis com os atuais (ver D27 em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#justificativa-acadêmica-por-métrica)).
 
 ## Degradação graciosa
 
