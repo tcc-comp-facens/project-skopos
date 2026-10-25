@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="220pt" viewBox="0 0 453 220" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="220" fill="#FFFFFF"/>
+<polygon points="66.35,60.00 63.15,54.00 69.55,54.00" fill="#000000" stroke="none"/>
+<polyline points="66.35,38.00 66.35,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="179.90,73.00 173.90,76.20 173.90,69.80" fill="#000000" stroke="none"/>
+<polyline points="132.70,73.00 173.90,73.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="156.30" y="69.00" text-anchor="middle" fill="#000000">sim</text>
+<polygon points="66.35,120.00 63.15,114.00 69.55,114.00" fill="#000000" stroke="none"/>
+<polyline points="66.35,98.00 66.35,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="60.35" y="113.30" text-anchor="end" fill="#000000">não</text>
+<polygon points="66.35,180.00 63.15,174.00 69.55,174.00" fill="#000000" stroke="none"/>
+<polyline points="66.35,158.00 66.35,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="60.35" y="173.30" text-anchor="end" fill="#000000">não</text>
+<polyline points="132.70,139.00 147.70,139.00 147.70,87.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="132.70,87.00 138.70,83.80 138.70,90.20" fill="#000000" stroke="none"/>
+<polyline points="147.70,87.00 138.70,87.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="151.70" y="113.30" text-anchor="start" fill="#000000">sim</text>
+<polygon points="337.78,79.00 331.78,82.20 331.78,75.80" fill="#000000" stroke="none"/>
+<polyline points="290.58,79.00 331.78,79.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="394.14,38.00 397.34,44.00 390.94,44.00" fill="#000000" stroke="none"/>
+<polyline points="394.14,60.00 394.14,44.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="388.14" y="53.30" text-anchor="end" fill="#000000">sim</text>
+<polygon points="394.14,120.00 390.94,114.00 397.34,114.00" fill="#000000" stroke="none"/>
+<polyline points="394.14,98.00 394.14,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="388.14" y="113.30" text-anchor="end" fill="#000000">não</text>
+<polygon points="290.58,139.00 296.58,135.80 296.58,142.20" fill="#000000" stroke="none"/>
+<polyline points="337.78,139.00 296.58,139.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="314.18" y="135.00" text-anchor="middle" fill="#000000">não</text>
+<polygon points="394.14,180.00 390.94,174.00 397.34,174.00" fill="#000000" stroke="none"/>
+<polyline points="394.14,158.00 394.14,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="388.14" y="173.30" text-anchor="end" fill="#000000">sim</text>
+<rect x="0.00" y="0.00" width="132.70" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="66.35" y="15.80" text-anchor="middle" fill="#000000">Bolha "Analisando</text>
+<text x="66.35" y="30.80" text-anchor="middle" fill="#000000">os dados…"</text>
+<rect x="0.00" y="60.00" width="132.70" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="66.35" y="75.80" text-anchor="middle" fill="#000000">Alguma arquitetura</text>
+<text x="66.35" y="90.80" text-anchor="middle" fill="#000000">já tem texto?</text>
+<rect x="0.00" y="120.00" width="132.70" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="66.35" y="135.80" text-anchor="middle" fill="#000000">Alguma ainda</text>
+<text x="66.35" y="150.80" text-anchor="middle" fill="#000000">está rodando?</text>
+<rect x="0.00" y="180.00" width="132.70" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="66.35" y="195.80" text-anchor="middle" fill="#000000">formatRoundSummary</text>
+<text x="66.35" y="210.80" text-anchor="middle" fill="#000000">(nenhum texto)</text>
+<rect x="179.90" y="60.00" width="110.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="235.24" y="75.80" text-anchor="middle" fill="#000000">Acompanha a</text>
+<text x="235.24" y="90.80" text-anchor="middle" fill="#000000">primeira com texto</text>
+<rect x="179.90" y="120.00" width="110.69" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="235.24" y="135.80" text-anchor="middle" fill="#000000">Finaliza</text>
+<text x="235.24" y="150.80" text-anchor="middle" fill="#000000">sem badge</text>
+<rect x="337.78" y="0.00" width="112.72" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="394.14" y="15.80" text-anchor="middle" fill="#000000">Atualiza a bolha</text>
+<text x="394.14" y="30.80" text-anchor="middle" fill="#000000">chunk a chunk</text>
+<rect x="337.78" y="60.00" width="112.72" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="394.14" y="75.80" text-anchor="middle" fill="#000000">Ela ainda</text>
+<text x="394.14" y="90.80" text-anchor="middle" fill="#000000">transmite?</text>
+<rect x="337.78" y="120.00" width="112.72" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="394.14" y="135.80" text-anchor="middle" fill="#000000">Relatório já aponta</text>
+<text x="394.14" y="150.80" text-anchor="middle" fill="#000000">a mesma?</text>
+<rect x="337.78" y="180.00" width="112.72" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="394.14" y="195.80" text-anchor="middle" fill="#000000">Finaliza</text>
+<text x="394.14" y="210.80" text-anchor="middle" fill="#000000">com badge</text>
+</svg>

@@ -239,7 +239,7 @@ Documentação detalhada em [`docs/`](docs/):
 | [02-AGENTES.md](docs/02-AGENTES.md) | Modelo CoALA, agentes, deliberação, topologias, regras de negócio |
 | [03-DADOS-ETL.md](docs/03-DADOS-ETL.md) | Fontes (LAI, DATASUS/TabNet), ETL, modelo Neo4j, limitações |
 | [04-BACKEND-API.md](docs/04-BACKEND-API.md) | API REST, WebSockets, chat, LLM, métricas, relatório, erros |
-| [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, chat, rodadas, hooks WS, tipos, acessibilidade |
+| [05-FRONTEND.md](docs/05-FRONTEND.md) | Componentes, chat, rodadas, hooks WS, tipos, acessibilidade, diagramas de fluxo de dados |
 
 Aprofundamento em [`docs/arquitetura/`](docs/arquitetura/):
 

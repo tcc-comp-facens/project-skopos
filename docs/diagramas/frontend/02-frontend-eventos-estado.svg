@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="172pt" viewBox="0 0 453 172" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="172" fill="#FFFFFF"/>
+<text x="56.03" y="11.30" text-anchor="middle" fill="#000000" font-weight="bold">Evento</text>
+<text x="214.26" y="11.30" text-anchor="middle" fill="#000000" font-weight="bold">Campo do estado</text>
+<text x="383.48" y="11.30" text-anchor="middle" fill="#000000" font-weight="bold">Componente</text>
+<polygon points="139.90,52.00 133.90,55.20 133.90,48.80" fill="#000000" stroke="none"/>
+<polyline points="112.06,52.00 133.90,52.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="316.46,52.00 310.46,55.20 310.46,48.80" fill="#000000" stroke="none"/>
+<polyline points="288.61,52.00 310.46,52.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="139.90,136.00 133.90,139.20 133.90,132.80" fill="#000000" stroke="none"/>
+<polyline points="112.06,136.00 133.90,136.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="316.46,136.00 310.46,139.20 310.46,132.80" fill="#000000" stroke="none"/>
+<polyline points="288.61,136.00 310.46,136.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="18.00" width="112.06" height="68.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="56.03" y="41.30" text-anchor="middle" fill="#000000" font-weight="bold">star · hierarchical</text>
+<text x="56.03" y="56.30" text-anchor="middle" fill="#000000">chunk, done, error</text>
+<text x="56.03" y="71.30" text-anchor="middle" fill="#000000">metric, agent_data</text>
+<rect x="0.00" y="102.00" width="112.06" height="68.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="56.03" y="117.80" text-anchor="middle" fill="#000000" font-weight="bold">both</text>
+<text x="56.03" y="132.80" text-anchor="middle" fill="#000000">quality_metrics</text>
+<text x="56.03" y="147.80" text-anchor="middle" fill="#000000">ragas, ragas_done</text>
+<text x="56.03" y="162.80" text-anchor="middle" fill="#000000">chunk, done</text>
+<rect x="139.90" y="18.00" width="148.71" height="68.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="214.26" y="33.80" text-anchor="middle" fill="#000000">starText · hierText</text>
+<text x="214.26" y="48.80" text-anchor="middle" fill="#000000">…Loading · …Error</text>
+<text x="214.26" y="63.80" text-anchor="middle" fill="#000000">…Benchmarks</text>
+<text x="214.26" y="78.80" text-anchor="middle" fill="#000000">…AgentData</text>
+<rect x="139.90" y="102.00" width="148.71" height="68.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="214.26" y="117.80" text-anchor="middle" fill="#000000">qualityMetrics</text>
+<text x="214.26" y="132.80" text-anchor="middle" fill="#000000">ragasText · ragasLoading</text>
+<text x="214.26" y="147.80" text-anchor="middle" fill="#000000">comparativeReport</text>
+<text x="214.26" y="162.80" text-anchor="middle" fill="#000000">comparativeLoading</text>
+<rect x="316.46" y="18.00" width="134.04" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="383.48" y="33.80" text-anchor="middle" fill="#000000">ArchitecturePanel</text>
+<text x="383.48" y="48.80" text-anchor="middle" fill="#000000">AgentDataCard</text>
+<text x="383.48" y="63.80" text-anchor="middle" fill="#000000">RoundCard (tempos)</text>
+<text x="383.48" y="78.80" text-anchor="middle" fill="#000000">bolha do chat</text>
+<rect x="316.46" y="102.00" width="134.04" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="383.48" y="117.80" text-anchor="middle" fill="#000000">QualityMetricsSection</text>
+<text x="383.48" y="132.80" text-anchor="middle" fill="#000000">ComparativeSection</text>
+<text x="383.48" y="147.80" text-anchor="middle" fill="#000000">RoundCard (vencedor)</text>
+<text x="383.48" y="162.80" text-anchor="middle" fill="#000000">bolha (badge)</text>
+</svg>

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="451pt" height="176pt" viewBox="0 0 451 176" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="451" height="176" fill="#FFFFFF"/>
+<rect x="0.00" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="24.00" y="12.00" text-anchor="start" fill="#000000">ao vivo</text>
+<rect x="80.02" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="104.02" y="12.00" text-anchor="start" fill="#000000">espelhado no snapshot</text>
+<rect x="246.10" y="3.00" width="18.00" height="10.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="246.10,3.00 264.10,3.00 264.10,13.00 246.10,13.00 246.10,3.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="270.10" y="12.00" text-anchor="start" fill="#000000">congelado</text>
+<polyline points="114.06,47.00 114.06,42.00 276.26,42.00 276.26,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="195.16" y="38.00" text-anchor="middle" fill="#000000">Rodada 1</text>
+<polyline points="286.30,47.00 286.30,42.00 448.50,42.00 448.50,47.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="367.40" y="38.00" text-anchor="middle" fill="#000000">Rodada 2</text>
+<text x="0.00" y="67.30" text-anchor="start" fill="#000000">/ws/{analysisId}</text>
+<rect x="114.06" y="55.00" width="162.20" height="16.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="195.16" y="67.30" text-anchor="middle" fill="#000000">conexão 1</text>
+<rect x="286.30" y="55.00" width="162.20" height="16.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="367.40" y="67.30" text-anchor="middle" fill="#000000">conexão 2</text>
+<text x="0.00" y="89.30" text-anchor="start" fill="#000000">useWebSocket</text>
+<rect x="114.06" y="77.00" width="162.20" height="16.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="195.16" y="89.30" text-anchor="middle" fill="#000000">estado da rodada 1</text>
+<rect x="286.30" y="77.00" width="162.20" height="16.00" rx="0.0" fill="#9E9E9E" stroke="#000000" stroke-width="1.0"/>
+<text x="367.40" y="89.30" text-anchor="middle" fill="#000000">estado da rodada 2</text>
+<text x="0.00" y="111.30" text-anchor="start" fill="#000000">rounds[0].snapshot</text>
+<rect x="114.06" y="99.00" width="162.20" height="16.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="195.16" y="111.30" text-anchor="middle" fill="#000000">espelhado</text>
+<rect x="286.30" y="99.00" width="162.20" height="16.00" rx="0.0" fill="#E3E3E3" stroke="none" stroke-width="0.75"/>
+<polyline points="286.30,99.00 448.50,99.00 448.50,115.00 286.30,115.00 286.30,99.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="367.40" y="111.30" text-anchor="middle" fill="#000000">congelado</text>
+<text x="0.00" y="133.30" text-anchor="start" fill="#000000">rounds[1].snapshot</text>
+<rect x="286.30" y="121.00" width="162.20" height="16.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="367.40" y="133.30" text-anchor="middle" fill="#000000">espelhado</text>
+<polyline points="281.28,42.00 281.28,144.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="281.28" y="156.59" text-anchor="middle" fill="#000000">nova pergunta: analysisId muda</text>
+<text x="281.28" y="171.59" text-anchor="middle" fill="#000000">reset síncrono · close(1000)</text>
+</svg>

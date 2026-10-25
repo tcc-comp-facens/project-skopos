@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="196pt" viewBox="0 0 453 196" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="196" fill="#FFFFFF"/>
+<polygon points="51.02,38.00 54.22,44.00 47.82,44.00" fill="#000000" stroke="none"/>
+<polyline points="51.02,78.00 51.02,44.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="67.02,78.00 63.82,72.00 70.22,72.00" fill="#000000" stroke="none"/>
+<polyline points="67.02,38.00 67.02,72.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="73.02" y="54.80" text-anchor="start" fill="#000000">↑ user_message</text>
+<text x="73.02" y="69.80" text-anchor="start" fill="#000000">↓ analysis_started</text>
+<polygon points="178.22,97.00 172.22,100.20 172.22,93.80" fill="#000000" stroke="none"/>
+<polyline points="118.04,97.00 172.22,97.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="148.13" y="93.00" text-anchor="middle" fill="#000000">analysisId</text>
+<polygon points="348.45,97.00 342.45,100.20 342.45,93.80" fill="#000000" stroke="none"/>
+<polyline points="288.27,97.00 342.45,97.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="399.48,78.00 396.28,72.00 402.68,72.00" fill="#000000" stroke="none"/>
+<polyline points="399.48,38.00 399.48,72.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="393.48" y="62.30" text-anchor="end" fill="#000000">eventos</text>
+<polygon points="399.48,138.00 396.28,132.00 402.68,132.00" fill="#000000" stroke="none"/>
+<polyline points="399.48,116.00 399.48,132.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="288.27,157.00 294.27,153.80 294.27,160.20" fill="#000000" stroke="none"/>
+<polyline points="348.45,157.00 294.27,157.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="318.36" y="153.00" text-anchor="middle" fill="#000000">espelha</text>
+<polyline points="399.48,176.00 399.48,194.00 59.02,194.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="59.02,116.00 62.22,122.00 55.82,122.00" fill="#000000" stroke="none"/>
+<polyline points="59.02,194.00 59.02,122.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="229.25" y="190.00" text-anchor="middle" fill="#000000">activeRoundWs</text>
+<rect x="0.00" y="0.00" width="118.04" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="59.02" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">/ws/chat</text>
+<text x="59.02" y="30.80" text-anchor="middle" fill="#000000">intenção</text>
+<rect x="348.45" y="0.00" width="102.05" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="399.48" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">/ws/{analysisId}</text>
+<text x="399.48" y="30.80" text-anchor="middle" fill="#000000">resultados</text>
+<rect x="0.00" y="78.00" width="118.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="59.02" y="93.80" text-anchor="middle" fill="#000000" font-weight="bold">ChatInterface</text>
+<text x="59.02" y="108.80" text-anchor="middle" fill="#000000">useChatWebSocket</text>
+<rect x="178.22" y="78.00" width="110.05" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="233.25" y="93.80" text-anchor="middle" fill="#000000" font-weight="bold">App</text>
+<text x="233.25" y="108.80" text-anchor="middle" fill="#000000">cria a rodada</text>
+<rect x="348.45" y="78.00" width="102.05" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="399.48" y="93.80" text-anchor="middle" fill="#000000" font-weight="bold">useWebSocket</text>
+<text x="399.48" y="108.80" text-anchor="middle" fill="#000000">(analysisId)</text>
+<rect x="348.45" y="138.00" width="102.05" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="399.48" y="153.80" text-anchor="middle" fill="#000000" font-weight="bold">Estado ao vivo</text>
+<text x="399.48" y="168.80" text-anchor="middle" fill="#000000">da rodada ativa</text>
+<rect x="178.22" y="138.00" width="110.05" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="233.25" y="153.80" text-anchor="middle" fill="#000000" font-weight="bold">Aba Agentes</text>
+<text x="233.25" y="168.80" text-anchor="middle" fill="#000000">rounds[i].snapshot</text>
+</svg>
