@@ -4,35 +4,19 @@
 
 **Arquivos:** `backend/api/chat_websocket.py`, `backend/api/chat_runner.py`, `backend/api/dispatch.py`, `backend/api/runners.py`, `backend/api/websocket.py`, `backend/core/quality_metrics.py`
 
+> **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/ciclo-metricas/`](../diagramas/ciclo-metricas/), em PNG (300 dpi) e SVG, até 16 × 9 cm, com texto em Arial 12 quando inseridas a 100%. Para regenerar: `python docs/diagramas/ciclo-metricas/gerar_diagramas_ciclo_metricas.py`.
+
 ## Visão geral
 
-```
- 1. Usuário digita mensagem no chat
-              │  WS /ws/chat/{session_id}
-              ▼
- 2. AgenteInterpretacaoIntencao.parse(texto)
-    ├── fora do escopo / conversa sem análise → resposta direta, encerra o turno
-    └── pergunta de dados → AnalysisIntent (params + intent_summary)
-              │
-              ▼
- 3. dispatch_analysis()
-    ├── persiste o nó Analise no Neo4j
-    └── dispara 2 threads paralelas
-              │
-       ┌──────┴──────┐
-       ▼             ▼
- 4. run_star()   run_hierarchical()
-    (thread A)    (thread B)
-       │             │
-       └──────┬──────┘
-              │  ambas escrevem na mesma ws_queue
-              ▼
- 5. WS /ws/{analysisId} — streaming
-    ├── eventos chunk/metric/agent_data/error/done de cada arquitetura
-    ├── quando as duas terminam: compute_all_quality_metrics()   → evento quality_metrics
-    ├── avaliação RAGAS (core/ragas_metrics.evaluate_architecture) → eventos ragas/ragas_done
-    └── generate_comparative_report() (streaming)                 → eventos chunk/done ("both")
-```
+![Fluxo de ponta a ponta: chat, intenção, dispatch, duas threads, fila compartilhada, métricas, RAGAS e relatório](../diagramas/ciclo-metricas/01-ciclo-fluxo.png)
+
+As seções abaixo seguem a ordem da figura:
+
+1. O usuário envia a mensagem pelo chat (`/ws/chat/{session_id}`).
+2. `AgenteInterpretacaoIntencao.parse(texto)` decide: fora do escopo ou conversa sem análise recebem resposta direta e encerram o turno; uma pergunta de dados vira um `AnalysisIntent` (params + `intent_summary`).
+3. `dispatch_analysis()` persiste o nó `Analise` no Neo4j e dispara 2 threads paralelas.
+4. `run_star()` (thread A) e `run_hierarchical()` (thread B) escrevem na mesma `ws_queue`.
+5. `/ws/{analysisId}` faz o streaming dos eventos. Quando as duas arquiteturas terminam, calcula as métricas determinísticas (evento `quality_metrics`), roda a avaliação RAGAS (eventos `ragas`/`ragas_done`) e transmite o relatório comparativo (eventos `chunk`/`done` com `architecture: "both"`).
 
 Duas conexões WebSocket distintas cobrem o ciclo: `/ws/chat/{session_id}` (turno de conversa — 1 pergunta, 1 confirmação) e `/ws/{analysisId}` (streaming dos resultados da análise disparada). São desacopladas de propósito: o chat só inicia a análise e devolve o `analysisId`; quem efetivamente consome os eventos de progresso é o segundo WebSocket, aberto pelo frontend logo em seguida.
 
@@ -41,6 +25,15 @@ Duas conexões WebSocket distintas cobrem o ciclo: `/ws/chat/{session_id}` (turn
 `chat_websocket.py` recebe `{"type": "user_message", "payload": {"text"}}`, valida tamanho e uma rodada por vez por sessão, e delega a interpretação a `AgenteInterpretacaoIntencao.parse(texto)` — único ponto do sistema que decide se uma mensagem está dentro do escopo (dados de saúde/orçamento de Sorocaba) antes de qualquer outro processamento acontecer. A classificação tem 3 vias: fora do escopo (recusa), dentro do escopo mas sem necessidade de análise (saudação, "o que você faz?" — resposta direta) e pergunta de dados. Nas duas primeiras, o próprio LLM escreve a resposta e nenhuma análise é disparada. O mecanismo de classificação, extração de parâmetros e chamada ao LLM está detalhado em [agente-coala-e-llm.md](agente-coala-e-llm.md#exemplo-completo-de-ponta-a-ponta).
 
 Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_analysis()` chama `dispatch_analysis()`. O chat é hoje o **único** caminho de entrada: o endpoint REST de formulário (`POST /api/analysis`) foi removido em `f4838d2`.
+
+![Sequência de mensagens no WebSocket de chat](../diagramas/ciclo-metricas/02a-ciclo-ws-chat.png)
+
+O protocolo do turno tem poucas mensagens:
+
+- O servidor confirma o recebimento com `user_ack` antes de interpretar.
+- Sem análise (recusa ou conversa), a resposta do LLM chega em pedaços de ~80 caracteres (`system_chunk`) e fecha com `system_done`.
+- Com análise, o servidor envia primeiro `analysis_started` com o `analysisId` (é com ele que o frontend abre o segundo WebSocket) e depois o texto de confirmação, também em `system_chunk`/`system_done`.
+- Mensagem longa demais, uma segunda pergunta enquanto a anterior ainda roda ou uma falha no turno geram um evento `error`.
 
 ## 3. `dispatch_analysis()` — ponto de entrada compartilhado
 
@@ -72,6 +65,10 @@ O que acontece **dentro** de cada `.run()` é o pipeline específico de cada top
 
 `api/websocket.py` consome a `ws_queue` compartilhada e repassa cada evento (`chunk`, `metric`, `agent_data`, `done`, `error`) ao cliente em tempo real, contando quantas arquiteturas já enviaram `done` (encerra quando `done_count == 2`). Durante o streaming, captura de cada evento `metric` o `agentMetrics`/`totalExecutionTimeMs` de cada arquitetura — dados que alimentam a etapa seguinte.
 
+![Sequência de eventos no WebSocket de resultados](../diagramas/ciclo-metricas/02b-ciclo-ws-resultados.png)
+
+As threads não dependem do cliente: se a conexão cair antes do segundo `done` (recarga da página, o duplo `mount` do React StrictMode em desenvolvimento), a fila continua existindo e uma nova conexão retoma o consumo. Cada conexão recebe um número de geração (`active_ws_generation`); a mais nova assume a fila e a anterior para de ler. A fila só é descartada depois que as duas arquiteturas terminam.
+
 ### Cálculo de métricas de qualidade
 
 Assim que ambas terminam, com os resultados completos (`star_result`/`hier_result`) disponíveis:
@@ -88,7 +85,7 @@ Enviado ao cliente como um evento `quality_metrics`. Internamente calcula E1 (ov
 
 ### Avaliação RAGAS (sempre, antes do relatório)
 
-Roda em toda análise — não há toggle. Vem **antes** do relatório porque o veredito do relatório depende da fidelidade que ela mede. O servidor chama `evaluate_architecture()` uma vez para cada arquitetura (concorrentes, cada uma com seu `TokenBucket`) — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e relevância do contexto entregue ao sintetizador (`faithfulness`, `answer_relevancy` e `context_relevance`). O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` (o custo em `quality_metrics["cost"]["ragas"]`) e transmitido em chunks de 80 caracteres pelos eventos `ragas`/`ragas_done`. Sem a chave de `RAGAS_PROVIDER`, a avaliação devolve `available=false` com o motivo e o resto segue normalmente. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
+Roda em toda análise — não há toggle. Vem **antes** do relatório porque o veredito do relatório depende da fidelidade que ela mede. O servidor chama `evaluate_architecture()` uma vez para cada arquitetura (concorrentes, cada uma com seu `TokenBucket`) — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e relevância do contexto entregue ao sintetizador (`faithfulness`, `answer_relevancy` e `context_relevance`). O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. A pergunta avaliada (`user_input`) é o texto original do chat (`source_question`). O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` (o custo em `quality_metrics["cost"]["ragas"]`). Um evento `ragas` vazio marca o início da avaliação; o texto de resultado segue em chunks de 80 caracteres, também como `ragas`, e fecha com `ragas_done`. Sem a chave de `RAGAS_PROVIDER`, a avaliação devolve `available=false` com o motivo e o resto segue normalmente. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
 
 ### Relatório comparativo
 
@@ -96,13 +93,15 @@ Roda em toda análise — não há toggle. Vem **antes** do relatório porque o 
 
 ## Onde o LLM entra, em ordem cronológica de uma análise via chat
 
+![As seis etapas que usam LLM, por topologia, em ordem](../diagramas/ciclo-metricas/03-ciclo-llm.png)
+
 | # | Etapa | Componente | Obrigatório? |
 |---|-------|------------|---------------|
 | 1 | Classificação de escopo + extração de parâmetros | `AgenteInterpretacaoIntencao` | Sempre (é a única via de interpretação — sem fallback regex) |
 | 2 | Escolha da dimensão de consulta | Agentes de saúde com dimensões válidas e `AgenteOrcamentoSubfuncao` (`query_planning.arbitrar_dimensao`) | Só se `use_llm=True`; senão vence o score determinístico |
 | 3 | Escolha do ângulo de ênfase | `AgentePriorizacaoAnalitica` | Só se `use_llm=True` na análise |
 | 4 | Geração do texto de análise | `TextSynthesizer` | Só se `use_llm=True`; senão usa `generate_fallback()` determinístico |
-| 5 | Verificação pós-síntese | `core/claim_verifier.py` | Só se `use_self_check=True` (e `use_llm=True`) |
+| 5 | Verificação pós-síntese | `core/claim_verifier.py` | Só se `use_self_check=True` (e `use_llm=True`). O backend lê `useSelfCheck` do payload do chat, mas o frontend atual não envia esse campo, então pela interface essa etapa não roda |
 | 6 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (exige a chave de `RAGAS_PROVIDER`; sem ela reporta indisponível) |
 
 Pelo chat, `use_llm` é sempre `True`. A etapa 1 roda uma única vez por mensagem (antes de qualquer topologia começar) e a 6 uma vez por arquitetura, depois das duas terminarem; as etapas 2–5 rodam **dentro** de cada topologia — uma vez na estrela, outra na árvore — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="407pt" height="205pt" viewBox="0 0 407 205" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="407" height="205" fill="#FFFFFF"/>
+<polygon points="170.04,19.00 164.04,22.20 164.04,15.80" fill="#000000" stroke="none"/>
+<polyline points="110.04,19.00 164.04,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="140.04" y="15.00" text-anchor="middle" fill="#000000">sim</text>
+<polygon points="310.98,19.00 304.98,22.20 304.98,15.80" fill="#000000" stroke="none"/>
+<polyline points="250.98,19.00 304.98,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="280.98" y="15.00" text-anchor="middle" fill="#000000">sim</text>
+<polygon points="55.02,60.00 51.82,54.00 58.22,54.00" fill="#000000" stroke="none"/>
+<polyline points="55.02,38.00 55.02,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="49.02" y="53.30" text-anchor="end" fill="#000000">não</text>
+<polyline points="210.51,38.00 210.51,49.00 55.02,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="216.51" y="47.80" text-anchor="start" fill="#000000">não</text>
+<polygon points="310.98,79.00 304.98,82.20 304.98,75.80" fill="#000000" stroke="none"/>
+<polyline points="110.04,79.00 304.98,79.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="210.51" y="75.00" text-anchor="middle" fill="#000000">sim</text>
+<polygon points="55.02,120.00 51.82,114.00 58.22,114.00" fill="#000000" stroke="none"/>
+<polyline points="55.02,98.00 55.02,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="49.02" y="113.30" text-anchor="end" fill="#000000">não</text>
+<polygon points="310.98,139.00 304.98,142.20 304.98,135.80" fill="#000000" stroke="none"/>
+<polyline points="110.04,139.00 304.98,139.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="210.51" y="135.00" text-anchor="middle" fill="#000000">sim</text>
+<polygon points="55.02,180.00 51.82,174.00 58.22,174.00" fill="#000000" stroke="none"/>
+<polyline points="55.02,158.00 55.02,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="49.02" y="173.30" text-anchor="end" fill="#000000">não</text>
+<rect x="0.00" y="0.00" width="110.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="55.02" y="15.80" text-anchor="middle" fill="#000000">Fidelidade medida</text>
+<text x="55.02" y="30.80" text-anchor="middle" fill="#000000">nas duas?</text>
+<rect x="170.04" y="0.00" width="80.94" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="210.51" y="15.80" text-anchor="middle" fill="#000000">|Δ fidelidade|</text>
+<text x="210.51" y="30.80" text-anchor="middle" fill="#000000">≥ 0,05?</text>
+<rect x="310.98" y="0.00" width="93.36" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="357.66" y="15.80" text-anchor="middle" fill="#000000">Vence a maior</text>
+<text x="357.66" y="30.80" text-anchor="middle" fill="#000000">fidelidade</text>
+<rect x="0.00" y="60.00" width="110.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="55.02" y="75.80" text-anchor="middle" fill="#000000">Completude (Q3)</text>
+<text x="55.02" y="90.80" text-anchor="middle" fill="#000000">diferente?</text>
+<rect x="310.98" y="60.00" width="93.36" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="357.66" y="75.80" text-anchor="middle" fill="#000000">Vence a maior</text>
+<text x="357.66" y="90.80" text-anchor="middle" fill="#000000">completude</text>
+<rect x="0.00" y="120.00" width="110.04" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="55.02" y="135.80" text-anchor="middle" fill="#000000">Tempo total</text>
+<text x="55.02" y="150.80" text-anchor="middle" fill="#000000">diferente?</text>
+<rect x="310.98" y="120.00" width="93.36" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="357.66" y="135.80" text-anchor="middle" fill="#000000">Vence o menor</text>
+<text x="357.66" y="150.80" text-anchor="middle" fill="#000000">tempo</text>
+<rect x="0.00" y="180.00" width="110.04" height="23.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="55.02" y="195.80" text-anchor="middle" fill="#000000">Empate</text>
+</svg>

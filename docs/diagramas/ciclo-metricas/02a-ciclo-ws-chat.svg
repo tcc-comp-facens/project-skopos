@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="250pt" viewBox="0 0 453 250" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="250" fill="#FFFFFF"/>
+<polyline points="32.00,23.00 32.00,248.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="212.73,23.00 212.73,248.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="316.28,23.00 316.28,248.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polyline points="419.83,23.00 419.83,248.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<polygon points="212.73,41.00 206.73,44.20 206.73,37.80" fill="#000000" stroke="none"/>
+<polyline points="32.00,41.00 206.73,41.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="81.01" y="25.91" width="82.70" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="122.36" y="37.00" text-anchor="middle" fill="#000000">user_message</text>
+<polygon points="32.00,59.00 38.00,55.80 38.00,62.20" fill="#000000" stroke="none"/>
+<polyline points="212.73,59.00 38.00,59.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="96.02" y="43.91" width="52.68" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="122.36" y="55.00" text-anchor="middle" fill="#000000">user_ack</text>
+<polygon points="316.28,77.00 310.28,80.20 310.28,73.80" fill="#000000" stroke="none"/>
+<polyline points="212.73,77.00 310.28,77.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="230.49" y="61.91" width="68.02" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="264.50" y="73.00" text-anchor="middle" fill="#000000">parse(texto)</text>
+<polygon points="212.73,95.00 218.73,91.80 218.73,98.20" fill="#000000" stroke="none"/>
+<polyline points="316.28,95.00 218.73,95.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="237.82" y="79.91" width="53.36" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="264.50" y="91.00" text-anchor="middle" fill="#000000">resultado</text>
+<polygon points="32.00,140.00 38.00,136.80 38.00,143.20" fill="#000000" stroke="none"/>
+<polyline points="212.73,140.00 38.00,140.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="37.00" y="124.91" width="170.73" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="122.36" y="136.00" text-anchor="middle" fill="#000000">system_chunk … system_done</text>
+<polygon points="419.83,182.00 413.83,185.20 413.83,178.80" fill="#000000" stroke="none"/>
+<polyline points="212.73,182.00 413.83,182.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="266.93" y="166.91" width="98.70" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="316.28" y="178.00" text-anchor="middle" fill="#000000">dispatch_analysis</text>
+<polygon points="212.73,200.00 218.73,196.80 218.73,203.20" fill="#000000" stroke="none"/>
+<polyline points="419.83,200.00 218.73,200.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="287.60" y="184.91" width="57.35" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="316.28" y="196.00" text-anchor="middle" fill="#000000">analysisId</text>
+<polygon points="32.00,218.00 38.00,214.80 38.00,221.20" fill="#000000" stroke="none"/>
+<polyline points="212.73,218.00 38.00,218.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="77.01" y="202.91" width="90.70" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="122.36" y="214.00" text-anchor="middle" fill="#000000">analysis_started</text>
+<polygon points="32.00,236.00 38.00,232.80 38.00,239.20" fill="#000000" stroke="none"/>
+<polyline points="212.73,236.00 38.00,236.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<rect x="37.00" y="220.91" width="170.73" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="122.36" y="232.00" text-anchor="middle" fill="#000000">system_chunk … system_done</text>
+<rect x="0.00" y="0.00" width="64.00" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="32.00" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Frontend</text>
+<rect x="160.38" y="0.00" width="104.70" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="212.73" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">chat_websocket</text>
+<rect x="285.60" y="0.00" width="61.34" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="316.28" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Intenção</text>
+<rect x="389.16" y="0.00" width="61.34" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="419.83" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">dispatch</text>
+<rect x="1.00" y="107.00" width="448.50" height="137.00" rx="0.0" fill="none" stroke="#000000" stroke-width="0.75"/>
+<rect x="1.00" y="107.00" width="24.00" height="15.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="0.75"/>
+<text x="6.00" y="118.80" text-anchor="start" fill="#000000" font-weight="bold">alt</text>
+<rect x="29.00" y="107.70" width="158.75" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="31.00" y="118.80" text-anchor="start" fill="#000000">[fora do escopo ou conversa]</text>
+<polyline points="1.00,152.00 449.50,152.00" fill="none" stroke="#000000" stroke-width="0.75" stroke-dasharray="4,3"/>
+<rect x="5.00" y="153.50" width="110.74" height="14.09" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<text x="7.00" y="164.59" text-anchor="start" fill="#000000">[pergunta de dados]</text>
+</svg>

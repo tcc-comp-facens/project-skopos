@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="203pt" viewBox="0 0 453 203" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="203" fill="#FFFFFF"/>
+<rect x="0.00" y="135.00" width="450.50" height="66.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="149.30" text-anchor="start" fill="#000000" font-weight="bold">cost</text>
+<polygon points="67.03,75.00 63.83,69.00 70.23,69.00" fill="#000000" stroke="none"/>
+<polyline points="67.03,53.00 67.03,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="67.03,155.00 63.83,149.00 70.23,149.00" fill="#000000" stroke="none"/>
+<polyline points="67.03,113.00 67.03,149.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="173.08,75.00 169.88,69.00 176.28,69.00" fill="#000000" stroke="none"/>
+<polyline points="173.08,53.00 173.08,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="173.08,155.00 169.88,149.00 176.28,149.00" fill="#000000" stroke="none"/>
+<polyline points="173.08,113.00 173.08,149.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="268.78,75.00 265.58,69.00 271.98,69.00" fill="#000000" stroke="none"/>
+<polyline points="268.78,53.00 268.78,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="268.78,155.00 265.58,149.00 271.98,149.00" fill="#000000" stroke="none"/>
+<polyline points="268.78,113.00 268.78,149.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="389.15,75.00 385.95,69.00 392.35,69.00" fill="#000000" stroke="none"/>
+<polyline points="389.15,53.00 389.15,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="389.15,155.00 385.95,149.00 392.35,149.00" fill="#000000" stroke="none"/>
+<polyline points="389.15,113.00 389.15,149.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="8.00" y="0.00" width="118.06" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="67.03" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Intenção</text>
+<text x="67.03" y="30.80" text-anchor="middle" fill="#000000">chat_websocket</text>
+<text x="67.03" y="45.80" text-anchor="middle" fill="#000000">1× por mensagem</text>
+<rect x="144.40" y="0.00" width="57.35" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="173.08" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Estrela</text>
+<text x="173.08" y="30.80" text-anchor="middle" fill="#000000">run_star</text>
+<text x="173.08" y="45.80" text-anchor="middle" fill="#000000">thread A</text>
+<rect x="220.10" y="0.00" width="97.36" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="268.78" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Árvore</text>
+<text x="268.78" y="30.80" text-anchor="middle" fill="#000000">run_hierarchical</text>
+<text x="268.78" y="45.80" text-anchor="middle" fill="#000000">thread B</text>
+<rect x="335.81" y="0.00" width="106.69" height="53.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="389.15" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">RAGAS</text>
+<text x="389.15" y="30.80" text-anchor="middle" fill="#000000">2 Tasks (gather)</text>
+<text x="389.15" y="45.80" text-anchor="middle" fill="#000000">+ embeddings</text>
+<rect x="8.00" y="155.00" width="118.06" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="67.03" y="178.30" text-anchor="middle" fill="#000000">intent_interpretation</text>
+<rect x="144.40" y="155.00" width="57.35" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="173.08" y="178.30" text-anchor="middle" fill="#000000">star</text>
+<rect x="220.10" y="155.00" width="97.36" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="268.78" y="178.30" text-anchor="middle" fill="#000000">hierarchical</text>
+<rect x="335.81" y="155.00" width="106.69" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="389.15" y="170.80" text-anchor="middle" fill="#000000">ragas.star</text>
+<text x="389.15" y="185.80" text-anchor="middle" fill="#000000">ragas.hierarchical</text>
+<rect x="8.00" y="75.00" width="434.50" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="90.80" text-anchor="middle" fill="#000000" font-weight="bold">generate(), generate_stream(), record_token_usage()</text>
+<text x="225.25" y="105.80" text-anchor="middle" fill="#000000">somam os tokens no TokenBucket ativo do escopo (ContextVar)</text>
+</svg>

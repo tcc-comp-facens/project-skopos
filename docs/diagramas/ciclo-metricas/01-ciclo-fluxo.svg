@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="220pt" viewBox="0 0 453 220" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="220" fill="#FFFFFF"/>
+<polygon points="165.38,14.00 159.38,17.20 159.38,10.80" fill="#000000" stroke="none"/>
+<polyline points="56.68,14.00 159.38,14.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="111.03" y="10.00" text-anchor="middle" fill="#000000">mensagem</text>
+<polygon points="56.68,24.00 62.68,20.80 62.68,27.20" fill="#000000" stroke="none"/>
+<polyline points="165.38,24.00 62.68,24.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="111.03" y="36.59" text-anchor="middle" fill="#000000">recusa / conversa</text>
+<polygon points="330.78,19.00 324.78,22.20 324.78,15.80" fill="#000000" stroke="none"/>
+<polyline points="241.40,19.00 324.78,19.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="286.09" y="15.00" text-anchor="middle" fill="#000000">dados</text>
+<polyline points="390.64,38.00 390.64,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="295.12,49.00 397.81,49.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="295.12,60.00 291.92,54.00 298.32,54.00" fill="#000000" stroke="none"/>
+<polyline points="295.12,49.00 295.12,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="397.81,60.00 394.61,54.00 401.01,54.00" fill="#000000" stroke="none"/>
+<polyline points="397.81,49.00 397.81,54.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="295.12,98.00 295.12,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="397.81,98.00 397.81,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="295.12,109.00 397.81,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="346.47,120.00 343.27,114.00 349.67,114.00" fill="#000000" stroke="none"/>
+<polyline points="346.47,109.00 346.47,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="288.12,139.00 294.12,135.80 294.12,142.20" fill="#000000" stroke="none"/>
+<polyline points="308.12,139.00 294.12,139.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="92.69,139.00 98.69,135.80 98.69,142.20" fill="#000000" stroke="none"/>
+<polyline points="186.07,139.00 98.69,139.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="139.38" y="135.00" text-anchor="middle" fill="#000000">done × 2</text>
+<polygon points="46.34,180.00 43.14,174.00 49.54,174.00" fill="#000000" stroke="none"/>
+<polyline points="46.34,158.00 46.34,174.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="145.37,199.00 139.37,202.20 139.37,195.80" fill="#000000" stroke="none"/>
+<polyline points="85.37,199.00 139.37,199.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="56.68" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="28.34" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Usuário</text>
+<text x="28.34" y="30.80" text-anchor="middle" fill="#000000">/ws/chat</text>
+<rect x="165.38" y="0.00" width="76.02" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="203.39" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">Intenção</text>
+<text x="203.39" y="30.80" text-anchor="middle" fill="#000000">parse(texto)</text>
+<rect x="330.78" y="0.00" width="119.72" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="390.64" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">dispatch_analysis</text>
+<text x="390.64" y="30.80" text-anchor="middle" fill="#000000">Analise + ws_queue</text>
+<rect x="265.12" y="60.00" width="60.01" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="295.12" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">run_star</text>
+<text x="295.12" y="90.80" text-anchor="middle" fill="#000000">thread A</text>
+<rect x="345.13" y="60.00" width="105.37" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="397.81" y="75.80" text-anchor="middle" fill="#000000" font-weight="bold">run_hierarchical</text>
+<text x="397.81" y="90.80" text-anchor="middle" fill="#000000">thread B</text>
+<rect x="308.12" y="120.00" width="76.70" height="38.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="346.47" y="135.80" text-anchor="middle" fill="#000000" font-weight="bold">ws_queue</text>
+<text x="346.47" y="150.80" text-anchor="middle" fill="#000000">2 topologias</text>
+<rect x="186.07" y="120.00" width="102.05" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="237.09" y="135.80" text-anchor="middle" fill="#000000" font-weight="bold">/ws/{analysisId}</text>
+<text x="237.09" y="150.80" text-anchor="middle" fill="#000000">streaming</text>
+<rect x="0.00" y="120.00" width="92.69" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="46.34" y="135.80" text-anchor="middle" fill="#000000" font-weight="bold">Métricas</text>
+<text x="46.34" y="150.80" text-anchor="middle" fill="#000000">determinísticas</text>
+<rect x="0.00" y="180.00" width="85.37" height="38.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="42.68" y="195.80" text-anchor="middle" fill="#000000" font-weight="bold">RAGAS</text>
+<text x="42.68" y="210.80" text-anchor="middle" fill="#000000">2 arquiteturas</text>
+<rect x="145.37" y="180.00" width="77.35" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="184.04" y="195.80" text-anchor="middle" fill="#000000" font-weight="bold">Relatório</text>
+<text x="184.04" y="210.80" text-anchor="middle" fill="#000000">comparativo</text>
+</svg>

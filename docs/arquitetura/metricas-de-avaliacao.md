@@ -4,31 +4,21 @@
 
 **Arquivos principais:** `backend/core/quality_metrics.py` (métricas determinísticas), `backend/core/ragas_metrics.py` (avaliação da resposta via biblioteca RAGAS), `backend/core/llm_client.py` (`TokenBucket`), `backend/core/guardrail_stats.py`, `backend/agents/domain/query_planning.py` (contadores de cache).
 
+> **Diagramas:** as figuras deste documento ficam em [`docs/diagramas/ciclo-metricas/`](../diagramas/ciclo-metricas/) e [`docs/diagramas/arquitetura/`](../diagramas/arquitetura/), em PNG (300 dpi) e SVG, até 16 × 9 cm, com texto em Arial 12 quando inseridas a 100%. Para regenerar: `python docs/diagramas/ciclo-metricas/gerar_diagramas_ciclo_metricas.py` e `python docs/diagramas/arquitetura/gerar_diagramas_arquitetura.py`.
+
 ## Visão geral — seis eixos
 
-O módulo evoluiu em três fases. Os três eixos originais (E/Q/R) existiam antes do plano de refatoração; os três eixos novos foram adicionados na Etapa 6 do `PLANO_REFATORACAO.md`, depois que as Etapas 1–5 já tinham dado aos agentes os pontos de decisão via LLM que essas métricas passaram a medir. A terceira fase substituiu o eixo B por uma biblioteca de avaliação de verdade (ver "Eixo B" abaixo).
+O módulo evoluiu em três fases. Os três eixos originais — eficiência, qualidade e resiliência (A, B e C) — existiam antes do plano de refatoração; os três novos — custo, comunicação e outcome — foram adicionados na Etapa 6 do `PLANO_REFATORACAO.md`, depois que as Etapas 1–5 já tinham dado aos agentes os pontos de decisão via LLM que essas métricas passaram a medir. Custo e comunicação dividem a letra D no código e no payload, por isso os seis eixos aparecem em cinco grupos (A–E). A terceira fase substituiu as métricas caseiras de fidelidade do eixo B por uma biblioteca de avaliação de verdade (ver "Eixo B" abaixo).
 
-```
-core/quality_metrics.py               (100% determinístico — nenhuma chamada LLM)
-├── A. Eficiência dos Agentes         E1  compute_coordination_overhead
-│                                     E2  compute_latency_breakdown
-├── B. Qualidade da Resposta          Q1  compute_deterministic_consistency
-│                                     Q3  compute_completeness
-├── C. Resiliência                    R1  compute_partial_result_coverage
-├── D. Custo e Comunicação (Etapa 6)  compute_token_cost
-│                                     compute_communication_volume
-└── E. Outcome agregado (Etapa 6)     compute_analysis_success
+![Eixos de avaliação: métricas por análise (A–E) e métricas process-wide](../diagramas/ciclo-metricas/04-metricas-eixos.png)
 
-core/ragas_metrics.py                 (sempre executado, custa LLM; ver Eixo B)
-└── B. Qualidade da Resposta          faithfulness
-                                      answer_relevancy
-                                      context_relevance
+Onde cada métrica está implementada:
 
-core/guardrail_stats.py               compute_guardrail_rejection_rate   (process-wide)
-agents/domain/query_planning.py       compute_cache_hit_rate             (process-wide)
-```
+- `core/quality_metrics.py` — 100% determinístico, nenhuma chamada LLM: E1 `compute_coordination_overhead`, E2 `compute_latency_breakdown`, Q1 `compute_deterministic_consistency`, Q3 `compute_completeness`, R1 `compute_partial_result_coverage`, `compute_token_cost`, `compute_communication_volume` e `compute_analysis_success`.
+- `core/ragas_metrics.py` — sempre executado, custa LLM (a caixa cinza da figura): `faithfulness`, `answer_relevancy` e `context_relevance`.
+- `core/guardrail_stats.py` (`compute_guardrail_rejection_rate`) e `agents/domain/query_planning.py` (`compute_cache_hit_rate`, inativa) — process-wide.
 
-A distinção entre **por-análise** (as seis primeiras — calculadas a cada comparação estrela-vs-árvore, no payload de `/api/analysis/{id}/quality`) e **process-wide** (as duas últimas — contadores acumulados ao longo de várias análises, expostas em `GET /api/metrics/guardrail` e `GET /api/metrics/query-planning-cache`) é proposital: guardrail e cache não descrevem uma análise isolada, descrevem uma tendência de comportamento do sistema ao longo do tempo.
+A distinção entre **por-análise** (os seis eixos — calculados a cada comparação estrela-vs-árvore, no payload de `/api/analysis/{id}/quality`) e **process-wide** (guardrail e cache — contadores acumulados ao longo de várias análises, expostos em `GET /api/metrics/guardrail` e `GET /api/metrics/query-planning-cache`) é proposital: guardrail e cache não descrevem uma análise isolada, descrevem uma tendência de comportamento do sistema ao longo do tempo.
 
 ## Ordem de execução (medir → avaliar → concluir)
 
@@ -88,9 +78,25 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
 
 Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, a única entrada de coordenação é `orquestrador_estrela`, que carrega o overhead `wall_clock − soma dos agentes` (ver [arquitetura-estrela.md](arquitetura-estrela.md#9-persistir_metricas)) e tende a ser pequena. Na árvore entram os 4 supervisores, com o tempo total de cada um (que já engloba o dos subordinados), mais `coordenador_geral` com o overhead residual (ver [arquitetura-arvore.md](arquitetura-arvore.md#contabilização-de-métricas-e-overhead)).
 
+![Linha do tempo da medição na estrela: wall-clock, agentes, overhead e o que fica de fora](../diagramas/arquitetura/02-estrela-medicao.png)
+
+![Linha do tempo da medição na árvore: supervisores, agentes-folha e tempo subtraído](../diagramas/arquitetura/05-arvore-medicao.png)
+
+**Ressalva — na árvore, o E1 conta duas vezes o tempo dos agentes-folha.** Cada supervisor entra em `agent_metrics` com o tempo total da sua execução, que já inclui o dos agentes-folha, e os agentes-folha também entram, como entradas próprias. `compute_coordination_overhead` soma supervisores e `coordenador_geral` em `supervisor_time` e os agentes-folha em `worker_time`, então o tempo das folhas aparece dos dois lados da razão:
+
+```
+overhead_ratio = (folhas + parte própria dos supervisores + overhead) / (2 × folhas + parte própria dos supervisores + overhead)
+```
+
+O resultado fica acima de 50% por construção. Na estrela não há essa sobreposição: a única entrada de coordenação é o overhead residual. Por isso o E1 da árvore **não é comparável em valor absoluto** com o da estrela. A comparação direta do custo de coordenação é o overhead residual (`coordenador_geral` × `orquestrador_estrela`), que nas duas topologias é `wall-clock − Σ agentes-folha`. O código não foi alterado; a ressalva vale para todos os números de E1 e E2 da árvore medidos até agora.
+
 ### E2 — Breakdown de latência por fase
 
-Divide o tempo total em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os mesmos conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO`/`FASE_SUPERVISORES` — note que `FASE_ANALITICO` inclui `"priorizacao"` e `"verificacao"` (Etapas 3 e 4), acompanhando a evolução do pipeline analítico. Retorna tempo absoluto e percentual de cada fase, usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo.
+Divide o tempo em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os mesmos conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO`/`FASE_SUPERVISORES`, e retorna o tempo absoluto e o percentual de cada fase — usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo. Três detalhes de leitura:
+
+- `FASE_ANALITICO` lista `priorizacao`, `sintetizador` e `verificacao`, mas os orquestradores excluem esses três serviços de LLM de `agentMetrics` (eles rodam depois de `capturar_wallclock`). Na prática, a fase analítica contém só o `AgenteAnalitico`.
+- Os percentuais são calculados sobre a **soma das fases**, não sobre o wall-clock. Depois, `compute_all_quality_metrics` sobrescreve `total_ms` com o wall-clock real, então `total_ms` e a soma dos `time_ms` não coincidem.
+- Na árvore vale a mesma sobreposição do E1: a fase `supervisores` inclui o tempo dos agentes-folha, que também aparece em `dominio`, `contexto` e `analitico`, e o percentual de `supervisores` sai inflado.
 
 **Nenhuma das duas métricas usa limiar fixo** (ex.: "overhead > 30% é ruim") — a comparação é sempre relativa entre as duas topologias na mesma análise, nunca contra um corte absoluto. Essa é uma decisão deliberada (D12, ver tabela).
 
@@ -145,6 +151,8 @@ O que justifica o mapeamento é que a posição estrutural do "contexto recupera
 | `response` | `result["texto_analise"]` — o texto do sintetizador |
 | `retrieved_contexts` | **tudo** que o sintetizador recebeu (ver abaixo) |
 
+![Montagem da tripla do RAGAS e os campos que cada métrica compara](../diagramas/ciclo-metricas/06-metricas-ragas.png)
+
 **O contexto do juiz tem que ser idêntico ao do gerador.** Uma versão anterior mandava ao juiz uma forma empobrecida dos achados — só subfunção, indicador, coeficiente e classificação — e omitia campos que o gerador tinha: a `leitura` da correlação (que o prompt manda usar como *fonte da verdade* sobre o resultado ser desejável ou indesejável), o `n_pontos`, e a `descricao` da anomalia, que carrega **o valor gasto em R$ e o valor do indicador**. O texto citava esses dados corretamente e era reprovado, porque a evidência não estava no contexto do juiz. A fidelidade media a lacuna entre os dois contextos, não a fidelidade do texto.
 
 Pelo mesmo motivo entram no contexto as afirmações que o prompt **injeta** no gerador e manda repetir: o período analisado, a nota sobre a pandemia, a tradução das subfunções para linguagem comum e as lacunas de dados. Em termos de RAG, uma afirmação fornecida ao gerador *é* parte do contexto sobre o qual a geração se apoia — o prompt diz literalmente "Sempre mencione esse fator". Excluí-la garantiria infidelidade artificial: o texto seria punido por obedecer à instrução.
@@ -152,13 +160,18 @@ Pelo mesmo motivo entram no contexto as afirmações que o prompt **injeta** no 
 Essas strings vivem como constantes em `agents/analytical/sintetizador.py` (`CONTEXTO_PANDEMIA`, `TRADUCAO_SUBFUNCOES`) e são **importadas** por `build_contexts`, não reescritas. Duplicá-las faria o contexto do juiz divergir do prompt na primeira edição, reintroduzindo o mesmo problema de forma silenciosa.
 
 ```python
-# core/ragas_metrics.py — build_contexts()
-"Correlação: subfunção 305 (Vigilância Epidemiológica) × dengue — coeficiente de Spearman 0.82, classificação alta."
-"Anomalia em 2021: subfunção 305 (Vigilância Epidemiológica) × dengue — tipo alto_gasto_baixo_resultado."
+# core/ragas_metrics.py — build_contexts(): um chunk por informação, nesta ordem
+"Período analisado: a análise cobre os anos de 2019 a 2022."
+"Correlação: subfunção 305 (Vigilância Epidemiológica) × dengue — coeficiente de Spearman 0.8, classificação alta, calculada sobre 4 pontos. Leitura do sinal: <leitura>."
+"Anomalia em 2021: subfunção 305 (Vigilância Epidemiológica) × dengue — tipo alto_gasto_baixo_resultado. <descricao, com o gasto em R$ e o valor do indicador>."
 "Contexto orçamentário da subfunção 305 (Vigilância Epidemiológica): tendência crescente, variação média 12.4%."
+"Cobertura dos dados: completude das despesas 100%, completude dos indicadores 92%."
+"Lacuna de dados identificada: <descrição da lacuna>."
+"Contexto fornecido ao gerador: <CONTEXTO_PANDEMIA>"
+"Equivalência informada ao gerador: a subfunção 305 corresponde a <tradução>."
 ```
 
-Um chunk por achado (em vez de um bloco único de texto) é o que torna a *context precision* interpretável: ela julga achado a achado se aquele item foi útil para a resposta — e é justamente aí que a comparação arquitetural fica visível, porque uma topologia pode entregar ao sintetizador mais achados irrelevantes que a outra.
+A lista de chunks é o formato de entrada que o RAGAS espera em `retrieved_contexts`, mas a granularidade não muda mais o score: `faithfulness` verifica as afirmações contra o conjunto inteiro, e `context_relevance` concatena o contexto antes de julgá-lo (D25). A contagem só aparece em `sample.n_contexts_total`. Enquanto o terceiro pilar era medido por `ContextPrecisionWithoutReference`, cada chunk era julgado separadamente, e por isso o número de chunks pesava no custo e na ordem (ver D25).
 
 **Não há teto de contextos.** Todas as métricas recebem o conjunto completo de achados, porque nenhuma escala em número de chamadas com a quantidade de chunks. Houve um teto (`RAGAS_MAX_CONTEXTS`) enquanto o terceiro pilar era medido por `ContextPrecisionWithoutReference`, que gasta 1 chamada LLM por achado; a troca por `ContextRelevance` (D25) tornou o teto — e o viés de corte que ele introduzia — desnecessários.
 
@@ -232,6 +245,8 @@ Enquanto a fidelidade pergunta "o que está no texto é verdade?", Q3 pergunta "
 3. tempo total          — desempate final
 ```
 
+![Fluxo de decisão do veredito: fidelidade, completude e tempo](../diagramas/ciclo-metricas/05-metricas-veredito.png)
+
 Ordem lexicográfica, não média ponderada: cada nível só é consultado se o anterior empatou — e "empate" na fidelidade inclui diferenças menores que `FAITHFULNESS_TIE_THRESHOLD` (0,05), porque o juiz é um LLM e 0,01 é ruído (D26). A fidelidade vem primeiro por ser a única métrica de qualidade textual com validação publicada (Es et al., 2024); o tempo vem por último porque uma resposta errada mais rápida não é melhor. Os pesos que uma média exigiria seriam arbitrários — a ordem, ao menos, é explicável em uma frase (D20).
 
 **Uma fidelidade não medida não vale zero.** Se a métrica falhou numa arquitetura e não na outra, tratar o `None` como 0 entregaria a vitória por falha de instrumentação do adversário, não por qualidade própria. Por isso a fidelidade só decide quando **ambas** têm score; caso contrário o critério cai para completude, e o relatório diz qual critério decidiu:
@@ -300,6 +315,8 @@ active_results[analysis_id]["star_token_usage"] = token_bucket.snapshot()
 
 O resultado final no payload separa 4 segmentos: `cost.star`, `cost.hierarchical`, `cost.intent_interpretation` (1x por mensagem de chat, anterior à bifurcação das topologias) e `cost.ragas` (a avaliação RAGAS roda em toda análise — um bucket por arquitetura, incluindo o consumo dos embeddings).
 
+![Contabilização de custo: escopos de TokenBucket e segmentos de cost no payload](../diagramas/ciclo-metricas/07-metricas-custo.png)
+
 ### Volume de comunicação
 
 ```python
@@ -310,13 +327,19 @@ def compute_communication_volume(architecture, agent_metrics, despesas_count=0, 
             "payload_records": despesas_count + indicadores_count}
 ```
 
-O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente (ou supervisor, na árvore) efetivamente invocado, contado como 1 chamada + 1 retorno = 2 mensagens. Como a árvore é **estrita** — supervisores só trocam dados com o `CoordenadorGeral`, nunca entre si —, o proxy é o mesmo para as duas topologias; a diferença real de volume aparece em `agent_invocations`, porque a árvore invoca também os 4 supervisores além dos agentes-folha.
+O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` conta como 1 chamada + 1 retorno = 2 mensagens. O que entra nessa lista precisa ser lido com cuidado:
+
+- **Entram** os agentes de domínio, o contexto e o analítico; na árvore, também os 4 supervisores.
+- **Entra também** a pseudoentrada de overhead (`orquestrador_estrela` ou `coordenador_geral`), que não é um agente invocado: carrega o tempo residual de coordenação. Ela soma 1 a `agent_invocations` nas duas topologias, então não distorce a comparação.
+- **Não entram** priorização, síntese e verificação: os orquestradores as excluem de `agentMetrics` porque rodam depois de `capturar_wallclock`, embora sejam invocadas nas duas topologias.
+
+Como a árvore é **estrita** — supervisores só trocam dados com o `CoordenadorGeral`, nunca entre si —, o proxy é o mesmo para as duas topologias; a diferença real de volume aparece em `agent_invocations`, porque a árvore invoca também os 4 supervisores além dos agentes-folha.
 
 > Até `38df7be`, a árvore somava 3 "hops laterais" fixos entre supervisores (`lateral_hops`) e 2 resumos textuais via LLM (`lateral_summaries`), da Etapa 5 do [plano de refatoração](../historico/PLANO_REFATORACAO.md). Ambos saíram do payload junto com a comunicação lateral.
 
 ---
 
-## Eixo E — Outcome agregado (Etapa 6, novo, opcional)
+## Eixo E — Outcome agregado (Etapa 6, novo)
 
 ```python
 def compute_analysis_success(result, wall_clock_ms=0, time_budget_ms=DEFAULT_TIME_BUDGET_MS):
@@ -335,7 +358,7 @@ def compute_analysis_success(result, wall_clock_ms=0, time_budget_ms=DEFAULT_TIM
     return {"success": success, "r1_complete": ..., "self_check_ok": ..., "within_time_budget": ...}
 ```
 
-Métrica binária composta: **sucesso = R1 completo E nenhuma claim não-suportada remanescente no self-check (Etapa 4) E dentro do orçamento de tempo**. `DEFAULT_TIME_BUDGET_MS = 60_000.0` não é prescrito por nenhuma fonte — é um parâmetro explícito, sobrescrevível pelo caller, não uma constante escondida (mesma lógica de "sem limiares mágicos" já aplicada a E1/E2, D12). Inspiração conceitual em métricas de sucesso estruturadas em marcos (D11), fórmula própria.
+Métrica binária composta: **sucesso = R1 completo E nenhuma claim não-suportada remanescente no self-check (Etapa 4) E dentro do orçamento de tempo**. Ela é calculada em toda análise; opcional é só o componente de self-check, que não penaliza quando a verificação não rodou. `DEFAULT_TIME_BUDGET_MS = 60_000.0` não é prescrito por nenhuma fonte — é um parâmetro explícito, sobrescrevível pelo caller, não uma constante escondida (mesma lógica de "sem limiares mágicos" já aplicada a E1/E2, D12). Inspiração conceitual em métricas de sucesso estruturadas em marcos (D11), fórmula própria.
 
 ---
 

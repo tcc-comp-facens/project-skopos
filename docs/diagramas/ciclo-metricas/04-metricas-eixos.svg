@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="224pt" viewBox="0 0 453 224" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="224" fill="#FFFFFF"/>
+<rect x="0.00" y="0.00" width="450.50" height="144.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="14.30" text-anchor="start" fill="#000000" font-weight="bold">Por análise</text>
+<rect x="0.00" y="156.00" width="450.50" height="66.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="170.30" text-anchor="start" fill="#000000" font-weight="bold">Process-wide</text>
+<rect x="8.00" y="20.00" width="146.62" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="81.31" y="43.30" text-anchor="middle" fill="#000000" font-weight="bold">A. Eficiência</text>
+<text x="81.31" y="58.30" text-anchor="middle" fill="#000000">E1 overhead</text>
+<text x="81.31" y="73.30" text-anchor="middle" fill="#000000">E2 latência por fase</text>
+<rect x="166.62" y="20.00" width="125.93" height="68.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="229.59" y="43.30" text-anchor="middle" fill="#000000" font-weight="bold">B. Qualidade</text>
+<text x="229.59" y="58.30" text-anchor="middle" fill="#000000">Q1 consistência</text>
+<text x="229.59" y="73.30" text-anchor="middle" fill="#000000">Q3 completude</text>
+<rect x="304.55" y="20.00" width="137.95" height="68.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="373.53" y="35.80" text-anchor="middle" fill="#000000" font-weight="bold">B. RAGAS (LLM)</text>
+<text x="373.53" y="50.80" text-anchor="middle" fill="#000000">faithfulness</text>
+<text x="373.53" y="65.80" text-anchor="middle" fill="#000000">answer_relevancy</text>
+<text x="373.53" y="80.80" text-anchor="middle" fill="#000000">context_relevance</text>
+<rect x="8.00" y="98.00" width="105.64" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="60.82" y="113.80" text-anchor="middle" fill="#000000" font-weight="bold">C. Resiliência</text>
+<text x="60.82" y="128.80" text-anchor="middle" fill="#000000">R1 cobertura</text>
+<rect x="125.64" y="98.00" width="76.94" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="164.11" y="113.80" text-anchor="middle" fill="#000000" font-weight="bold">D. Custo</text>
+<text x="164.11" y="128.80" text-anchor="middle" fill="#000000">tokens</text>
+<rect x="214.58" y="98.00" width="121.63" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="275.40" y="113.80" text-anchor="middle" fill="#000000" font-weight="bold">D. Comunicação</text>
+<text x="275.40" y="128.80" text-anchor="middle" fill="#000000">mensagens</text>
+<rect x="348.21" y="98.00" width="94.29" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="395.35" y="113.80" text-anchor="middle" fill="#000000" font-weight="bold">E. Outcome</text>
+<text x="395.35" y="128.80" text-anchor="middle" fill="#000000">sucesso</text>
+<rect x="8.00" y="176.00" width="186.58" height="38.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="101.29" y="191.80" text-anchor="middle" fill="#000000" font-weight="bold">Guardrail</text>
+<text x="101.29" y="206.80" text-anchor="middle" fill="#000000">taxa de rejeição</text>
+<rect x="206.58" y="176.00" width="235.92" height="38.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="206.58,176.00 442.50,176.00 442.50,214.00 206.58,214.00 206.58,176.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="324.54" y="191.80" text-anchor="middle" fill="#000000" font-weight="bold">Cache de planejamento</text>
+<text x="324.54" y="206.80" text-anchor="middle" fill="#000000">inativo</text>
+</svg>

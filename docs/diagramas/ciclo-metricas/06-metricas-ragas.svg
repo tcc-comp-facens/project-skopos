@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="453pt" height="203pt" viewBox="0 0 453 203" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="453" height="203" fill="#FFFFFF"/>
+<rect x="0.00" y="120.00" width="450.50" height="81.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="8.00" y="134.30" text-anchor="start" fill="#000000" font-weight="bold">Juiz RAGAS (RAGAS_PROVIDER)</text>
+<polygon points="68.41,75.00 65.21,69.00 71.61,69.00" fill="#000000" stroke="none"/>
+<polyline points="68.41,53.00 68.41,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="222.90,75.00 219.70,69.00 226.10,69.00" fill="#000000" stroke="none"/>
+<polyline points="222.90,53.00 222.90,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="379.74,75.00 376.54,69.00 382.94,69.00" fill="#000000" stroke="none"/>
+<polyline points="379.74,53.00 379.74,69.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="62.53,98.00 62.53,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="204.24,98.00 204.24,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="366.97,98.00 366.97,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="62.53,109.00 366.97,109.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="225.25,120.00 222.05,114.00 228.45,114.00" fill="#000000" stroke="none"/>
+<polyline points="225.25,109.00 225.25,114.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="0.00" y="0.00" width="136.82" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="68.41" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">Pergunta do chat</text>
+<text x="68.41" y="38.30" text-anchor="middle" fill="#000000">source_question</text>
+<rect x="156.82" y="0.00" width="132.16" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="222.90" y="23.30" text-anchor="middle" fill="#000000" font-weight="bold">Texto da análise</text>
+<text x="222.90" y="38.30" text-anchor="middle" fill="#000000">texto_analise</text>
+<rect x="308.98" y="0.00" width="141.52" height="53.00" rx="6" fill="#F4F4F4" stroke="#000000" stroke-width="1.0"/>
+<text x="379.74" y="15.80" text-anchor="middle" fill="#000000" font-weight="bold">build_contexts</text>
+<text x="379.74" y="30.80" text-anchor="middle" fill="#000000">achados, cobertura</text>
+<text x="379.74" y="45.80" text-anchor="middle" fill="#000000">e enquadramento</text>
+<rect x="0.00" y="75.00" width="125.05" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="62.53" y="90.80" text-anchor="middle" fill="#000000">user_input</text>
+<rect x="145.05" y="75.00" width="118.38" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="204.24" y="90.80" text-anchor="middle" fill="#000000">response</text>
+<rect x="283.43" y="75.00" width="167.07" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="366.97" y="90.80" text-anchor="middle" fill="#000000">retrieved_contexts</text>
+<rect x="8.00" y="140.00" width="133.27" height="53.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="74.64" y="155.80" text-anchor="middle" fill="#000000" font-weight="bold">faithfulness</text>
+<text x="74.64" y="170.80" text-anchor="middle" fill="#000000">response</text>
+<text x="74.64" y="185.80" text-anchor="middle" fill="#000000">× retrieved_contexts</text>
+<rect x="153.27" y="140.00" width="143.95" height="53.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="155.80" text-anchor="middle" fill="#000000" font-weight="bold">answer_relevancy</text>
+<text x="225.25" y="170.80" text-anchor="middle" fill="#000000">user_input × response</text>
+<text x="225.25" y="185.80" text-anchor="middle" fill="#000000">+ embeddings</text>
+<rect x="309.23" y="140.00" width="133.27" height="53.00" rx="0.0" fill="#E3E3E3" stroke="#000000" stroke-width="1.0"/>
+<text x="375.86" y="155.80" text-anchor="middle" fill="#000000" font-weight="bold">context_relevance</text>
+<text x="375.86" y="170.80" text-anchor="middle" fill="#000000">user_input</text>
+<text x="375.86" y="185.80" text-anchor="middle" fill="#000000">× retrieved_contexts</text>
+</svg>

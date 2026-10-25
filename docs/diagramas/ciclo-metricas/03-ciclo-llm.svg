@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="375pt" height="248pt" viewBox="0 0 375 248" font-family="Arial, Helvetica, sans-serif" font-size="12">
+<rect x="0" y="0" width="375" height="248" fill="#FFFFFF"/>
+<rect x="77.55" y="45.00" width="101.36" height="156.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="85.55" y="59.30" text-anchor="start" fill="#000000" font-weight="bold">Estrela</text>
+<polygon points="128.23,100.00 125.03,94.00 131.43,94.00" fill="#000000" stroke="none"/>
+<polyline points="128.23,88.00 128.23,94.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="128.23,135.00 125.03,129.00 131.43,129.00" fill="#000000" stroke="none"/>
+<polyline points="128.23,123.00 128.23,129.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="128.23,170.00 125.03,164.00 131.43,164.00" fill="#000000" stroke="none"/>
+<polyline points="128.23,158.00 128.23,164.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<rect x="271.59" y="45.00" width="101.36" height="156.00" rx="5" fill="#F4F4F4" stroke="#9A9A9A" stroke-width="0.75"/>
+<text x="279.59" y="59.30" text-anchor="start" fill="#000000" font-weight="bold">Árvore</text>
+<polygon points="322.27,100.00 319.07,94.00 325.47,94.00" fill="#000000" stroke="none"/>
+<polyline points="322.27,88.00 322.27,94.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="322.27,135.00 319.07,129.00 325.47,129.00" fill="#000000" stroke="none"/>
+<polyline points="322.27,123.00 322.27,129.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="322.27,170.00 319.07,164.00 325.47,164.00" fill="#000000" stroke="none"/>
+<polyline points="322.27,158.00 322.27,164.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="225.25,23.00 225.25,34.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="128.23,34.00 322.27,34.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="128.23,45.00 125.03,39.00 131.43,39.00" fill="#000000" stroke="none"/>
+<polyline points="128.23,34.00 128.23,39.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="322.27,45.00 319.07,39.00 325.47,39.00" fill="#000000" stroke="none"/>
+<polyline points="322.27,34.00 322.27,39.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="128.23,201.00 128.23,212.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="322.27,201.00 322.27,212.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polyline points="128.23,212.00 322.27,212.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<polygon points="225.25,223.00 222.05,217.00 228.45,217.00" fill="#000000" stroke="none"/>
+<polyline points="225.25,212.00 225.25,217.00" fill="none" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="127.30" text-anchor="middle" fill="#000000">em paralelo</text>
+<rect x="131.70" y="0.00" width="187.09" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="15.80" text-anchor="middle" fill="#000000">1. Intenção — 1× por mensagem</text>
+<rect x="122.37" y="223.00" width="205.75" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="225.25" y="238.80" text-anchor="middle" fill="#000000">6. Juiz RAGAS — 1× por arquitetura</text>
+<rect x="85.55" y="65.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="128.23" y="80.80" text-anchor="middle" fill="#000000">2. Dimensão</text>
+<rect x="85.55" y="100.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="128.23" y="115.80" text-anchor="middle" fill="#000000">3. Priorização</text>
+<rect x="85.55" y="135.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="128.23" y="150.80" text-anchor="middle" fill="#000000">4. Síntese</text>
+<rect x="85.55" y="170.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="85.55,170.00 170.91,170.00 170.91,193.00 85.55,193.00 85.55,170.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="128.23" y="185.80" text-anchor="middle" fill="#000000">5. Verificação</text>
+<rect x="279.59" y="65.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="322.27" y="80.80" text-anchor="middle" fill="#000000">2. Dimensão</text>
+<rect x="279.59" y="100.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="322.27" y="115.80" text-anchor="middle" fill="#000000">3. Priorização</text>
+<rect x="279.59" y="135.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="#000000" stroke-width="1.0"/>
+<text x="322.27" y="150.80" text-anchor="middle" fill="#000000">4. Síntese</text>
+<rect x="279.59" y="170.00" width="85.36" height="23.00" rx="0.0" fill="#FFFFFF" stroke="none" stroke-width="0.75"/>
+<polyline points="279.59,170.00 364.95,170.00 364.95,193.00 279.59,193.00 279.59,170.00" fill="none" stroke="#000000" stroke-width="1.0" stroke-dasharray="4,3"/>
+<text x="322.27" y="185.80" text-anchor="middle" fill="#000000">5. Verificação</text>
+</svg>
