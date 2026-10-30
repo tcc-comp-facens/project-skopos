@@ -74,20 +74,23 @@ def _interpretar_correlacao(tipo: str, r: float, indicadores_negativos: set[str]
         return "sem direção clara (correlação nula ou dados insuficientes)"
     indicador_negativo = tipo in indicadores_negativos
     positiva = r > 0
+    # O nome do indicador vai na frase: uma versão anterior dizia "mais
+    # casos/óbitos/internações neste indicador" para qualquer indicador, e o
+    # redator repetia "mais casos, óbitos ou internações de dengue".
     if indicador_negativo:
         return (
-            "positiva — LEITURA INDESEJÁVEL: mais gasto acompanhou mais "
-            "casos/óbitos/internações neste indicador, não menos"
+            f"positiva — LEITURA INDESEJÁVEL: mais gasto acompanhou valores "
+            f"maiores de {tipo} (indicador em que mais é pior), não menores"
             if positiva else
-            "negativa — LEITURA DESEJÁVEL: mais gasto acompanhou menos "
-            "casos/óbitos/internações neste indicador"
+            f"negativa — LEITURA DESEJÁVEL: mais gasto acompanhou valores "
+            f"menores de {tipo} (indicador em que mais é pior)"
         )
     return (
-        "positiva — LEITURA DESEJÁVEL: mais gasto acompanhou melhora "
-        "neste indicador"
+        f"positiva — LEITURA DESEJÁVEL: mais gasto acompanhou valores maiores "
+        f"de {tipo} (indicador em que mais é melhor)"
         if positiva else
-        "negativa — LEITURA INDESEJÁVEL: mais gasto acompanhou piora "
-        "neste indicador"
+        f"negativa — LEITURA INDESEJÁVEL: mais gasto acompanhou valores "
+        f"menores de {tipo} (indicador em que mais é melhor)"
     )
 
 
@@ -139,6 +142,28 @@ INDICADORES_NEGATIVOS: set[str] = {
 # aplicadas = melhor). Subtipos nativos do SI-PNI — não mais o token
 # legado "vacinacao", pela mesma razão do comentário acima.
 INDICADORES_POSITIVOS: set[str] = {"cobertura_vacinal", "doses_aplicadas"}
+
+
+def _descricao_anomalia(
+    subfuncao: int, subfuncao_nome: str, tipo: str, ano: int,
+    despesa: float, med_despesa: float, indicador: float, med_indicador: float,
+    rotulo: str,
+) -> str:
+    """Frase da anomalia com o valor do ano e a mediana, cada um nomeado.
+
+    Uma versão anterior escrevia "gasto acima da mediana (R$ X)" com o valor
+    do ANO entre parênteses, e o redator lia X como a mediana ("acima da
+    mediana de R$ X"). Também chamava todo indicador de "casos", inclusive
+    internações e mortalidade.
+    """
+    lado_desp = "acima" if despesa > med_despesa else "abaixo"
+    lado_ind = "acima" if indicador > med_indicador else "abaixo"
+    return (
+        f"Subfunção {subfuncao} ({subfuncao_nome}) em {ano}: "
+        f"gasto de R$ {despesa:,.2f}, {lado_desp} da mediana do período (R$ {med_despesa:,.2f}), "
+        f"com o indicador {tipo} em {indicador:,.1f}, {lado_ind} da mediana do período ({med_indicador:,.1f}) "
+        f"— {rotulo}"
+    )
 
 
 class AgenteAnalitico(AgenteCoALA):
@@ -303,51 +328,26 @@ class AgenteAnalitico(AgenteCoALA):
                         good_outcome = high_indicator
 
                     if high_spend and bad_outcome:
-                        if is_negative:
-                            desc_resultado = (
-                                f"indicador acima da mediana "
-                                f"({it['valor_indicador']:.1f} casos)"
-                            )
-                        else:
-                            desc_resultado = (
-                                f"indicador abaixo da mediana "
-                                f"({it['valor_indicador']:.1f})"
-                            )
-                        anomalias.append({
-                            "subfuncao": subfuncao,
-                            "tipo_indicador": tipo,
-                            "ano": it["ano"],
-                            "tipo_anomalia": "alto_gasto_baixo_resultado",
-                            "descricao": (
-                                f"Subfunção {subfuncao} ({subfuncao_nome}) "
-                                f"em {it['ano']}: gasto acima da mediana "
-                                f"(R$ {it['valor_despesa']:,.2f}) com "
-                                f"{desc_resultado} — possível ineficiência"
-                            ),
-                        })
+                        tipo_anomalia, rotulo = "alto_gasto_baixo_resultado", "possível ineficiência"
                     elif low_spend and good_outcome:
-                        if is_negative:
-                            desc_resultado = (
-                                f"indicador abaixo da mediana "
-                                f"({it['valor_indicador']:.1f} casos)"
-                            )
-                        else:
-                            desc_resultado = (
-                                f"indicador acima da mediana "
-                                f"({it['valor_indicador']:.1f})"
-                            )
-                        anomalias.append({
-                            "subfuncao": subfuncao,
-                            "tipo_indicador": tipo,
-                            "ano": it["ano"],
-                            "tipo_anomalia": "baixo_gasto_alto_resultado",
-                            "descricao": (
-                                f"Subfunção {subfuncao} ({subfuncao_nome}) "
-                                f"em {it['ano']}: gasto abaixo da mediana "
-                                f"(R$ {it['valor_despesa']:,.2f}) com "
-                                f"{desc_resultado} — possível eficiência"
-                            ),
-                        })
+                        tipo_anomalia, rotulo = "baixo_gasto_alto_resultado", "possível eficiência"
+                    else:
+                        continue
+                    anomalias.append({
+                        "subfuncao": subfuncao,
+                        "tipo_indicador": tipo,
+                        "ano": it["ano"],
+                        "tipo_anomalia": tipo_anomalia,
+                        "valor_despesa": it["valor_despesa"],
+                        "mediana_despesa": med_desp,
+                        "valor_indicador": it["valor_indicador"],
+                        "mediana_indicador": med_ind,
+                        "descricao": _descricao_anomalia(
+                            subfuncao, subfuncao_nome, tipo, it["ano"],
+                            it["valor_despesa"], med_desp,
+                            it["valor_indicador"], med_ind, rotulo,
+                        ),
+                    })
 
             self.working_memory["anomalias"] = anomalias
             logger.info(

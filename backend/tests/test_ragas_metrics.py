@@ -43,10 +43,7 @@ RESULTADO = {
 
 @pytest.fixture
 def judge_key(monkeypatch):
-    monkeypatch.setenv("RAGAS_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "chave-de-teste")
-    for var in ("RAGAS_MODEL", "RAGAS_EMBEDDING_MODEL"):
-        monkeypatch.delenv(var, raising=False)
 
 
 # Chunks que `build_contexts` sempre emite, vindos do enquadramento que o
@@ -182,13 +179,17 @@ class TestSkoposRagasLLM:
         with patch("core.llm_client.generate", return_value=resposta):
             assert rm.SkoposRagasLLM().generate("p", _Veredito).verdict == 1
 
-    def test_repassa_provider_caller_e_modelo(self):
+    def test_repassa_caller_e_modelo(self):
         llm = rm.SkoposRagasLLM(model="modelo-x", caller="ragas-star")
         with patch("core.llm_client.generate", return_value='{"verdict": 1, "reason": "r"}') as mock:
             llm.generate("p", _Veredito)
         assert mock.call_args.kwargs["caller"] == "ragas-star"
-        assert mock.call_args.kwargs["provider"] is llm.provider
         assert mock.call_args.args[1] == "modelo-x"
+
+    def test_por_padrao_chama_o_juiz_fixo(self):
+        with patch("core.llm_client.generate", return_value='{"verdict": 1, "reason": "r"}') as mock:
+            rm.SkoposRagasLLM().generate("p", _Veredito)
+        assert mock.call_args.args[1] == rm.MODELO_JUIZ
 
     def test_temperatura_zero_para_o_juiz(self):
         with patch("core.llm_client.generate", return_value='{"verdict": 1, "reason": "r"}') as mock:
@@ -377,46 +378,20 @@ class TestCleanScore:
         assert rm._clean_score(0.123456789) == 0.1235
 
 
-class TestConfiguracaoDeEmbeddingsPorEnv:
-    """A escolha do modelo vive no `.env`, não no código — as constantes
-    do módulo são só o último recurso para o sistema subir sem config."""
+class TestEmbeddingsFixos:
+    """O modelo de embeddings é fixo no código, como o juiz."""
 
-    def test_modelo_vem_do_env(self, monkeypatch):
+    def test_env_antigo_nao_muda_o_modelo(self, monkeypatch):
         monkeypatch.setenv("RAGAS_EMBEDDING_MODEL", "text-embedding-3-small")
-        assert rm.get_embedding_model() == "text-embedding-3-small"
-
-    def test_sem_env_usa_o_default_do_modulo(self, monkeypatch):
-        monkeypatch.delenv("RAGAS_EMBEDDING_MODEL", raising=False)
-        assert rm.get_embedding_model() == rm.DEFAULT_EMBEDDING_MODEL
-
-    def test_cadeia_de_fallback_vem_do_env(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_EMBEDDING_FALLBACKS", "modelo-a, modelo-b ,, modelo-c")
-        assert rm.get_embedding_fallbacks() == ("modelo-a", "modelo-b", "modelo-c")
-
-    def test_cadeia_vazia_desliga_o_fallback(self, monkeypatch):
-        """Garante que a avaliação use o modelo escolhido ou falhe, em vez
-        de degradar silenciosamente para outro."""
         monkeypatch.setenv("RAGAS_EMBEDDING_FALLBACKS", "")
-        assert rm.get_embedding_fallbacks() == ()
-        monkeypatch.setenv("RAGAS_EMBEDDING_MODEL", "so-esse")
-        assert rm.SkoposRagasEmbeddings()._candidates() == ["so-esse"]
-
-    def test_sem_env_usa_a_cadeia_default(self, monkeypatch):
-        monkeypatch.delenv("RAGAS_EMBEDDING_FALLBACKS", raising=False)
+        assert rm.get_embedding_model() == rm.DEFAULT_EMBEDDING_MODEL
         assert rm.get_embedding_fallbacks() == rm.DEFAULT_EMBEDDING_FALLBACKS
+        assert rm.SkoposRagasEmbeddings().model == rm.DEFAULT_EMBEDDING_MODEL
 
-    def test_candidatos_saem_do_env_em_ordem(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_EMBEDDING_MODEL", "principal")
-        monkeypatch.setenv("RAGAS_EMBEDDING_FALLBACKS", "reserva-1,reserva-2")
+    def test_candidatos_em_ordem_de_qualidade(self):
         assert rm.SkoposRagasEmbeddings()._candidates() == [
-            "principal", "reserva-1", "reserva-2",
+            "text-embedding-3-large", "text-embedding-3-small", "text-embedding-ada-002",
         ]
-
-    def test_modelo_nao_congela_no_import(self, monkeypatch):
-        """O `.env` costuma ser carregado depois do import do módulo, então
-        o default do dataclass precisa ser avaliado na instanciação."""
-        monkeypatch.setenv("RAGAS_EMBEDDING_MODEL", "definido-depois-do-import")
-        assert rm.SkoposRagasEmbeddings().model == "definido-depois-do-import"
 
     def test_default_prioriza_qualidade_multilingue(self):
         """answer_relevancy compara textos curtos em português; o ada-002
@@ -427,24 +402,27 @@ class TestConfiguracaoDeEmbeddingsPorEnv:
         assert rm.DEFAULT_EMBEDDING_FALLBACKS[-1] == "text-embedding-ada-002"
 
 
-class TestJudgeConfig:
-    def test_default_e_openai_independente_de_llm_provider(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "deepseek")
-        monkeypatch.delenv("RAGAS_PROVIDER", raising=False)
-        assert rm.get_judge_provider().name == "openai"
+class TestJuizFixo:
+    """O juiz é fixo e diferente do gerador, para evitar o viés de
+    autopreferência de um modelo avaliando o próprio texto."""
 
-    def test_provider_desconhecido_cai_no_default(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_PROVIDER", "provedor-que-nao-existe")
-        assert rm.get_judge_provider().name == rm.DEFAULT_JUDGE_PROVIDER
+    def test_juiz_e_o_gpt_5_mini(self):
+        assert rm.MODELO_JUIZ == "gpt-5-mini"
+        assert rm.get_judge_model() == "gpt-5-mini"
 
-    def test_modelo_e_embeddings_sobrescritos_por_env(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_MODEL", "gpt-4o-mini")
-        monkeypatch.setenv("RAGAS_EMBEDDING_MODEL", "text-embedding-3-large")
-        assert rm.get_judge_model() == "gpt-4o-mini"
-        assert rm.get_embedding_model() == "text-embedding-3-large"
+    def test_juiz_diferente_do_modelo_das_analises(self):
+        from core import llm_client
+        assert rm.MODELO_JUIZ != llm_client.MODELO_ANALISE
+
+    def test_variaveis_antigas_nao_mudam_o_juiz(self, monkeypatch):
+        for var, valor in (
+            ("RAGAS_MODEL", "gpt-4o-mini"), ("RAGAS_PROVIDER", "deepseek"),
+            ("LLM_PROVIDER", "deepseek"), ("OPENAI_MODEL", "gpt-4o"),
+        ):
+            monkeypatch.setenv(var, valor)
+        assert rm.get_judge_model() == "gpt-5-mini"
 
     def test_sem_api_key_reporta_o_motivo(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_PROVIDER", "openai")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         available, reason = rm.is_available()
         assert available is False
@@ -476,7 +454,6 @@ class _MetricaFalsa:
 
 class TestEvaluateArchitecture:
     def test_sem_api_key_nao_estoura_e_diz_por_que(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_PROVIDER", "openai")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         payload = asyncio.run(rm.evaluate_architecture(RESULTADO, "pergunta"))
         assert payload["available"] is False
@@ -528,8 +505,7 @@ class TestEvaluateArchitecture:
         assert payload["metrics"]["faithfulness"]["score"] is None
         assert json.dumps(payload)
 
-    def test_payload_registra_o_juiz_usado(self, judge_key, monkeypatch):
-        monkeypatch.setenv("RAGAS_MODEL", "gpt-4o-mini")
+    def test_payload_registra_o_juiz_usado(self, judge_key):
         with patch.object(rm, "build_metrics", return_value=([
             ("faithfulness", _MetricaFalsa(value=1.0), rm.ARGS_COM_CONTEXTO),
         ], _EmbeddingsFalsa())):
@@ -537,7 +513,7 @@ class TestEvaluateArchitecture:
 
         assert payload["framework"] == "ragas"
         assert payload["judge"]["provider"] == "openai"
-        assert payload["judge"]["model"] == "gpt-4o-mini"
+        assert payload["judge"]["model"] == "gpt-5-mini"
         assert payload["sample"]["n_contexts_total"] == 4 + N_ENQUADRAMENTO
 
 
@@ -571,10 +547,9 @@ class TestBuildMetrics:
         metrica = next(m for nome, m, _ in metricas if nome == "context_relevance")
         assert isinstance(metrica, ContextRelevance)
 
-    def test_todas_usam_o_mesmo_juiz_configurado(self, judge_key, monkeypatch):
-        monkeypatch.setenv("RAGAS_MODEL", "gpt-4o-mini")
+    def test_todas_usam_o_juiz_fixo(self, judge_key):
         metricas, _ = rm.build_metrics(caller="ragas-star")
         for _, metric, _ in metricas:
             assert isinstance(metric.llm, rm.SkoposRagasLLM)
-            assert metric.llm.model == "gpt-4o-mini"
+            assert metric.llm.model == "gpt-5-mini"
             assert metric.llm.caller == "ragas-star"

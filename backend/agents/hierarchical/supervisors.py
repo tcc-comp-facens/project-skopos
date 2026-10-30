@@ -28,6 +28,12 @@ diretos de `CoordenadorGeral` (que colhe o retorno de cada supervisor e
 repassa o que for necessário ao próximo) — sem estado intermediário de
 "dado de par".
 
+SupervisorOrcamento e SupervisorSaude recebem diretamente as entregas dos
+agentes de dados e, por isso, as revisam antes de repassá-las ao
+coordenador: cada um faz uma chamada ao LLM sobre o seu ramo e contesta por
+reenvio os valores sinalizados (ver agents/revisao_entregas.py). A mesma
+regra vale na estrela, onde o orquestrador revisa tudo numa chamada.
+
 Cada supervisor executa de fato pelo ciclo CoALA: `run()` configura a
 working memory e delega a `run_coala_cycle()`, que percorre as
 macro-ações registradas em `procedural_memory` na ordem proposta por
@@ -45,6 +51,9 @@ import uuid
 from queue import Queue
 from typing import Any, TYPE_CHECKING
 
+from agents import planejamento, revisao_entregas
+from agents.analytical import redacao_ramos
+from core.contextos_avaliacao import linhas_series
 from agents.base import ActionFailure, AgenteCoALA
 from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
 from agents.domain.agente_covid import AgenteCOVID
@@ -189,6 +198,7 @@ class SupervisorOrcamento(AgenteCoALA):
         self.neo4j_client = neo4j_client
         self.procedural_memory = {
             "consultar_orcamento": [self._act_consultar_orcamento],
+            "revisar_entregas": [self._act_revisar_entregas],
             "agregar_resultados": [self._act_agregar_resultados],
         }
         self._collectors: list[MetricsCollector] = []
@@ -227,8 +237,48 @@ class SupervisorOrcamento(AgenteCoALA):
         )
 
         if actions:
+            actions.append({"goal": "revisar_entregas"})
             actions.append({"goal": "agregar_resultados"})
         return actions
+
+    def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
+        """Planeja com o LLM quais subfunções consultar.
+
+        A proposta são os candidatos `consultar_orcamento`. O objetivo é o
+        subobjetivo recebido do coordenador (ou, sem ele, a análise
+        inteira). A revisão e a agregação vêm depois da coleta.
+        """
+        plano = self._deliberar(
+            planejamento.planejar,
+            agent_id=self.agent_id,
+            papel="o supervisor de orçamento, que coordena um agente de despesas por subfunção",
+            objetivo=self._objetivo(),
+            candidatos=planejamento.catalogo_orcamento(_ORCAMENTO_SUBFUNCOES),
+            proposta=[
+                f"orcamento:{c['subfuncao_codigo']}" for c in candidates
+                if c["goal"] == "consultar_orcamento"
+            ],
+            use_llm=self.working_memory.get("use_llm", True),
+        )
+        self.working_memory["plano"] = plano
+        nomes = dict(_ORCAMENTO_SUBFUNCOES)
+        selecionadas: list[dict] = []
+        for e in plano["escolhidos"]:
+            codigo = int(e.split(":", 1)[1])
+            selecionadas.append({
+                "goal": "consultar_orcamento", "subfuncao_codigo": codigo, "subfuncao_nome": nomes[codigo]
+            })
+        if selecionadas:
+            selecionadas.append({"goal": "revisar_entregas"})
+            selecionadas.append({"goal": "agregar_resultados"})
+        return [dict(c, status="pending") for c in selecionadas]
+
+    def _objetivo(self) -> str:
+        wm = self.working_memory
+        return planejamento.objetivo_do_ramo(
+            wm.get("objetivo"), wm.get("intent_summary"), wm.get("health_params"),
+            wm.get("date_from"), wm.get("date_to"),
+        )
 
     # -- Ações ------------------------------------------------------------
 
@@ -248,10 +298,14 @@ class SupervisorOrcamento(AgenteCoALA):
         mc.start()
         try:
             log_start = len(self.neo4j_client.query_log)
-            result = agent.query(
+            result = self._delegar(
+                "orcamento_subfuncao", agent_id_str,
+                lambda: agent.query(
                 analysis_id, date_from, date_to,
                 intent_summary=intent_summary,
                 use_llm=self.working_memory.get("use_llm", True),
+            ),
+                pedido={"subfuncao": codigo, "periodo": [date_from, date_to]}, natureza_resposta="dados", extrair=None,
             )
             mc.stop()
             queries = self.neo4j_client.query_log[log_start:]
@@ -261,6 +315,9 @@ class SupervisorOrcamento(AgenteCoALA):
                 "queries": queries,
             })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
+            revisao_entregas.registrar_entrega(
+                self.working_memory, "orcamento_subfuncao", agent, result, campos=("despesas",)
+            )
             self.working_memory.setdefault("tendencias", {})[codigo] = result.get("tendencia", {})
             self.working_memory.setdefault("variacao_anual", {})[codigo] = result.get(
                 "variacao_anual", []
@@ -277,6 +334,22 @@ class SupervisorOrcamento(AgenteCoALA):
             )
             self._collectors.append(mc)
             raise ActionFailure(action, str(exc)) from exc
+
+    def _act_revisar_entregas(self, action: dict) -> None:
+        """Ação interna (reasoning): revisa as despesas entregues pelo ramo.
+
+        Uma chamada ao LLM sobre as despesas dos agentes orçamentários
+        subordinados, com contestação por reenvio dos valores sinalizados
+        (`agents/revisao_entregas.py`). Falha aqui deixa os dados como
+        chegaram.
+        """
+        self._deliberar(
+            revisao_entregas.revisar_memoria_do_no,
+            self.working_memory,
+            revisor="supervisor_orcamento",
+            caller=f"{self.agent_id}:revisar_entregas",
+            no=self,
+        )
 
     def _act_agregar_resultados(self, action: dict) -> None:
         """Ação interna (reasoning): deduplica despesas e agrega o resultado."""
@@ -309,6 +382,7 @@ class SupervisorOrcamento(AgenteCoALA):
         health_params: list[str] | None = None,
         intent_summary: str | None = None,
         use_llm: bool = True,
+        objetivo: str | None = None,
     ) -> dict[str, Any]:
         """Executa o pipeline orçamentário via agentes subordinados.
 
@@ -316,6 +390,8 @@ class SupervisorOrcamento(AgenteCoALA):
             intent_summary: Resumo da intenção do usuário — insumo da
                 deliberação de dimensão (Fase 3) de cada
                 `AgenteOrcamentoSubfuncao` subordinado.
+            objetivo: Subobjetivo escrito pelo coordenador, que orienta o
+                planejamento deste supervisor.
 
         Returns:
             Dicionário com "despesas", "tendencias" (por subfuncaoCodigo)
@@ -331,7 +407,12 @@ class SupervisorOrcamento(AgenteCoALA):
             "use_llm": use_llm,
             "despesas": [],
             "tendencias": {},
+            "_entregas": [],
+            "revisao": revisao_entregas.resumo_vazio(["supervisor_orcamento"]),
+            "objetivo": objetivo,
+            "plano": None,
         })
+        self.deliberacao_ms = 0.0
 
         self.run_coala_cycle()
 
@@ -339,6 +420,8 @@ class SupervisorOrcamento(AgenteCoALA):
             self.working_memory.get("aggregated", {"despesas": [], "tendencias": {}})
         )
         result["agent_queries"] = self.working_memory.get("agent_queries", [])
+        result["revisao"] = self.working_memory["revisao"]
+        result["plano"] = self.working_memory.get("plano")
         return result
 
 
@@ -369,6 +452,7 @@ class SupervisorSaude(AgenteCoALA):
         self.semantic_memory = {"indicador_to_agent": INDICADOR_TO_AGENT}
         self.procedural_memory = {
             "consultar_saude": [self._act_consultar_saude],
+            "revisar_entregas": [self._act_revisar_entregas],
             "agregar_resultados": [self._act_agregar_resultados],
         }
         self._collectors: list[MetricsCollector] = []
@@ -412,8 +496,44 @@ class SupervisorSaude(AgenteCoALA):
             self.agent_id, len(keys), len(_SAUDE_AGENT_KEY_ORDER), health_params,
         )
 
+        if keys:
+            actions.append({"goal": "revisar_entregas"})
         actions.append({"goal": "agregar_resultados"})
         return actions
+
+    def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
+        """Planeja com o LLM quais agentes de saúde acionar.
+
+        A proposta são os candidatos `consultar_saude`. O objetivo é o
+        subobjetivo recebido do coordenador (ou, sem ele, a análise
+        inteira). A revisão e a agregação vêm depois da coleta.
+        """
+        plano = self._deliberar(
+            planejamento.planejar,
+            agent_id=self.agent_id,
+            papel="o supervisor de saúde, que coordena um agente por sistema de informação",
+            objetivo=self._objetivo(),
+            candidatos=planejamento.catalogo_saude(
+                _SAUDE_AGENT_KEY_ORDER, self.semantic_memory["indicador_to_agent"]
+            ),
+            proposta=[f"saude:{c['agent_key']}" for c in candidates if c["goal"] == "consultar_saude"],
+            use_llm=self.working_memory.get("use_llm", True),
+        )
+        self.working_memory["plano"] = plano
+        selecionadas = [
+            {"goal": "consultar_saude", "agent_key": e.split(":", 1)[1]} for e in plano["escolhidos"]
+        ]
+        if selecionadas:
+            selecionadas.append({"goal": "revisar_entregas"})
+        selecionadas.append({"goal": "agregar_resultados"})
+        return [dict(c, status="pending") for c in selecionadas]
+
+    def _objetivo(self) -> str:
+        wm = self.working_memory
+        return planejamento.objetivo_do_ramo(
+            wm.get("objetivo"), wm.get("intent_summary"), wm.get("health_params"),
+            wm.get("date_from"), wm.get("date_to"),
+        )
 
     # -- Ações ------------------------------------------------------------
 
@@ -455,7 +575,11 @@ class SupervisorSaude(AgenteCoALA):
         mc.start()
         try:
             log_start = len(self.neo4j_client.query_log)
-            result = agent.query(analysis_id, date_from, date_to, **query_kwargs)
+            result = self._delegar(
+                agent_type, agent_id_str,
+                lambda: agent.query(analysis_id, date_from, date_to, **query_kwargs),
+                pedido={"periodo": [date_from, date_to], "intencao": intent_summary},
+            )
             mc.stop()
             queries = self.neo4j_client.query_log[log_start:]
             self.working_memory.setdefault("agent_queries", []).append({
@@ -465,6 +589,9 @@ class SupervisorSaude(AgenteCoALA):
             })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))
+            revisao_entregas.registrar_entrega(
+                self.working_memory, agent_type, agent, result, campos=("indicadores",)
+            )
             logger.info(
                 "SupervisorSaude %s: %s returned %d despesas, %d indicadores",
                 self.agent_id,
@@ -481,6 +608,22 @@ class SupervisorSaude(AgenteCoALA):
             )
             self._collectors.append(mc)
             raise ActionFailure(action, str(exc)) from exc
+
+    def _act_revisar_entregas(self, action: dict) -> None:
+        """Ação interna (reasoning): revisa os indicadores entregues pelo ramo.
+
+        Uma chamada ao LLM sobre os indicadores dos agentes de saúde
+        subordinados, com contestação por reenvio dos valores sinalizados
+        (`agents/revisao_entregas.py`). Falha aqui deixa os dados como
+        chegaram.
+        """
+        self._deliberar(
+            revisao_entregas.revisar_memoria_do_no,
+            self.working_memory,
+            revisor="supervisor_saude",
+            caller=f"{self.agent_id}:revisar_entregas",
+            no=self,
+        )
 
     def _act_agregar_resultados(self, action: dict) -> None:
         """Ação interna (reasoning): deduplica despesas e agrega o resultado."""
@@ -511,6 +654,7 @@ class SupervisorSaude(AgenteCoALA):
         health_params: list[str] | None = None,
         intent_summary: str | None = None,
         use_llm: bool = True,
+        objetivo: str | None = None,
     ) -> dict[str, Any]:
         """Executa o pipeline de saúde via agentes subordinados.
 
@@ -527,6 +671,8 @@ class SupervisorSaude(AgenteCoALA):
             use_llm: Se False, a deliberação de dimensão dos agentes de
                 saúde pula direto para o comportamento determinístico —
                 nenhuma chamada LLM extra.
+            objetivo: Subobjetivo escrito pelo coordenador, que orienta o
+                planejamento deste supervisor.
 
         Returns:
             Dicionário com "despesas" (sempre vazia — nenhum agente de
@@ -542,7 +688,12 @@ class SupervisorSaude(AgenteCoALA):
             "use_llm": use_llm,
             "despesas": [],
             "indicadores": [],
+            "_entregas": [],
+            "revisao": revisao_entregas.resumo_vazio(["supervisor_saude"]),
+            "objetivo": objetivo,
+            "plano": None,
         })
+        self.deliberacao_ms = 0.0
 
         self.run_coala_cycle()
 
@@ -550,6 +701,8 @@ class SupervisorSaude(AgenteCoALA):
             self.working_memory.get("aggregated", {"despesas": [], "indicadores": []})
         )
         result["agent_queries"] = self.working_memory.get("agent_queries", [])
+        result["revisao"] = self.working_memory["revisao"]
+        result["plano"] = self.working_memory.get("plano")
         return result
 
 
@@ -577,6 +730,7 @@ class SupervisorAnalitico(AgenteCoALA):
             "analisar": [self._act_analisar],
             "capturar_wallclock": [self._act_capturar_wallclock],
             "priorizar_achados": [self._act_priorizar_achados],
+            "redigir_ramos": [self._act_redigir_ramos],
             "sintetizar_texto": [self._act_sintetizar_texto],
             "verificar_afirmacoes": [self._act_verificar_afirmacoes],
         }
@@ -608,6 +762,7 @@ class SupervisorAnalitico(AgenteCoALA):
             {"goal": "analisar"},
             {"goal": "capturar_wallclock"},
             {"goal": "priorizar_achados"},
+            {"goal": "redigir_ramos"},
             {"goal": "sintetizar_texto"},
         ]
         if self.working_memory.get("use_self_check", False) and self.working_memory.get(
@@ -700,8 +855,12 @@ class SupervisorAnalitico(AgenteCoALA):
             intent_summary = self.working_memory.get("intent_summary")
             use_llm = self.working_memory.get("use_llm", True)
 
-            achados_priorizados = agente_priorizacao.prioritize(
+            achados_priorizados = self._delegar(
+                "priorizacao", prior_id,
+                lambda: agente_priorizacao.prioritize(
                 correlacoes, anomalias, contexto_orcamentario, intent_summary, use_llm=use_llm
+            ),
+                pedido={"correlacoes": correlacoes, "anomalias": anomalias}, natureza_resposta="dados", extrair=None,
             )
             mc.stop()
             self.working_memory["achados_priorizados"] = achados_priorizados
@@ -718,6 +877,86 @@ class SupervisorAnalitico(AgenteCoALA):
                 self.agent_id, exc,
             )
             self._collectors.append(mc)
+
+    def _achados_para_redacao(self) -> tuple[list[dict], list[dict], str | None]:
+        """Correlações, anomalias e ênfase priorizadas (Etapa 3), se houver."""
+        achados = self.working_memory.get("achados_priorizados")
+        if achados:
+            return (
+                achados.get("correlacoes", self.working_memory.get("correlacoes", [])),
+                achados.get("anomalias", self.working_memory.get("anomalias", [])),
+                achados.get("descricao_angulo"),
+            )
+        return (
+            self.working_memory.get("correlacoes", []),
+            self.working_memory.get("anomalias", []),
+            None,
+        )
+
+    def _act_redigir_ramos(self, action: dict) -> None:
+        """Ação externa: delega a redação a um redator por sistema de saúde.
+
+        O supervisor reparte a redação como a árvore reparte a coleta: cada
+        redator subordinado vê só os achados do seu sistema
+        (`agents/analytical/redacao_ramos.particionar`), e a composição em
+        `_act_sintetizar_texto` junta os textos. Com um único sistema não há
+        o que repartir, e a redação segue única, igual à da estrela. Roda
+        depois de `capturar_wallclock`, como o sintetizador. Falha de um
+        ramo não derruba os demais: os achados dele vão crus para a
+        composição.
+        """
+        self.working_memory["redacao"] = {"modo": "unica", "ramos": [], "falhas": []}
+        if not self.working_memory.get("use_llm", True):
+            return
+        correlacoes, anomalias, _ = self._achados_para_redacao()
+        ramos = redacao_ramos.particionar(
+            correlacoes, anomalias,
+            self.working_memory.get("contexto_orcamentario", {}),
+            self.working_memory.get("data_coverage"),
+        )
+        self.working_memory["redacao"]["ramos"] = list(ramos)
+        if len(ramos) < 2:
+            return
+
+        textos, sem_texto = [], []
+        for sistema, ramo in ramos.items():
+            redator_id = f"hier-redator-{sistema}-{uuid.uuid4().hex[:8]}"
+            nome = redacao_ramos.NOME_SISTEMA.get(sistema, sistema)
+            mc = MetricsCollector(redator_id, "redator_ramo")
+            mc.start()
+            self._enviar(redator_id, "request", "dados", {
+                "sistema": sistema,
+                "correlacoes": len(ramo["correlacoes"]), "anomalias": len(ramo["anomalias"]),
+            })
+            try:
+                texto = TextSynthesizer(redator_id).generate_ramo(
+                    nome, ramo["correlacoes"], ramo["anomalias"],
+                    ramo["contexto_orcamentario"], ramo["data_coverage"],
+                    self.working_memory.get("date_from"), self.working_memory.get("date_to"),
+                    self.working_memory.get("intent_summary"),
+                    series=redacao_ramos.series_do_ramo(
+                        sistema, ramo,
+                        self.working_memory.get("despesas", []),
+                        self.working_memory.get("indicadores", []),
+                    ),
+                )
+                textos.append({"sistema": nome, "texto": texto})
+                self._enviar(redator_id, "inform", "texto", texto, recebida=True)
+            except Exception as exc:  # noqa: BLE001 — um ramo não derruba os demais
+                logger.warning(
+                    "SupervisorAnalitico %s: redator do ramo %s falhou — %s", self.agent_id, sistema, exc
+                )
+                sem_texto.append({"sistema": nome, **ramo})
+                self.working_memory["redacao"]["falhas"].append(sistema)
+                self._enviar(redator_id, "failure", "dados", str(exc), recebida=True)
+            finally:
+                mc.stop()
+                self._collectors.append(mc)
+
+        if textos:
+            self.working_memory["redacao"]["modo"] = "por_ramo"
+            self.working_memory["textos_parciais"] = textos
+            self.working_memory["_achados_sem_texto"] = sem_texto
 
     def _act_sintetizar_texto(self, action: dict) -> None:
         """Ação interna (reasoning): gera o texto via TextSynthesizer."""
@@ -747,21 +986,39 @@ class SupervisorAnalitico(AgenteCoALA):
                 anomalias = self.working_memory.get("anomalias", [])
                 enfase = None
             contexto_orcamentario = self.working_memory.get("contexto_orcamentario", {})
+            series = linhas_series(
+                self.working_memory.get("despesas", []),
+                self.working_memory.get("indicadores", []),
+            )
 
             adapter = StreamingAdapter(ws_queue, analysis_id, "hierarchical")
 
             if use_llm:
                 try:
-                    token_gen = sintetizador.generate_stream(
-                        correlacoes=correlacoes,
-                        anomalias=anomalias,
-                        contexto_orcamentario=contexto_orcamentario,
-                        data_coverage=data_coverage,
-                        enfase=enfase,
-                        date_from=date_from,
-                        date_to=date_to,
-                        pergunta_usuario=pergunta_usuario,
-                    )
+                    if self.working_memory.get("redacao", {}).get("modo") == "por_ramo":
+                        # Composição a partir dos textos dos redatores de ramo.
+                        token_gen = sintetizador.generate_stream_composicao(
+                            self.working_memory.get("textos_parciais", []),
+                            self.working_memory.get("_achados_sem_texto", []),
+                            data_coverage=data_coverage,
+                            enfase=enfase,
+                            date_from=date_from,
+                            date_to=date_to,
+                            pergunta_usuario=pergunta_usuario,
+                            series=series,
+                        )
+                    else:
+                        token_gen = sintetizador.generate_stream(
+                            correlacoes=correlacoes,
+                            anomalias=anomalias,
+                            contexto_orcamentario=contexto_orcamentario,
+                            data_coverage=data_coverage,
+                            enfase=enfase,
+                            date_from=date_from,
+                            date_to=date_to,
+                            pergunta_usuario=pergunta_usuario,
+                            series=series,
+                        )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
                         texto_analise = sintetizador.generate_fallback(
@@ -895,6 +1152,8 @@ class SupervisorAnalitico(AgenteCoALA):
         """
         self._collectors = []
         self._coala_leaf_end_time = None
+        for chave in ("redacao", "textos_parciais", "_achados_sem_texto"):
+            self.working_memory.pop(chave, None)
         self.update_working_memory({
             "analysis_id": analysis_id,
             "_ws_queue": ws_queue,
@@ -918,6 +1177,8 @@ class SupervisorAnalitico(AgenteCoALA):
             "data_coverage": self.working_memory.get("data_coverage", {}),
             "dados_cruzados": self.working_memory.get("dados_cruzados", []),
             "self_check": self.working_memory.get("self_check"),
+            "redacao": self.working_memory.get("redacao", {"modo": "unica", "ramos": [], "falhas": []}),
+            "textos_parciais": self.working_memory.get("textos_parciais", []),
         }
 
         self.working_memory["aggregated"] = result

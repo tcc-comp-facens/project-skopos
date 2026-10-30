@@ -45,13 +45,14 @@ número de chamadas com a quantidade de chunks, então não há teto: ver
 
 Juiz fixo
 ---------
-O provedor do juiz é configurado à parte do pipeline (`RAGAS_PROVIDER`,
-default `openai`), não por `LLM_PROVIDER`. Trocar o provedor do sistema
-avaliado não pode trocar o instrumento de medida, ou scores de execuções
-diferentes deixam de ser comparáveis. `answer_relevancy` também depende
-de embeddings, que o DeepSeek não oferece.
+O juiz é `MODELO_JUIZ` (`gpt-5-mini`), fixo no código e diferente do modelo
+que gera os textos (`llm_client.MODELO_ANALISE`, `gpt-5.6-luna`). Um modelo
+avaliando o próprio texto tende a favorecê-lo (viés de autopreferência,
+Zheng et al., 2023; Panickssery et al., 2024), então gerador e juiz são
+modelos distintos. Fixo também porque o instrumento de medida não pode
+mudar entre execuções, ou os scores deixam de ser comparáveis.
 
-As chamadas passam por `core.llm_client.generate(provider=...)` em vez de
+As chamadas passam por `core.llm_client.generate(model=MODELO_JUIZ)` em vez de
 a ragas abrir seu próprio cliente — assim a avaliação continua coberta
 pela contabilização de tokens (`TokenBucket`), pelo retry de 429 e pelo
 tratamento de modelos de raciocínio da OpenAI (que exigem
@@ -85,16 +86,20 @@ from ragas.metrics.collections import (  # noqa: E402
 )
 
 from core import llm_client  # noqa: E402
-from core.llm_client import ProviderConfig  # noqa: E402
+from core.contextos_avaliacao import (  # noqa: E402,F401 — reexportados
+    SUBFUNCAO_NOMES,
+    _coverage_contexts,
+    _framing_contexts,
+    _subfuncao_label,
+    build_contexts,
+)
+# Juiz da avaliação: fixo e diferente do gerador (ver "Juiz fixo" acima).
+MODELO_JUIZ = "gpt-5-mini"
+PROVEDOR_JUIZ = "openai"
 
-DEFAULT_JUDGE_PROVIDER = "openai"
-
-# Estes são último recurso, não a fonte da decisão: a escolha do modelo de
-# embeddings vive no `.env` (`RAGAS_EMBEDDING_MODEL` /
-# `RAGAS_EMBEDDING_FALLBACKS`). Ficam aqui só para o sistema subir sem
-# configuração nenhuma.
+# Modelo de embeddings da `answer_relevancy`, fixo como o juiz.
 #
-# O default é o `3-large` porque `answer_relevancy` compara textos curtos
+# É o `3-large` porque `answer_relevancy` compara textos curtos
 # em português, e é aí que os modelos se separam: no MIRACL (multilíngue)
 # são 54,9% contra 44,0% do `3-small` e 31,4% do `ada-002`. O custo não
 # desempata — são ~8 textos curtos por análise, na casa de US$ 0,00005.
@@ -110,17 +115,6 @@ DEFAULT_EMBEDDING_FALLBACKS = ("text-embedding-3-small", "text-embedding-ada-002
 # onde o modelo aceita o parâmetro — ver llm_client._completion_params.
 JUDGE_TEMPERATURE = 0.0
 
-# Nomes das subfunções orçamentárias, para os chunks de contexto ficarem
-# legíveis para o juiz (que só vê texto, não o dado estruturado).
-SUBFUNCAO_NOMES: dict[int, str] = {
-    122: "Administração Geral",
-    301: "Atenção Básica",
-    302: "Assistência Hospitalar e Ambulatorial",
-    303: "Suporte Profilático e Terapêutico",
-    304: "Vigilância Sanitária",
-    305: "Vigilância Epidemiológica",
-    306: "Alimentação e Nutrição",
-}
 
 
 # =========================================================================
@@ -128,44 +122,19 @@ SUBFUNCAO_NOMES: dict[int, str] = {
 # =========================================================================
 
 
-def get_judge_provider() -> ProviderConfig:
-    """Provedor do juiz, por `RAGAS_PROVIDER` (default: openai).
-
-    Deliberadamente independente de `LLM_PROVIDER`: o instrumento de
-    medida não deve mudar quando o sistema medido muda.
-    """
-    raw = os.environ.get("RAGAS_PROVIDER", "").strip().lower() or DEFAULT_JUDGE_PROVIDER
-    provider = llm_client.PROVIDERS.get(raw)
-    if provider is None:
-        logger.warning(
-            "RAGAS_PROVIDER=%r desconhecido (opções: %s) — usando %s",
-            raw, ", ".join(sorted(llm_client.PROVIDERS)), DEFAULT_JUDGE_PROVIDER,
-        )
-        provider = llm_client.PROVIDERS[DEFAULT_JUDGE_PROVIDER]
-    return provider
-
-
-def get_judge_model(provider: ProviderConfig | None = None) -> str:
-    provider = provider or get_judge_provider()
-    return os.environ.get("RAGAS_MODEL", "").strip() or llm_client.resolve_model(provider)
+def get_judge_model() -> str:
+    """Modelo do juiz (fixo)."""
+    return MODELO_JUIZ
 
 
 def get_embedding_model() -> str:
-    """Modelo de embeddings, por `RAGAS_EMBEDDING_MODEL`."""
-    return os.environ.get("RAGAS_EMBEDDING_MODEL", "").strip() or DEFAULT_EMBEDDING_MODEL
+    """Modelo de embeddings (fixo)."""
+    return DEFAULT_EMBEDDING_MODEL
 
 
 def get_embedding_fallbacks() -> tuple[str, ...]:
-    """Cadeia de fallback, por `RAGAS_EMBEDDING_FALLBACKS` (separada por vírgula).
-
-    Uma lista vazia é aceita e desliga o fallback — quem quiser garantir
-    que a avaliação use um modelo específico ou falhe (em vez de degradar
-    silenciosamente para outro) configura `RAGAS_EMBEDDING_FALLBACKS=`.
-    """
-    raw = os.environ.get("RAGAS_EMBEDDING_FALLBACKS")
-    if raw is None:
-        return DEFAULT_EMBEDDING_FALLBACKS
-    return tuple(nome.strip() for nome in raw.split(",") if nome.strip())
+    """Cadeia de alternativas de embeddings (fixa)."""
+    return DEFAULT_EMBEDDING_FALLBACKS
 
 
 def is_available() -> tuple[bool, str | None]:
@@ -175,12 +144,8 @@ def is_available() -> tuple[bool, str | None]:
     indistinguível de um score 0 legítimo, e é justamente o tipo de
     ambiguidade que as métricas antigas tinham.
     """
-    provider = get_judge_provider()
-    if not llm_client.has_api_key(provider):
-        return False, (
-            f"{provider.api_key_env} não configurada "
-            f"(RAGAS_PROVIDER={provider.name})"
-        )
+    if not llm_client.has_api_key():
+        return False, f"{llm_client.API_KEY_ENV} não configurada"
     return True, None
 
 # =========================================================================
@@ -195,9 +160,7 @@ class SkoposRagasLLM(InstructorBaseRagasLLM):
     A interface que a ragas pede é "devolva uma instância deste modelo
     Pydantic"; a ponte é anexar o JSON Schema do modelo ao prompt e
     validar a resposta. `llm_client.generate` fala texto puro, não
-    structured outputs — o que também mantém o adaptador funcionando em
-    qualquer provedor compatível com o SDK, não só nos que suportam
-    tool calling.
+    structured outputs, então o adaptador não depende de tool calling.
 
     Alternativa descartada: montar um `instructor`/`ChatOpenAI` próprio.
     Ele abriria um cliente fora do `TokenBucket` (o custo da avaliação
@@ -205,8 +168,7 @@ class SkoposRagasLLM(InstructorBaseRagasLLM):
     para modelos que a rejeitam.
     """
 
-    provider: ProviderConfig = field(default_factory=llm_client.get_provider)
-    model: str = ""
+    model: str = MODELO_JUIZ
     caller: str = "ragas"
 
     def generate(self, prompt: str, response_model: t.Type[t.Any]) -> t.Any:
@@ -219,9 +181,8 @@ class SkoposRagasLLM(InstructorBaseRagasLLM):
         )
         raw = llm_client.generate(
             full_prompt,
-            self.model or None,
+            self.model or MODELO_JUIZ,
             caller=self.caller,
-            provider=self.provider,
             temperature=JUDGE_TEMPERATURE,
         )
         if not raw:
@@ -268,7 +229,7 @@ def _is_model_access_error(exc: Exception) -> bool:
 
 @dataclass
 class SkoposRagasEmbeddings(BaseRagasEmbedding):
-    """Embeddings pelo endpoint do provedor do juiz.
+    """Embeddings pelo endpoint da OpenAI.
 
     Rota diferente da API (`embeddings`, não `chat.completions`), então
     não passa por `generate()` — daí o cliente ser montado à parte e a
@@ -280,7 +241,7 @@ class SkoposRagasEmbeddings(BaseRagasEmbedding):
     diferentes produzem esse mesmo erro, e a classe cobre as duas:
 
     1. O modelo não está liberado no projeto — daí a cadeia de fallback
-       (`RAGAS_EMBEDDING_FALLBACKS`), tentada em ordem de qualidade
+       (`DEFAULT_EMBEDDING_FALLBACKS`), tentada em ordem de qualidade
        decrescente.
     2. O cabeçalho `OpenAI-Project`, que o SDK injeta a partir do projeto
        da chave, dispara uma checagem que falha em algumas configurações
@@ -293,11 +254,7 @@ class SkoposRagasEmbeddings(BaseRagasEmbedding):
     usado um modelo que apenas pediu.
     """
 
-    provider: ProviderConfig = field(default_factory=llm_client.get_provider)
-    # default_factory, não valor fixo: o `.env` costuma ser carregado
-    # depois do import deste módulo, e um default avaliado na definição da
-    # classe congelaria o valor anterior.
-    model: str = field(default_factory=get_embedding_model)
+    model: str = DEFAULT_EMBEDDING_MODEL
     resolved_model: str | None = field(default=None, init=False)
     # Se o contorno do cabeçalho de projeto foi necessário (ver _create).
     bypass_project_header: bool = field(default=False, init=False)
@@ -312,7 +269,7 @@ class SkoposRagasEmbeddings(BaseRagasEmbedding):
         return vistos
 
     def _create(self, model: str, text: str, bypass_header: bool, **kwargs: t.Any):
-        client = llm_client.build_client(self.provider)
+        client = llm_client.build_client()
         if bypass_header:
             # O SDK injeta `OpenAI-Project` a partir do projeto da chave, e
             # esse cabeçalho dispara uma checagem de acesso por projeto que
@@ -355,8 +312,7 @@ class SkoposRagasEmbeddings(BaseRagasEmbedding):
                             "nenhum modelo de embeddings acessível neste projeto "
                             f"(recusados: {', '.join(recusados)}). Habilite um em "
                             "platform.openai.com > Project > Limits (permissões de "
-                            "modelo) ou configure RAGAS_EMBEDDING_MODEL com um "
-                            "modelo permitido."
+                            "modelo)."
                         ) from exc
                     raise
                 logger.warning(
@@ -395,129 +351,6 @@ class SkoposRagasEmbeddings(BaseRagasEmbedding):
 # =========================================================================
 # Montagem da amostra
 # =========================================================================
-
-
-def _subfuncao_label(codigo: t.Any) -> str:
-    try:
-        nome = SUBFUNCAO_NOMES.get(int(codigo))
-    except (TypeError, ValueError):
-        nome = None
-    return f"{codigo} ({nome})" if nome else str(codigo)
-
-
-def build_contexts(
-    result: dict[str, t.Any],
-    date_from: int | None = None,
-    date_to: int | None = None,
-) -> list[str]:
-    """Um chunk de texto por informação entregue ao sintetizador.
-
-    O conjunto tem que espelhar **tudo** que o gerador recebeu em
-    `sintetizador._build_prompt` — não só os achados numéricos. Uma versão
-    anterior mandava ao juiz só subfunção/indicador/coeficiente e omitia a
-    `leitura` da correlação, o `n_pontos` e a `descricao` da anomalia (que
-    carrega o gasto em R$ e o valor do indicador). O texto citava esses
-    dados corretamente e era reprovado, porque a evidência simplesmente
-    não estava no contexto do juiz — a fidelidade media a lacuna entre os
-    dois contextos, não a fidelidade do texto.
-
-    Pelo mesmo motivo entram aqui as afirmações que o prompt **injeta** no
-    gerador (período, pandemia, tradução das subfunções, lacunas de dados):
-    o prompt manda repeti-las, então elas fazem parte do que sustenta a
-    geração. Excluí-las garantiria infidelidade artificial.
-
-    A ordem é estável para que a seleção sob teto seja determinística e as
-    duas topologias sejam tratadas do mesmo jeito.
-    """
-    contexts: list[str] = []
-
-    if date_from is not None and date_to is not None:
-        contexts.append(
-            f"Período analisado: a análise cobre os anos de {date_from} a {date_to}."
-        )
-
-    for c in result.get("correlacoes") or []:
-        chunk = (
-            f"Correlação: subfunção {_subfuncao_label(c.get('subfuncao'))} × "
-            f"{c.get('tipo_indicador', '?')} — coeficiente de Spearman "
-            f"{c.get('spearman', '?')}, classificação {c.get('classificacao', '?')}, "
-            f"calculada sobre {c.get('n_pontos', '?')} pontos."
-        )
-        # `leitura` não existe no ramo n<2 de agents/analytical/analitico.py.
-        leitura = c.get("leitura")
-        if leitura:
-            chunk += f" Leitura do sinal: {leitura}."
-        contexts.append(chunk)
-
-    for a in result.get("anomalias") or []:
-        chunk = (
-            f"Anomalia em {a.get('ano', '?')}: subfunção "
-            f"{_subfuncao_label(a.get('subfuncao'))} × {a.get('tipo_indicador', '?')} "
-            f"— tipo {a.get('tipo_anomalia', '?')}."
-        )
-        # A descrição traz o valor gasto em R$ e o valor do indicador; sem
-        # ela nenhuma cifra citada no texto é verificável.
-        descricao = a.get("descricao")
-        if descricao:
-            chunk += f" {descricao}."
-        contexts.append(chunk)
-
-    for subfuncao, dados in (result.get("contexto_orcamentario") or {}).items():
-        if not isinstance(dados, dict):
-            continue
-        contexts.append(
-            f"Contexto orçamentário da subfunção {_subfuncao_label(subfuncao)}: "
-            f"tendência {dados.get('tendencia', '?')}, variação média "
-            f"{dados.get('variacao_media_percentual', '?')}%."
-        )
-
-    contexts.extend(_coverage_contexts(result.get("data_coverage") or {}))
-    contexts.extend(_framing_contexts())
-
-    return contexts
-
-
-def _coverage_contexts(coverage: dict[str, t.Any]) -> list[str]:
-    """Chunks sobre completude e lacunas dos dados.
-
-    O prompt instrui o gerador a "mencionar explicitamente quais dados
-    estão faltando e como isso limita as conclusões", então o texto vai
-    falar de lacunas — que precisam estar no contexto do juiz.
-    """
-    if not isinstance(coverage, dict):
-        return []
-
-    contexts: list[str] = []
-    summary = coverage.get("summary") or {}
-    if summary:
-        contexts.append(
-            "Cobertura dos dados: completude das despesas "
-            f"{summary.get('despesas_completeness', 1.0):.0%}, completude dos "
-            f"indicadores {summary.get('indicadores_completeness', 1.0):.0%}."
-        )
-    for gap in coverage.get("gaps") or []:
-        descricao = (gap or {}).get("description")
-        if descricao:
-            contexts.append(f"Lacuna de dados identificada: {descricao}.")
-    return contexts
-
-
-def _framing_contexts() -> list[str]:
-    """Afirmações que o prompt do sintetizador fornece ao gerador.
-
-    Importadas de `agents.analytical.sintetizador` em vez de reescritas
-    aqui: se as duas cópias divergirem, o texto passa a ser reprovado por
-    afirmar exatamente o que o prompt mandou afirmar.
-    """
-    from agents.analytical.sintetizador import CONTEXTO_PANDEMIA, TRADUCAO_SUBFUNCOES
-
-    contexts = [f"Contexto fornecido ao gerador: {CONTEXTO_PANDEMIA}"]
-    contexts.extend(
-        f"Equivalência informada ao gerador: a subfunção {codigo} corresponde a "
-        f"{traducao}."
-        for codigo, traducao in sorted(TRADUCAO_SUBFUNCOES.items())
-    )
-    return contexts
 
 
 def build_sample(
@@ -607,10 +440,8 @@ def build_metrics(
     definição do paper (uma proporção, não uma AP ranqueada) e com custo
     fixo de 2 chamadas, em vez de 1 por chunk.
     """
-    provider = get_judge_provider()
-    model = get_judge_model(provider)
-    llm = SkoposRagasLLM(provider=provider, model=model, caller=caller)
-    embeddings = SkoposRagasEmbeddings(provider=provider, model=get_embedding_model())
+    llm = SkoposRagasLLM(model=MODELO_JUIZ, caller=caller)
+    embeddings = SkoposRagasEmbeddings(model=DEFAULT_EMBEDDING_MODEL)
 
     metrics = [
         ("faithfulness", Faithfulness(llm=llm), ARGS_COM_CONTEXTO),
@@ -641,7 +472,6 @@ async def evaluate_architecture(
     de um score 0 ambíguo.
     """
     available, reason = is_available()
-    provider = get_judge_provider()
 
     sample, info = build_sample(
         result, user_input, date_from=date_from, date_to=date_to
@@ -651,9 +481,9 @@ async def evaluate_architecture(
         "framework": "ragas",
         "version": _ragas_version(),
         "judge": {
-            "provider": provider.name,
-            "model": get_judge_model(provider),
-            "embedding_model": get_embedding_model(),
+            "provider": PROVEDOR_JUIZ,
+            "model": MODELO_JUIZ,
+            "embedding_model": DEFAULT_EMBEDDING_MODEL,
         },
         "sample": info,
         "metrics": {},

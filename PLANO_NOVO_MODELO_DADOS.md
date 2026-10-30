@@ -1,3 +1,4 @@
+
 # Plano — Novo Modelo de Dados e ETL (Skopos)
 
 > Documento gerado em 2026-08-02 a partir de uma sessão de planejamento (Claude Code). Registra o raciocínio e as decisões sobre a migração da fonte de dados do projeto — de PySUS/FTP DataSUS + planilhas FNS para arquivos locais já extraídos em `Dados/` — e o redesenho do modelo de entidades/relacionamentos no Neo4j. **Nenhum código foi alterado nesta sessão** — é só planejamento. Destinado a orientar quem for implementar o ETL/banco e, em paralelo, a migração da arquitetura de agentes de BDI para CoALA.
@@ -106,7 +107,7 @@ Extração TabNet (DATASUS) já filtrada para Sorocaba/SP (IBGE 355220), cobrind
 - **`FonteRecurso {nome, tipoRecurso}`** — `tipoRecurso` ∈ `proprio | federal | estadual | credito | outros` (mapa em §2.1). **Este é o campo que resolve a limitação documentada do dado antigo** — agora dá para separar recurso próprio municipal de repasse.
 - **`Subfuncao {codigo, nome}`**, **`ProgramaGoverno {nome}`**, **`Acao {codigo, nome}`**, **`UnidadeOrcamentaria {nome}`** — nós de dimensão.
 - **`DespesaAnual`** (agregado materializado, calculado a partir de `Empenho` no fim do ETL) — mesma granularidade do antigo `DespesaSIOPS` (subfuncao×ano), mas a partir de execução real. Breakdown por `tipoRecurso` guardado como propriedades-mapa (`valorProprio, valorFederal, valorEstadual, valorCredito, valorOutros`) em vez de multiplicar nós.
-- **`OrcamentoPrograma {programa, acao, orgao, periodoOrigem, valorPrevisto, valorRealizado}`** — do CSV previsto×realizado. Grão por bloco plurianual, não anual (ver limitação em §2.1b).
+- **`OrcamentoPrograma {programa, acao, orgao, periodoOrigem, valorPrevisto, valorRealizado}`** — do CSV previsto×realizado. Grão por bloco plurianual, não anual (ver limitação em §2.1b). **[Atualização: este nó foi removido do modelo — ver DOCUMENTACAO_ETL_MODELO_DADOS.md §4.1.9.]**
 
 **Melhoria de modelagem combinada (guardada para execução futura, ver §5)**: encadear os nós `DespesaAnual` de anos consecutivos via relacionamento com a variação já calculada:
 
@@ -210,7 +211,7 @@ O outro desenvolvedor está migrando os agentes de BDI para **CoALA** (Cognitive
 
 Implementado em `orcamento_loader.py` via `PERIODO_ANO_MIN=2016`/`PERIODO_ANO_MAX=2025`, aplicado por linha em `_read_empenho_csv` (compara o ano de `Data Empenho`). Validado contra o dado real: os ~53 mil empenhos já caíam inteiramente dentro da janela (nenhum registro foi de fato descartado), mas o filtro fica no código como regra permanente — importante principalmente para o loader de saúde a seguir, já que os arquivos DATASUS têm nomes como `..._2015-2025.xlsx` e `..._2015-2026.xlsx` (SI-PNI), que **extrapolam** a janela oficial e vão precisar descartar linhas de 2015 e 2026.
 
-**Limitação conhecida, não resolvida**: `OrcamentoPrograma` (previsto × realizado) não tem coluna de ano por linha — o grão é o bloco plurianual inteiro do arquivo de origem (`periodoOrigem` = "2015-2019", "2020-2022" ou "2023-2025", ver §2.1b). Não há como aplicar o filtro 2016-2025 dentro desse nó com precisão — os três blocos foram mantidos integralmente. Quem for consumir `OrcamentoPrograma` deve estar ciente que o bloco "2015-2019" nominalmente inclui o ano de 2015, ainda que os `Empenho` reais desse período comecem em 2016.
+**Limitação conhecida, não resolvida**: `OrcamentoPrograma` (previsto × realizado) não tem coluna de ano por linha — o grão é o bloco plurianual inteiro do arquivo de origem (`periodoOrigem` = "2015-2019", "2020-2022" ou "2023-2025", ver §2.1b). Não há como aplicar o filtro 2016-2025 dentro desse nó com precisão — os três blocos foram mantidos integralmente. Quem for consumir `OrcamentoPrograma` deve estar ciente que o bloco "2015-2019" nominalmente inclui o ano de 2015, ainda que os `Empenho` reais desse período comecem em 2016. **[Atualização: este nó foi removido do modelo — ver DOCUMENTACAO_ETL_MODELO_DADOS.md §4.1.9.]**
 
 ## 7.2 Nota sobre classificação de subfunção 122 (Administração Geral) — achado da validação
 

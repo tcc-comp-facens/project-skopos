@@ -33,15 +33,15 @@ nenhum supervisor conhece ou escreve no estado de outro.
 Degradação graciosa em falha de supervisor (Req 10.9), e contagem
 de mensagens para comparação quantitativa (Reqs 11.1, 11.2).
 
-Nota arquitetural (CoALA): assim como o OrquestradorEstrela, o
-CoordenadorGeral executa de fato pelo ciclo CoALA — cada etapa de
-delegação é uma ação nomeada em `procedural_memory`, proposta em ordem
-fixa por `propose_actions()` (a ordem reflete as dependências de dados
-entre supervisores: orçamento + saúde → combinar despesas → contexto →
-analítico). `evaluate_and_select` colapsa num passthrough pelo mesmo
-motivo que no orquestrador estrela — não há candidatos concorrentes a
-arbitrar neste nível (a deliberação real acontece dentro de AgenteSINAN,
-nível 2).
+Nota arquitetural (CoALA): o CoordenadorGeral executa pelo ciclo CoALA.
+Cada etapa de delegação é uma ação nomeada em `procedural_memory`, e a
+ordem reflete as dependências de dados entre supervisores (orçamento e
+saúde, depois combinar despesas, contexto e analítico). Quais ramos
+acionar é decisão do coordenador: `evaluate_and_select()` submete os
+ramos ao LLM, que também escreve um subobjetivo em linguagem natural para
+os ramos de orçamento e de saúde (`agents/planejamento.py`). Cada um
+desses supervisores escolhe os seus subordinados a partir do próprio
+subobjetivo. É o planejamento decomposto pelos níveis da árvore.
 
 Requisitos: 10.1, 10.8, 10.9, 11.1, 11.2
 """
@@ -54,6 +54,7 @@ import uuid
 from queue import Queue
 from typing import Any, TYPE_CHECKING
 
+from agents import planejamento, revisao_entregas
 from agents.base import ActionFailure, AgenteCoALA
 from agents.data_crossing import deduplicate_despesas
 from agents.hierarchical.supervisors import (
@@ -63,11 +64,18 @@ from agents.hierarchical.supervisors import (
     SupervisorContexto,
 )
 from core.metrics import MetricsCollector
+from core.quality_metrics import papel_de
 
 if TYPE_CHECKING:
     from db.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
+
+
+def _deliberacao_de(no: Any) -> float:
+    """Tempo de deliberação por LLM de um supervisor (0 se não for número)."""
+    valor = getattr(no, "deliberacao_ms", 0.0)
+    return float(valor) if isinstance(valor, (int, float)) else 0.0
 
 
 class CoordenadorGeral(AgenteCoALA):
@@ -129,6 +137,63 @@ class CoordenadorGeral(AgenteCoALA):
             {"goal": "persistir_metricas"},
         ]
 
+    _RAMOS = [
+        {"id": "ramo:orcamento", "descricao": "SupervisorOrcamento, que coordena um agente "
+         "de despesas por subfunção orçamentária"},
+        {"id": "ramo:saude", "descricao": "SupervisorSaude, que coordena um agente por "
+         "sistema de informação em saúde"},
+        {"id": "ramo:contexto", "descricao": "SupervisorContexto, que descreve o contexto "
+         "orçamentário das despesas levantadas (depende do ramo de orçamento)"},
+    ]
+    _GOAL_DO_RAMO = {
+        "delegar_orcamento": "ramo:orcamento",
+        "delegar_saude": "ramo:saude",
+        "delegar_contexto": "ramo:contexto",
+    }
+
+    def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
+        """Planeja com o LLM quais ramos acionar e o subobjetivo de cada um.
+
+        A proposta são todos os ramos de dados. O LLM pode retirar um ramo,
+        com justificativa, e escreve os subobjetivos dos ramos de orçamento
+        e de saúde. O ramo analítico, que calcula e redige, é sempre
+        acionado.
+        """
+        if not candidates:
+            return []
+        wm = self.working_memory
+        indicadores = ", ".join(wm.get("health_params") or []) or "todos os disponíveis"
+        periodo = f"{wm.get('date_from')} a {wm.get('date_to')}"
+        plano = self._deliberar(
+            planejamento.planejar,
+            agent_id=self.agent_id,
+            papel="o coordenador geral, que delega a supervisores de ramo",
+            objetivo=planejamento.objetivo_da_analise(
+                wm.get("intent_summary"), wm.get("health_params"),
+                wm.get("date_from"), wm.get("date_to"),
+            ),
+            candidatos=self._RAMOS,
+            proposta=[self._GOAL_DO_RAMO[c["goal"]] for c in candidates
+                      if c["goal"] in self._GOAL_DO_RAMO],
+            use_llm=wm.get("use_llm", True),
+            subobjetivos_padrao={
+                "ramo:orcamento": f"Levantar as despesas das subfunções ligadas aos "
+                                  f"indicadores {indicadores}, de {periodo}.",
+                "ramo:saude": f"Levantar os indicadores {indicadores}, de {periodo}.",
+            },
+            observacoes=planejamento.OBS_CRUZAMENTO + " O ramo analítico, que calcula "
+            "e redige a resposta, é sempre acionado e não está na lista.",
+        )
+        wm["_plano_coordenador"] = plano
+        return [
+            dict(c, status="pending") for c in candidates
+            if c["goal"] not in self._GOAL_DO_RAMO
+            or self._GOAL_DO_RAMO[c["goal"]] in plano["escolhidos"]
+        ]
+
+    def _subobjetivo(self, ramo: str) -> str | None:
+        return (self.working_memory.get("_plano_coordenador") or {}).get("subobjetivos", {}).get(ramo)
+
     # -- Ações --------------------------------------------------------------
 
     def _act_delegar_orcamento(self, action: dict) -> None:
@@ -142,14 +207,21 @@ class CoordenadorGeral(AgenteCoALA):
         health_params = self.working_memory.get("health_params", [])
         use_llm = self.working_memory.get("use_llm", True)
         intent_summary = self.working_memory.get("intent_summary")
+        objetivo = self._subobjetivo("ramo:orcamento")
         try:
-            orcamento_data = sup_orcamento.run(
+            orcamento_data = self._delegar(
+                "supervisor_orcamento", sup_orcamento.agent_id,
+                lambda: sup_orcamento.run(
                 analysis_id=analysis_id,
                 date_from=date_from,
                 date_to=date_to,
                 health_params=health_params,
                 intent_summary=intent_summary,
                 use_llm=use_llm,
+                objetivo=objetivo,
+            ),
+                pedido=objetivo or {"periodo": [date_from, date_to], "indicadores": health_params},
+                natureza_pedido="texto" if objetivo else "dados",
             )
             mc.stop()
             logger.info(
@@ -178,14 +250,21 @@ class CoordenadorGeral(AgenteCoALA):
         health_params = self.working_memory.get("health_params", [])
         intent_summary = self.working_memory.get("intent_summary")
         use_llm = self.working_memory.get("use_llm", True)
+        objetivo = self._subobjetivo("ramo:saude")
         try:
-            saude_data = sup_saude.run(
+            saude_data = self._delegar(
+                "supervisor_saude", sup_saude.agent_id,
+                lambda: sup_saude.run(
                 analysis_id=analysis_id,
                 date_from=date_from,
                 date_to=date_to,
                 health_params=health_params,
                 intent_summary=intent_summary,
                 use_llm=use_llm,
+                objetivo=objetivo,
+            ),
+                pedido=objetivo or {"periodo": [date_from, date_to], "indicadores": health_params},
+                natureza_pedido="texto" if objetivo else "dados",
             )
             mc.stop()
             logger.info(
@@ -241,7 +320,11 @@ class CoordenadorGeral(AgenteCoALA):
         despesas = self.working_memory.get("_despesas_combinadas", [])
         use_llm = self.working_memory.get("use_llm", True)
         try:
-            contexto_data = sup_contexto.run(despesas=despesas, use_llm=use_llm)
+            contexto_data = self._delegar(
+                "supervisor_contexto", sup_contexto.agent_id,
+                lambda: sup_contexto.run(despesas=despesas, use_llm=use_llm),
+                pedido={"despesas": despesas}, natureza_resposta="dados", extrair=None,
+            )
             mc.stop()
             logger.info("CoordenadorGeral %s: SupervisorContexto completed", self.agent_id)
         except Exception as exc:
@@ -275,7 +358,9 @@ class CoordenadorGeral(AgenteCoALA):
         saude_data = self.working_memory.get("_saude_data", {})
         contexto_data = self.working_memory.get("_contexto_data", {})
         try:
-            analitico_data = sup_analitico.run(
+            analitico_data = self._delegar(
+                "supervisor_analitico", sup_analitico.agent_id,
+                lambda: sup_analitico.run(
                 analysis_id=analysis_id,
                 ws_queue=ws_queue,
                 despesas=despesas,
@@ -287,6 +372,8 @@ class CoordenadorGeral(AgenteCoALA):
                 intent_summary=self.working_memory.get("intent_summary"),
                 use_llm=use_llm,
                 use_self_check=use_self_check,
+            ),
+                pedido={"despesas": despesas, "indicadores": saude_data.get("indicadores", [])}, natureza_resposta="texto", extrair=lambda r: r.get("texto_analise"),
             )
             # Usa o timestamp de fim da parte determinística (exclui tempo
             # do sintetizador/LLM) — mais preciso que mc.stop() aqui.
@@ -371,6 +458,7 @@ class CoordenadorGeral(AgenteCoALA):
                 m = mc.collect()
                 agent_metrics.append({
                     "agentName": m["agentType"],
+                    "papel": papel_de(m["agentType"]),
                     "executionTimeMs": m["executionTimeMs"],
                     "cpuPercent": m["cpuPercent"],
                 })
@@ -386,10 +474,11 @@ class CoordenadorGeral(AgenteCoALA):
                     # priorizacao (Etapa 3) e verificacao (Etapa 4) — todos
                     # rodam depois de capturar_wallclock e incluem chamada
                     # LLM, mesma lógica de exclusão.
-                    if m.get("agentType") in ("sintetizador", "priorizacao", "verificacao"):
+                    if m.get("agentType") in ("sintetizador", "priorizacao", "verificacao", "redator_ramo"):
                         continue
                     agent_metrics.append({
                         "agentName": m["agentType"],
+                        "papel": papel_de(m["agentType"]),
                         "executionTimeMs": m["executionTimeMs"],
                         "cpuPercent": m["cpuPercent"],
                     })
@@ -409,10 +498,21 @@ class CoordenadorGeral(AgenteCoALA):
         coord_end = leaf_end if has_leaf_end else persist_entry
         wall_clock_ms = round(max(0, (coord_end - coord_start) * 1000), 2)
         overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
+        # Parte do overhead gasta esperando o LLM: o planejamento do
+        # coordenador e o planejamento e a revisão dos supervisores de dados.
+        # O restante é custo estrutural.
+        deliberacao_ms = round(min(
+            self.deliberacao_ms
+            + _deliberacao_de(self.working_memory.get("_sup_orcamento"))
+            + _deliberacao_de(self.working_memory.get("_sup_saude")),
+            overhead_ms,
+        ), 2)
 
         agent_metrics.append({
             "agentName": "coordenador_geral",
+            "papel": "agente",
             "executionTimeMs": overhead_ms,
+            "deliberacaoMs": deliberacao_ms,
             "cpuPercent": 0.0,
         })
 
@@ -426,6 +526,7 @@ class CoordenadorGeral(AgenteCoALA):
                 "totalExecutionTimeMs": wall_clock_ms,
                 "workersTimeMs": round(workers_time_ms, 2),
                 "overheadTimeMs": overhead_ms,
+                "deliberationTimeMs": deliberacao_ms,
                 "agentMetrics": agent_metrics,
             },
         })
@@ -499,8 +600,15 @@ class CoordenadorGeral(AgenteCoALA):
             "_sup_contexto": SupervisorContexto(sup_contexto_id),
             "_metrics_collectors": [],
             "_coord_start": time.time(),
+            "_plano_coordenador": None,
         })
 
+        # Registro das trocas desta topologia (FIPA-ACL), compartilhado com
+        # os supervisores: cada nó registra as mensagens que troca.
+        self.registro_mensagens = []
+        self.deliberacao_ms = 0.0
+        for chave in ("_sup_orcamento", "_sup_saude", "_sup_analitico", "_sup_contexto"):
+            self.working_memory[chave].registro_mensagens = self.registro_mensagens
         self.run_coala_cycle()
 
         orcamento_data = self.working_memory.get("_orcamento_data", {})
@@ -519,6 +627,24 @@ class CoordenadorGeral(AgenteCoALA):
         result["contexto_orcamentario"] = contexto_data.get("contexto_orcamentario", {})
         result["agent_queries"] = orcamento_data.get("agent_queries", []) + saude_data.get(
             "agent_queries", []
+        )
+        # Cada supervisor de dados revisou o próprio ramo; o coordenador não
+        # recebe entregas de agentes de dados e só soma os dois resumos.
+        result["revisao"] = revisao_entregas.combinar_resumos(
+            [orcamento_data.get("revisao"), saude_data.get("revisao")]
+        )
+        # Do início do run() até o texto final, redação incluída — o tempo
+        # de parede do evento `metric` para antes da redação.
+        result["mensagens"] = list(self.registro_mensagens)
+        result["plano"] = {
+            no: plano for no, plano in (
+                ("coordenador", self.working_memory.get("_plano_coordenador")),
+                ("supervisor_orcamento", orcamento_data.get("plano")),
+                ("supervisor_saude", saude_data.get("plano")),
+            ) if plano
+        }
+        result["tempo_total_ms"] = round(
+            (time.time() - self.working_memory["_coord_start"]) * 1000, 1
         )
 
         self.working_memory["result"] = result

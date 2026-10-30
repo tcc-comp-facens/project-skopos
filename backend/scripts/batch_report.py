@@ -49,6 +49,7 @@ COLUNAS: list[tuple[str, str, int, str | None]] = [
     ("scenario", "Cenário", 38, None),
     ("topology", "Topologia", 13, None),
     ("question_len", "Tam. pergunta (chars)", 14, "#,##0"),
+    ("reference_year", "Ano de referência", 10, "0"),
     ("intent_success", "Interpretação OK", 13, None),
     ("intent_missing", "Motivo da recusa", 18, None),
     ("intent_elapsed_ms", "Interpretação (ms)", 14, "#,##0"),
@@ -60,6 +61,7 @@ COLUNAS: list[tuple[str, str, int, str | None]] = [
     ("resolved_health_params_count", "Nº indicadores", 11, "0"),
     ("resolved_health_params", "Indicadores", 36, None),
     ("wall_clock_ms", "Tempo de parede (ms)", 14, "#,##0"),
+    ("tempo_total_ms", "Tempo até o texto (ms)", 14, "#,##0"),
     ("total_tokens", "Tokens totais", 12, "#,##0"),
     ("prompt_tokens", "Tokens prompt", 12, "#,##0"),
     ("completion_tokens", "Tokens resposta", 12, "#,##0"),
@@ -67,11 +69,32 @@ COLUNAS: list[tuple[str, str, int, str | None]] = [
     ("overhead_percent", "Overhead coord. (%)", 13, "0.00"),
     ("agent_invocations", "Invocações de agente", 12, "0"),
     ("message_count", "Mensagens", 11, "0"),
+    ("mensagens_dados", "Mensagens de dados", 11, "0"),
+    ("mensagens_texto", "Mensagens de texto", 11, "0"),
+    ("caracteres_texto", "Caracteres em mensagens de texto", 13, "#,##0"),
+    ("ferramentas_acionadas", "Ferramentas acionadas", 11, "0"),
     ("texto_analise_len", "Tam. texto (chars)", 12, "#,##0"),
     ("ragas_faithfulness", "RAGAS faithfulness", 12, "0.000"),
     ("ragas_answer_relevancy", "RAGAS answer relevancy", 12, "0.000"),
     ("ragas_context_relevance", "RAGAS context relevance", 12, "0.000"),
+    ("ragas_juiz", "Juiz RAGAS", 12, None),
+    ("ragas_prompt_tokens", "Juiz: tokens de entrada", 12, "#,##0"),
+    ("ragas_completion_tokens", "Juiz: tokens de saída", 12, "#,##0"),
+    ("ragas_total_tokens", "Juiz: tokens totais", 12, "#,##0"),
+    ("fidelidade_numerica", "Fidelidade numérica", 12, "0.000"),
+    ("numeros_texto", "Números no texto", 10, "0"),
+    ("numeros_nao_verificados", "Números não verificados", 11, "0"),
+    # Planejamento por LLM (agents/planejamento.py) e redação
+    ("plano_nos", "Nós que planejaram", 10, "0"),
+    ("plano_origem", "Origem do plano", 30, None),
+    ("plano_acrescimos", "Plano: acréscimos", 10, "0"),
+    ("plano_retiradas", "Plano: retiradas", 10, "0"),
+    ("redacao_modo", "Redação", 10, None),
+    ("redacao_ramos", "Redação: ramos", 10, "0"),
+    ("redacao_falhas", "Redação: ramos que falharam", 11, "0"),
     ("overhead_ms", "Overhead (ms)", 11, "#,##0.0"),
+    ("overhead_deliberacao_ms", "Overhead: deliberação LLM (ms)", 13, "#,##0.0"),
+    ("overhead_estrutural_ms", "Overhead: estrutura (ms)", 12, "#,##0.0"),
     ("fase_dominio_ms", "Fase domínio (ms)", 12, "#,##0"),
     ("fase_analitico_ms", "Fase analítico (ms)", 12, "#,##0"),
     ("fase_contexto_ms", "Fase contexto (ms)", 12, "#,##0"),
@@ -84,19 +107,44 @@ COLUNAS: list[tuple[str, str, int, str | None]] = [
     ("sucesso", "Análise bem-sucedida (1/0)", 12, "0"),
     ("dentro_do_orcamento_de_tempo", "Dentro do orçamento de tempo (1/0)", 13, "0"),
     ("consistencia_identica", "Correlações/anomalias idênticas (1/0)", 14, "0"),
-    ("vencedor", "Vencedor (sistema)", 13, None),
-    ("criterio_veredito", "Critério do veredito", 30, None),
     ("fault", "Falha injetada", 20, None),
-    ("fault_base", "Base de comparação (falha)", 13, None),
     ("r1_score", "Cobertura R1 (0-1)", 12, "0.00"),
     ("r1_completed", "Componentes completos (de 7)", 13, "0"),
     ("texto_gerado", "Texto gerado (1/0)", 11, "0"),
     ("error_events", "Eventos de erro", 11, "0"),
+    # Revisão das entregas (agents/revisao_entregas.py)
+    ("revisao_chamadas", "Revisão: chamadas LLM", 11, "0"),
+    ("revisao_registros", "Revisão: registros revistos", 12, "#,##0"),
+    ("revisao_sinalizados", "Revisão: sinalizados", 11, "0"),
+    ("revisao_confirmados", "Revisão: confirmados", 11, "0"),
+    ("revisao_corrigidos", "Revisão: corrigidos", 11, "0"),
+    ("revisao_descartados", "Revisão: descartados", 11, "0"),
+    ("revisao_nao_verificados", "Revisão: não verificados", 11, "0"),
+    ("revisao_reenvios", "Revisão: reenvios", 11, "0"),
+    ("revisao_falhou", "Revisão falhou (1/0)", 11, "0"),
+    # Falha semântica (scripts/falhas_semanticas.py), medida contra o gabarito
+    ("alvo_falha", "Agente corrompido", 12, None),
+    ("escopo", "Escopo da pergunta", 13, None),
+    ("corrupcao_registros", "Registros corrompidos", 12, "0"),
+    ("revisao_vp", "Sinais em registro corrompido", 13, "0"),
+    ("revisao_fp", "Sinais em registro limpo", 12, "0"),
+    ("contaminados_finais", "Corrompidos no resultado final", 13, "0"),
+    ("perdidos", "Corrompidos descartados", 12, "0"),
+    ("achados_iguais_limpos", "Achados iguais aos dos dados limpos (1/0)", 14, "0"),
     ("intent_reused", "Interpretação reaproveitada", 13, None),
     ("run_error", "Erro na execução", 34, None),
     ("clarification_message", "Mensagem ao usuário", 50, None),
     ("question", "Pergunta", 60, None),
 ]
+
+# Colunas que só aparecem quando alguma linha as traz (execuções anteriores
+# à revisão das entregas e bateria sem falha semântica não as têm).
+_COLUNAS_OPCIONAIS = {
+    c[0] for c in COLUNAS
+    if c[0].startswith("revisao_")
+    or c[0] in ("alvo_falha", "escopo", "corrupcao_registros", "contaminados_finais",
+                "perdidos", "achados_iguais_limpos")
+}
 
 # Comportamento esperado por categoria — premissa do autor do relatório
 # (não vem do sistema): usada só para calcular a "aderência" na aba
@@ -181,7 +229,12 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
     wb.calculation.fullCalcOnLoad = True
 
     tem_ragas = any(k.startswith("ragas_") and k != "ragas_unavailable_reason" for r in rows for k in r)
-    colunas = [c for c in COLUNAS if tem_ragas or not c[0].startswith("ragas_")]
+    presentes = {k for r in rows for k in r}
+    colunas = [
+        c for c in COLUNAS
+        if (tem_ragas or not c[0].startswith("ragas_"))
+        and (c[0] not in _COLUNAS_OPCIONAIS or c[0] in presentes)
+    ]
     idx = {c[0]: i + 1 for i, c in enumerate(colunas)}  # chave -> nº da coluna em Resultados
     n = len(rows)
     ultima = n + 1  # linha final de dados em Resultados (cabeçalho na 1)
@@ -369,11 +422,11 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
     _titulo(ws_ev, "Comparação pareada: estrela vs. hierárquica",
             "Uma linha por modelo × cenário em que as duas topologias rodaram. Δ% = hierárquica / estrela − 1 (positivo = hierárquica maior).")
     heads = ["Modelo", "Categoria", "Cenário",
-             "Tempo estrela (ms)", "Tempo hierárquica (ms)", "Δ tempo (ms)", "Δ tempo (%)", "Mais rápida",
+             "Tempo estrela (ms)", "Tempo hierárquica (ms)", "Δ tempo (ms)", "Δ tempo (%)", "Menor tempo",
              "Tokens estrela", "Tokens hierárquica", "Δ tokens", "Δ tokens (%)", "Menos tokens",
              "Mensagens estrela", "Mensagens hierárquica", "Texto estrela (chars)", "Texto hierárquica (chars)",
              "Completude estrela", "Completude hierárquica", "Fidelidade estrela", "Fidelidade hierárquica",
-             "Correlações/anomalias idênticas", "Vencedor (sistema)", "Critério do veredito"]
+             "Correlações/anomalias idênticas"]
     _cabecalho(ws_ev, 4, heads)
     linha_de = {(r.get("model"), r.get("scenario"), r.get("topology")): r for r in rows}
     por_chave: dict[tuple, set] = {}
@@ -394,17 +447,17 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
             ws_ev.cell(row=i, column=5, value=soma("wall_clock_ms", "hierarchical", i))
             ws_ev.cell(row=i, column=6, value=f"=E{i}-D{i}")
             ws_ev.cell(row=i, column=7, value=f'=IF(D{i}=0,"",E{i}/D{i}-1)')
-            ws_ev.cell(row=i, column=8, value=f'=IF(D{i}<E{i},"Estrela",IF(E{i}<D{i},"Hierárquica","Empate"))')
+            ws_ev.cell(row=i, column=8, value=f'=IF(D{i}<E{i},"Estrela",IF(E{i}<D{i},"Hierárquica","Igual"))')
             ws_ev.cell(row=i, column=9, value=soma("total_tokens", "star", i))
             ws_ev.cell(row=i, column=10, value=soma("total_tokens", "hierarchical", i))
             ws_ev.cell(row=i, column=11, value=f"=J{i}-I{i}")
             ws_ev.cell(row=i, column=12, value=f'=IF(I{i}=0,"",J{i}/I{i}-1)')
-            ws_ev.cell(row=i, column=13, value=f'=IF(I{i}<J{i},"Estrela",IF(J{i}<I{i},"Hierárquica","Empate"))')
+            ws_ev.cell(row=i, column=13, value=f'=IF(I{i}<J{i},"Estrela",IF(J{i}<I{i},"Hierárquica","Igual"))')
             ws_ev.cell(row=i, column=14, value=soma("message_count", "star", i))
             ws_ev.cell(row=i, column=15, value=soma("message_count", "hierarchical", i))
             ws_ev.cell(row=i, column=16, value=soma("texto_analise_len", "star", i))
             ws_ev.cell(row=i, column=17, value=soma("texto_analise_len", "hierarchical", i))
-            # Valores do payload de qualidade/veredito do sistema, copiados de Resultados
+            # Valores do payload de qualidade do sistema, copiados de Resultados
             # (vazio = não medido, diferente de zero).
             rs, rh = linha_de[(m, sc, "star")], linha_de[(m, sc, "hierarchical")]
             ws_ev.cell(row=i, column=18, value=rs.get("completude"))
@@ -413,8 +466,6 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
             ws_ev.cell(row=i, column=21, value=rh.get("ragas_faithfulness"))
             ident = rs.get("consistencia_identica")
             ws_ev.cell(row=i, column=22, value=None if ident is None else ("sim" if ident else "NÃO"))
-            ws_ev.cell(row=i, column=23, value={"star": "Estrela", "hierarchical": "Hierárquica", "tie": "Empate"}.get(rs.get("vencedor")))
-            ws_ev.cell(row=i, column=24, value=rs.get("criterio_veredito"))
         _estilo_corpo(ws_ev, e0, e1, 1, len(heads),
                       {4: "#,##0", 5: "#,##0", 6: "+#,##0;-#,##0;0", 7: "+0.0%;-0.0%;0.0%",
                        9: "#,##0", 10: "#,##0", 11: "+#,##0;-#,##0;0", 12: "+0.0%;-0.0%;0.0%",
@@ -432,68 +483,11 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
     else:
         ws_ev["A5"] = "Nenhum cenário com as duas topologias executadas nesta rodada."
         ws_ev["A5"].font = _F_NOTE
-    _larguras(ws_ev, [18, 24, 38, 13, 14, 12, 11, 13, 12, 14, 11, 11, 13, 12, 14, 13, 14, 11, 12, 11, 12, 14, 13, 34])
+    _larguras(ws_ev, [18, 24, 38, 13, 14, 12, 11, 13, 12, 14, 11, 11, 13, 12, 14, 13, 14, 11, 12, 11, 12, 14])
     ws_ev.freeze_panes = "D5"
 
     def E(col_letter: str) -> str:
         return f"EstrelaVsHier!${col_letter}${e0}:${col_letter}${max(e1, e0)}"
-
-    # ---------------- Resiliencia (falhas injetadas) ----------------
-    tem_falha = any(r.get("fault") not in (None, "nenhuma") for r in rows)
-    if tem_falha:
-        ws_rs = wb.create_sheet("Resiliencia")
-        _titulo(ws_rs, "Resiliência: falhas injetadas, estrela vs. hierárquica",
-                "R1 = fração dos 7 componentes do resultado preenchidos (compute_partial_result_coverage); "
-                "execução que quebra por completo conta como R1 = 0. Baseline = os mesmos cenários-base sem falha. "
-                "Nas falhas só da hierárquica, a estrela roda sem falha (controle).")
-        falhas_meta = meta.get("faults") or [
-            {"id": f, "descricao": f, "apenas": None}
-            for f in dict.fromkeys(r["fault"] for r in rows if r.get("fault") not in (None, "nenhuma"))
-        ]
-        heads = ["Falha", "Descrição", "Aplica a", "Execuções estrela", "Execuções hierárquica",
-                 "R1 estrela", "R1 hierárquica", "Δ R1 (hier − estrela)",
-                 "Texto gerado estrela", "Texto gerado hierárquica",
-                 "Quebrou estrela", "Quebrou hierárquica",
-                 "Eventos de erro estrela", "Eventos de erro hierárquica",
-                 "Tempo médio estrela (ms)", "Tempo médio hierárquica (ms)"]
-        _cabecalho(ws_rs, 4, heads)
-        linhas = [{"id": "nenhuma", "descricao": "baseline (sem falha)", "apenas": None, "base": True}] + [
-            dict(f, base=False) for f in falhas_meta]
-        for i, f in enumerate(linhas, start=5):
-            crit = f'{R("fault")},$A{i}' + (f',{R("fault_base")},TRUE' if f["base"] else "")
-            ws_rs.cell(row=i, column=1, value=f["id"])
-            ws_rs.cell(row=i, column=2, value=f["descricao"])
-            ws_rs.cell(row=i, column=3, value={"hierarchical": "só hierárquica"}.get(f["apenas"], "ambas"))
-            for c0, topo in ((0, "star"), (1, "hierarchical")):
-                na = False  # as duas topologias rodam sempre; a falha só afeta quem a usa
-                tc = f'{R("topology")},"{topo}"'
-                def put(offset, formula):
-                    ws_rs.cell(row=i, column=offset + c0, value="n/a" if na else formula)
-                put(4, f"=COUNTIFS({crit},{tc})")
-                put(6, f'=IFERROR(AVERAGEIFS({R("r1_score")},{crit},{tc}),"")')
-                put(9, f'=IFERROR(AVERAGEIFS({R("texto_gerado")},{crit},{tc}),"")')
-                put(11, f'=COUNTIFS({crit},{tc})-COUNTIFS({crit},{tc},{R("wall_clock_ms")},">=0")')
-                put(13, f'=IFERROR(AVERAGEIFS({R("error_events")},{crit},{tc}),"")')
-                put(15, f'=IFERROR(AVERAGEIFS({R("wall_clock_ms")},{crit},{tc}),"")')
-            ws_rs.cell(row=i, column=8, value=f'=IF(OR(F{i}="",G{i}="",F{i}="n/a"),"",G{i}-F{i})')
-        nf = len(linhas)
-        _estilo_corpo(ws_rs, 5, 4 + nf, 1, len(heads),
-                      {6: "0.00", 7: "0.00", 8: "+0.00;-0.00;0.00", 9: "0%", 10: "0%",
-                       13: "0.0", 14: "0.0", 15: "#,##0", 16: "#,##0"})
-        cats = Reference(ws_rs, min_col=1, min_row=5, max_row=4 + nf)
-        for titulo, y, c_star, c_hier, anchor in (
-            ("Cobertura de resultado (R1) por falha injetada", "R1 (0 a 1)", 6, 7, f"A{nf + 8}"),
-            ("Texto de análise gerado (proporção) por falha injetada", "proporção", 9, 10, f"I{nf + 8}"),
-        ):
-            ch = _barras(titulo, y, 22, 10)
-            ch.series.append(_serie(ws_rs, c_star, 5, 4 + nf, "Estrela", COR_ESTRELA))
-            ch.series.append(_serie(ws_rs, c_hier, 5, 4 + nf, "Hierárquica", COR_HIER))
-            ch.set_categories(cats)
-            ch.y_axis.scaling.min = 0
-            ch.y_axis.scaling.max = 1
-            ws_rs.add_chart(ch, anchor)
-        _larguras(ws_rs, [22, 52, 14, 11, 13, 10, 12, 14, 12, 14, 11, 13, 12, 14, 14, 15])
-        ws_rs.freeze_panes = "C5"
 
     # ---------------- Resumo (primeira aba) ----------------
     ws = wb.create_sheet("Resumo", 0)
@@ -550,29 +544,17 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
     ws.cell(row=6, column=4).number_format = "+0;-0;0"
 
     r = 7 + fm
-    ws.cell(row=r, column=1, value="Placar nos cenários pareados").font = _F_SUB
-    _cabecalho(ws, r + 1, ["Critério", "Estrela vence", "Hierárquica vence", "Empates", "Cenários pareados"])
-    for j, (nome, L) in enumerate((("Mais rápida", "H"), ("Menos tokens", "M")), start=r + 2):
+    ws.cell(row=r, column=1, value="Comparação nos cenários pareados").font = _F_SUB
+    _cabecalho(ws, r + 1, ["Grandeza", "Menor na estrela", "Menor na hierárquica", "Iguais", "Cenários pareados"])
+    for j, (nome, L) in enumerate((("Tempo de parede", "H"), ("Tokens totais", "M")), start=r + 2):
         ws.cell(row=j, column=1, value=nome)
         ws.cell(row=j, column=2, value=f'=COUNTIF({E(L)},"Estrela")')
         ws.cell(row=j, column=3, value=f'=COUNTIF({E(L)},"Hierárquica")')
-        ws.cell(row=j, column=4, value=f'=COUNTIF({E(L)},"Empate")')
+        ws.cell(row=j, column=4, value=f'=COUNTIF({E(L)},"Igual")')
         ws.cell(row=j, column=5, value=f"=SUM(B{j}:D{j})")
     _estilo_corpo(ws, r + 2, r + 3, 1, 5, {2: "0", 3: "0", 4: "0", 5: "0"})
 
-    # Veredito do sistema: o mesmo `_decide_winner` do relatório da UI (fidelidade > completude > tempo).
-    rv = r + 5
-    ws.cell(row=rv, column=1, value="Veredito do sistema (fidelidade > completude > tempo)").font = _F_SUB
-    _cabecalho(ws, rv + 1, ["Resultado", "Análises"])
-    for j, (nome, chave) in enumerate((("Estrela vence", "Estrela"), ("Hierárquica vence", "Hierárquica"), ("Empate", "Empate")), start=rv + 2):
-        ws.cell(row=j, column=1, value=nome)
-        ws.cell(row=j, column=2, value=f'=COUNTIF({E("W")},"{chave}")')
-    for j, (nome, trecho) in enumerate((("Decidido por fidelidade", "fidelidade"), ("Decidido por completude", "completude*"), ("Decidido por eficiência (tempo)", "eficiência*")), start=rv + 5):
-        ws.cell(row=j, column=1, value=nome)
-        ws.cell(row=j, column=2, value=f'=COUNTIF({E("X")},"{trecho}")')
-    _estilo_corpo(ws, rv + 2, rv + 7, 1, 2, {2: "0"})
-
-    r2 = rv + 9
+    r2 = r + 5
     ws.cell(row=r2, column=1, value="Interpretação de intenção (todas as tentativas)").font = _F_SUB
     _cabecalho(ws, r2 + 1, ["Indicador", "Valor"])
     itens = [
@@ -596,7 +578,7 @@ def write_xlsx(rows: list[dict], path: str, meta: dict | None = None) -> None:
         "Tokens vêm do TokenBucket de cada topologia (todas as chamadas LLM dos agentes). Interpretação de intenção é contabilizada à parte (aba Interpretacao).",
         "Overhead de coordenação e mensagens vêm de core.quality_metrics (compute_coordination_overhead / compute_communication_volume).",
         "Linhas com topologia '-' são cenários recusados/conversa na interpretação: não rodaram nenhuma topologia.",
-        "Abas: Resultados (dados brutos) · PorCategoria · EstrelaVsHier (pareado) · Resiliencia (falhas injetadas) · Interpretacao / InterpDados · Cenarios.",
+        "Abas: Resultados (dados brutos) · PorCategoria · EstrelaVsHier (pareado) · Interpretacao / InterpDados · Cenarios.",
     ]
     for j, t in enumerate(notas, start=rn):
         ws.cell(row=j, column=1, value=t).font = _F_NOTE

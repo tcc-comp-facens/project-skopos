@@ -1,9 +1,8 @@
 """
 Sintetizador de Texto — Serviço de geração textual.
 
-Gera texto consolidado de análise via LLM (provedor configurado em
-`LLM_PROVIDER` — DeepSeek por default, OpenAI opcional) a partir de
-correlações, anomalias e contexto orçamentário.
+Gera texto consolidado de análise via LLM (`llm_client.MODELO_ANALISE`) a
+partir de correlações, anomalias e contexto orçamentário.
 
 Quando o LLM está indisponível, gera texto estruturado como fallback.
 
@@ -55,8 +54,44 @@ TRADUCAO_SUBFUNCOES: dict[int, str] = {
     301: "investimento em postos de saúde e equipes de família",
     302: "investimento em hospitais e atendimentos especializados",
     303: "investimento em medicamentos e insumos",
-    305: "investimento em prevenção de epidemias e vigilância sanitária",
+    305: "investimento em vigilância epidemiológica (prevenção e controle de epidemias)",
 }
+
+# Regras comuns a todo prompt de redação (texto único, redator de ramo e
+# composição). O texto só pode afirmar o que os dados e o contexto fornecido
+# sustentam — é o que a fidelidade do RAGAS e a fidelidade numérica medem.
+_REGRAS_FIDELIDADE_E_LINGUAGEM = (
+    "- Não traga causas, fatores externos ou explicações que os dados não "
+    "trazem (por exemplo vacinação, testagem, variantes, subnotificação, "
+    "comportamento da população, medidas de governo, perfil de pacientes), "
+    "nem como hipótese.\n"
+    "- Não descreva o que cada área de gasto faz além da tradução dada "
+    "abaixo, e não recomende novas políticas nem a coleta de outros dados.\n"
+    "- Quando os dados não permitem saber o porquê de um resultado, diga "
+    "apenas isso. Uma correlação mostra que gasto e resultado variaram "
+    "juntos, sem provar que um causou o outro, e pode ser dito assim, "
+    "uma vez.\n"
+    "- Use só os anos, valores e indicadores que aparecem nos dados. O "
+    "período da pandemia não é o período coberto pelos dados — os anos "
+    "sem dados são os listados nas lacunas.\n\n"
+    "REGRAS DE LINGUAGEM:\n"
+    "- Use linguagem simples e direta, como se explicasse para um vizinho\n"
+    "- Evite jargões técnicos; quando inevitável, explique entre parênteses\n"
+    "- Prefira 'relação forte/moderada/fraca' em vez de coeficientes numéricos\n"
+    "- Traduza subfunções para linguagem comum:\n"
+    + "".join(
+        f"  {codigo} = {traducao}\n"
+        for codigo, traducao in sorted(TRADUCAO_SUBFUNCOES.items())
+    )
+    + "- Diga em palavras simples o que os números mostram, sem ir além deles\n"
+    "- Cada correlação já vem com um campo \"leitura\" dizendo se o "
+    "sinal (positivo/negativo) é DESEJÁVEL ou INDESEJÁVEL para aquele "
+    "indicador especificamente — use esse campo como a fonte da verdade "
+    "sobre se o resultado é bom ou ruim, não deduza pelo nome do "
+    "indicador nem por associação (ex.: \"prevenção deveria reduzir "
+    "mortes\") sem checar o campo \"leitura\": o sinal real da correlação "
+    "pode contrariar essa intuição\n"
+)
 
 
 class TextSynthesizer:
@@ -86,6 +121,7 @@ class TextSynthesizer:
         date_from: int | None = None,
         date_to: int | None = None,
         pergunta_usuario: str | None = None,
+        series: list[str] | None = None,
     ) -> str:
         """Gera texto completo de análise (batch, sem streaming).
 
@@ -112,6 +148,9 @@ class TextSynthesizer:
                 quando informado, o texto responde essa pergunta
                 diretamente antes de qualquer outra coisa, em vez de só
                 seguir um formato de relatório genérico.
+            series: Séries anuais de gasto e de indicadores
+                (`core.contextos_avaliacao.linhas_series`), para o texto
+                responder quantidades e a evolução ano a ano.
 
         Returns:
             Texto completo da análise gerada.
@@ -127,7 +166,7 @@ class TextSynthesizer:
 
             prompt = self._build_prompt(
                 correlacoes, anomalias, contexto_orcamentario, data_coverage,
-                enfase, date_from, date_to, pergunta_usuario,
+                enfase, date_from, date_to, pergunta_usuario, series,
             )
             logger.info(
                 "TextSynthesizer %s: tentando síntese via LLM (batch, %d chars de prompt)",
@@ -162,6 +201,7 @@ class TextSynthesizer:
         date_from: int | None = None,
         date_to: int | None = None,
         pergunta_usuario: str | None = None,
+        series: list[str] | None = None,
     ) -> Generator[str, None, None]:
         """Retorna generator de tokens para streaming via LLM.
 
@@ -180,6 +220,7 @@ class TextSynthesizer:
             date_from: Ano inicial do período analisado (ver `generate`).
             date_to: Ano final do período analisado (ver `generate`).
             pergunta_usuario: Pergunta original do usuário (ver `generate`).
+            series: Séries anuais (ver `generate`).
 
         Yields:
             Tokens individuais do LLM.
@@ -191,7 +232,7 @@ class TextSynthesizer:
 
         prompt = self._build_prompt(
             correlacoes, anomalias, contexto_orcamentario, data_coverage,
-            enfase, date_from, date_to, pergunta_usuario,
+            enfase, date_from, date_to, pergunta_usuario, series,
         )
         logger.info(
             "TextSynthesizer %s: tentando síntese via LLM (streaming, %d chars de prompt)",
@@ -225,6 +266,192 @@ class TextSynthesizer:
             correlacoes, anomalias, contexto_orcamentario, data_coverage, date_from, date_to
         )
 
+    # -- Redação por ramo (topologia hierárquica) --------------------------
+
+    def generate_ramo(
+        self,
+        sistema: str,
+        correlacoes: list[dict],
+        anomalias: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
+        pergunta_usuario: str | None = None,
+        series: list[str] | None = None,
+    ) -> str:
+        """Texto parcial de um redator de ramo — só os achados de um sistema.
+
+        Usado pelo `SupervisorAnalitico` da hierárquica, que reparte a
+        redação entre redatores subordinados e compõe a resposta com
+        `generate_stream_composicao`. Levanta exceção se o LLM não devolver
+        texto, para o supervisor tratar a falha do ramo.
+        """
+        import core.llm_client as llm_client
+
+        prompt = self._build_prompt_ramo(
+            sistema, correlacoes, anomalias, contexto_orcamentario, data_coverage,
+            date_from, date_to, pergunta_usuario, series,
+        )
+        texto = llm_client.generate(prompt, caller=self.synthesizer_id)
+        if not texto or not texto.strip():
+            raise RuntimeError(f"redator do ramo {sistema} não devolveu texto")
+        return texto.strip()
+
+    def generate_stream_composicao(
+        self,
+        textos_ramos: list[dict[str, str]],
+        achados_sem_texto: list[dict[str, Any]] | None = None,
+        data_coverage: dict[str, Any] | None = None,
+        enfase: str | None = None,
+        date_from: int | None = None,
+        date_to: int | None = None,
+        pergunta_usuario: str | None = None,
+        series: list[str] | None = None,
+    ) -> Generator[str, None, None]:
+        """Compõe a resposta final a partir dos textos dos ramos (streaming)."""
+        import core.llm_client as llm_client
+
+        prompt = self._build_prompt_composicao(
+            textos_ramos, achados_sem_texto or [], data_coverage, enfase,
+            date_from, date_to, pergunta_usuario, series,
+        )
+        logger.info(
+            "TextSynthesizer %s: composição de %d ramo(s) via LLM (%d chars de prompt)",
+            self.synthesizer_id, len(textos_ramos), len(prompt),
+        )
+        yield from llm_client.generate_stream(prompt, caller=self.synthesizer_id)
+
+    @staticmethod
+    def _secao_lacunas(data_coverage: dict[str, Any] | None) -> str:
+        coverage = data_coverage or {}
+        gaps = coverage.get("gaps", [])
+        if not gaps:
+            return ""
+        summary = coverage.get("summary", {})
+        texto = (
+            "\nAVISO — DADOS FALTANTES:\n"
+            f"Completude das despesas: {summary.get('despesas_completeness', 1.0):.0%}\n"
+            f"Completude dos indicadores: {summary.get('indicadores_completeness', 1.0):.0%}\n"
+            "Lacunas detectadas:\n"
+        )
+        return texto + "".join(f"- {g['description']}\n" for g in gaps)
+
+    @staticmethod
+    def _secao_series(series: list[str] | None) -> str:
+        """Valores anuais de gasto e de indicadores, os mesmos dos cálculos."""
+        if not series:
+            return ""
+        return (
+            "\nVALORES ANUAIS (totais por ano, os mesmos usados nos cálculos; use-os "
+            "para responder quantidades e a evolução ano a ano. Um ano que aparece "
+            "aqui tem dado, mesmo que não tenha virado correlação ou anomalia):\n"
+            + "".join(f"- {linha}\n" for linha in series)
+        )
+
+    @staticmethod
+    def _secao_periodo(date_from: int | None, date_to: int | None) -> str:
+        if date_from is None or date_to is None:
+            return ""
+        return f"\nPERÍODO ANALISADO: {date_from} a {date_to}.\n"
+
+    def _build_prompt_ramo(
+        self,
+        sistema: str,
+        correlacoes: list[dict],
+        anomalias: list[dict],
+        contexto_orcamentario: dict[str, Any],
+        data_coverage: dict[str, Any] | None,
+        date_from: int | None,
+        date_to: int | None,
+        pergunta_usuario: str | None,
+        series: list[str] | None = None,
+    ) -> str:
+        pergunta = f'\nPERGUNTA DO USUÁRIO: "{pergunta_usuario}"\n' if pergunta_usuario else ""
+        return (
+            "Você é um redator de uma equipe que analisa gastos públicos de saúde de "
+            f"Sorocaba-SP. Sua parte é o sistema de informação {sistema}: outro "
+            "redator vai juntar a sua parte com as dos demais sistemas numa resposta "
+            "única ao cidadão.\n\n"
+            "CONTEXTO IMPORTANTE:\n"
+            f"- {CONTEXTO_PANDEMIA}\n\n"
+            "FIDELIDADE AOS DADOS (regra mais importante):\n"
+            "- Toda afirmação do texto precisa estar nos DADOS DO RAMO abaixo ou no "
+            "CONTEXTO IMPORTANTE acima, sem acrescentar nada de fora deles.\n"
+            + _REGRAS_FIDELIDADE_E_LINGUAGEM
+            + self._secao_periodo(date_from, date_to)
+            + pergunta
+            + "\nDADOS DO RAMO:\n\n"
+            "Relações encontradas entre gastos e resultados de saúde:\n"
+            f"{correlacoes}\n\n"
+            "Situações que chamam atenção (possíveis ineficiências ou boas práticas):\n"
+            f"{anomalias}\n\n"
+            "Como os gastos ligados a este sistema evoluíram:\n"
+            f"{contexto_orcamentario}\n"
+            + self._secao_series(series)
+            + self._secao_lacunas(data_coverage)
+            + "\nCOMO ESCREVER:\n"
+            "- Um a dois parágrafos objetivos, só sobre este sistema, em prosa.\n"
+            "- Destaque o que ajuda a responder a pergunta, cite os números exatos "
+            "dos dados e mencione as lacunas que limitam a leitura.\n"
+            "- Antes de terminar, confira: se uma frase não pode ser verificada "
+            "nos dados acima, retire-a."
+        )
+
+    def _build_prompt_composicao(
+        self,
+        textos_ramos: list[dict[str, str]],
+        achados_sem_texto: list[dict[str, Any]],
+        data_coverage: dict[str, Any] | None,
+        enfase: str | None,
+        date_from: int | None,
+        date_to: int | None,
+        pergunta_usuario: str | None,
+        series: list[str] | None = None,
+    ) -> str:
+        partes = "".join(
+            f"\n[{t['sistema']}]\n{t['texto']}\n" for t in textos_ramos
+        )
+        crus = "".join(
+            f"\n[{a['sistema']} — dados sem texto do redator]\n"
+            f"Correlações: {a['correlacoes']}\nAnomalias: {a['anomalias']}\n"
+            for a in achados_sem_texto
+        )
+        pergunta = f'\nPERGUNTA DO USUÁRIO: "{pergunta_usuario}"\n' if pergunta_usuario else ""
+        enfase_txt = (
+            f"\nÊNFASE DESTA ANÁLISE: {enfase}\nDê destaque a esse aspecto.\n" if enfase else ""
+        )
+        return (
+            "Você é um comunicador público especializado em saúde e coordena uma "
+            "equipe de redatores. Cada redator escreveu sobre um sistema de "
+            "informação de saúde de Sorocaba-SP. Sua tarefa é juntar essas partes "
+            "numa resposta única, clara e acessível a cidadãos sem formação técnica.\n\n"
+            "CONTEXTO IMPORTANTE:\n"
+            f"- {CONTEXTO_PANDEMIA}\n\n"
+            "FIDELIDADE AOS DADOS (regra mais importante):\n"
+            "- Toda afirmação precisa estar nos TEXTOS DOS RAMOS, nos VALORES "
+            "ANUAIS ou nos DADOS SEM TEXTO abaixo, ou no CONTEXTO IMPORTANTE acima, "
+            "sem acrescentar nada de fora deles. Não recalcule nem arredonde de outro jeito os números que "
+            "os redatores citaram.\n"
+            + _REGRAS_FIDELIDADE_E_LINGUAGEM
+            + self._secao_periodo(date_from, date_to)
+            + enfase_txt
+            + pergunta
+            + "\nTEXTOS DOS RAMOS:\n"
+            + partes
+            + (f"\nDADOS SEM TEXTO DO REDATOR:\n{crus}" if crus else "")
+            + self._secao_series(series)
+            + self._secao_lacunas(data_coverage)
+            + "\nCOMO RESPONDER:\n"
+            "- Responda como numa conversa direta, não como um relatório formal, "
+            "sem títulos de seção.\n"
+            "- Se há uma PERGUNTA DO USUÁRIO, responda ela logo de cara.\n"
+            "- Junte os ramos num texto só: compare os sistemas quando a pergunta "
+            "pedir, sem repetir o mesmo achado e sem omitir uma lacuna relevante.\n"
+            "- Antes de terminar, confira: se uma frase não pode ser verificada "
+            "nos textos e dados acima, retire-a."
+        )
+
     # -- Internal methods ------------------------------------------------
 
     def _build_prompt(
@@ -237,6 +464,7 @@ class TextSynthesizer:
         date_from: int | None = None,
         date_to: int | None = None,
         pergunta_usuario: str | None = None,
+        series: list[str] | None = None,
     ) -> str:
         """Build the LLM prompt from analysis data (Req 7.4).
 
@@ -306,26 +534,12 @@ class TextSynthesizer:
             "CONTEXTO IMPORTANTE:\n"
             f"- {CONTEXTO_PANDEMIA}\n"
             "- Sempre mencione esse fator ao interpretar dados que incluam 2020 até 2022.\n\n"
-            "REGRAS DE LINGUAGEM:\n"
-            "- Use linguagem simples e direta, como se explicasse para um vizinho\n"
-            "- Evite jargões técnicos; quando inevitável, explique entre parênteses\n"
-            "- Use exemplos concretos e comparações do cotidiano\n"
-            "- Prefira 'relação forte/moderada/fraca' em vez de coeficientes numéricos\n"
-            "- Traduza subfunções para linguagem comum:\n"
-            + "".join(
-                f"  {codigo} = {traducao}\n"
-                for codigo, traducao in sorted(TRADUCAO_SUBFUNCOES.items())
-            )
-            +
-            "- Diga o que os números significam para a vida das pessoas\n"
-            "- Cada correlação abaixo já vem com um campo \"leitura\" dizendo se o "
-            "sinal (positivo/negativo) é DESEJÁVEL ou INDESEJÁVEL para aquele "
-            "indicador especificamente — use esse campo como a fonte da verdade "
-            "sobre se o resultado é bom ou ruim, não deduza pelo nome do "
-            "indicador nem por associação (ex.: \"prevenção deveria reduzir "
-            "mortes\") sem checar o campo \"leitura\": o sinal real da correlação "
-            "pode contrariar essa intuição\n"
-            f"{periodo_section}"
+            "FIDELIDADE AOS DADOS (regra mais importante):\n"
+            "- Toda afirmação do texto precisa estar nos DADOS ANALISADOS abaixo "
+            "ou no CONTEXTO IMPORTANTE acima. Explique o que esses dados mostram, "
+            "sem acrescentar nada de fora deles.\n"
+            + _REGRAS_FIDELIDADE_E_LINGUAGEM
+            + f"{periodo_section}"
             f"{enfase_section}\n"
             "DADOS ANALISADOS:\n\n"
             "Relações encontradas entre gastos e resultados de saúde:\n"
@@ -333,7 +547,8 @@ class TextSynthesizer:
             "Situações que chamam atenção (possíveis ineficiências ou boas práticas):\n"
             f"{anomalias}\n\n"
             "Como os gastos evoluíram ao longo dos anos:\n"
-            f"{contexto_orcamentario}\n\n"
+            f"{contexto_orcamentario}\n"
+            f"{self._secao_series(series)}\n"
             f"{coverage_section}\n"
             f"{pergunta_section}"
             "COMO RESPONDER:\n"
@@ -361,7 +576,9 @@ class TextSynthesizer:
             "- Seja direto e específico com os dados de Sorocaba. Se "
             "houver dados faltando que sejam relevantes pra resposta, "
             "mencione de forma transparente e explique como isso limita "
-            "as conclusões."
+            "as conclusões.\n"
+            "- Antes de terminar, confira: se uma frase não pode ser "
+            "verificada nos dados acima, retire-a."
         )
 
     def _generate_structured_text(

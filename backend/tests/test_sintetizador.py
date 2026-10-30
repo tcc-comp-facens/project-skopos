@@ -168,6 +168,34 @@ class TestRespostaNaturalSemEstruturaFixa:
         assert "Resumo Executivo" in text
 
 
+class TestFidelidadeAosDados:
+    """O texto deve se limitar ao que os dados e o contexto fornecido
+    sustentam: explicações de fora (vacinação, testagem, variantes...) são
+    afirmações que a avaliação de fidelidade não consegue verificar."""
+
+    def test_prompt_exige_fidelidade_aos_dados(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "FIDELIDADE AOS DADOS" in prompt
+        assert "sem acrescentar nada de fora deles" in prompt
+        assert "nem como hipótese" in prompt
+        assert "não recomende novas políticas" in prompt
+
+    def test_prompt_nao_pede_mais_exemplos_do_cotidiano(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "exemplos concretos" not in prompt
+        assert "vida das pessoas" not in prompt
+
+    def test_prompt_separa_periodo_da_pandemia_do_periodo_dos_dados(
+        self, synth, sample_correlacoes, sample_anomalias, sample_contexto
+    ):
+        prompt = synth._build_prompt(sample_correlacoes, sample_anomalias, sample_contexto)
+        assert "O período da pandemia não é o período coberto pelos dados" in prompt
+
+
 class TestPerguntaUsuario:
     """`pergunta_usuario` (intent_summary do AgenteInterpretacaoIntencao)
     faz o texto responder a pergunta original diretamente."""

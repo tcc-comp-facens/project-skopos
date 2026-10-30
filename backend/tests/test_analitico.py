@@ -196,6 +196,31 @@ class TestAnomaliasOutputFields:
             assert required_fields.issubset(anomaly.keys())
 
 
+class TestAnomaliasDescricaoComMediana:
+    """Regressão: a frase punha o valor do ANO entre parênteses logo após
+    "acima/abaixo da mediana", e o redator escrevia "abaixo da mediana de
+    1.229 casos" com 1.229 sendo o valor do próprio ano. Também chamava todo
+    indicador de "casos"."""
+
+    def test_descricao_traz_valor_do_ano_e_mediana_nomeados(self, agente):
+        data = _make_crossed(305, "dengue", [
+            (2020, 100.0, 20.0), (2021, 74.0, 12.0), (2022, 200.0, 30.0), (2023, 300.0, 46.0),
+        ])
+        anomalias = agente.analisar(data)["anomalias"]
+        a2021 = next(a for a in anomalias if a["ano"] == 2021)
+        assert "gasto de R$ 74.00, abaixo da mediana do período (R$ 150.00)" in a2021["descricao"]
+        assert "indicador dengue em 12.0, abaixo da mediana do período (25.0)" in a2021["descricao"]
+        assert a2021["mediana_despesa"] == 150.0 and a2021["valor_indicador"] == 12.0
+
+    def test_indicador_que_nao_e_caso_nao_vira_casos(self, agente):
+        data = _make_crossed(302, "internacoes", [
+            (2019, 100.0, 10.0), (2020, 200.0, 30.0), (2021, 300.0, 50.0),
+        ])
+        for a in agente.analisar(data)["anomalias"]:
+            assert "casos" not in a["descricao"]
+            assert "indicador internacoes em" in a["descricao"]
+
+
 class TestAnomaliasSinanIndicadoresNegativos:
     def test_sinan_disease_subtype_treated_as_negative_indicator(self, agente):
         """Os 8 subtipos SINAN adicionais (AgenteSINAN, Fase 1) devem ter a

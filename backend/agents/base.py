@@ -26,12 +26,21 @@ Espaço de ações:
       inclui chamadas ao LLM para raciocinar sobre o estado atual (o LLM é
       parte da procedural memory implícita do agente, não do ambiente).
     - Externas (grounding): interação com o ambiente fora da cognição do
-      agente (Neo4j, WebSocket, comunicação lateral entre agentes) —
-      implementadas dentro das estratégias de procedural_memory.
+      agente (Neo4j, WebSocket, delegação a outros agentes) — implementadas
+      dentro das estratégias de procedural_memory.
+
+Comunicação entre agentes (Wooldridge, 2009, cap. de linguagens de
+comunicação de agentes): cada troca é uma `Mensagem` com remetente,
+destinatário e performativa no estilo FIPA-ACL (`request`, `inform`,
+`failure`). O conteúdo é estruturado quando é dado, como no MetaGPT (Hong
+et al., 2024), e linguagem natural quando é produção do LLM. Chamar uma
+ferramenta (componente sem decisão própria) é ação do agente, não mensagem.
 """
 
+import json
 import logging
 import time
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -44,6 +53,53 @@ class ActionFailure(Exception):
         self.action = action
         self.reason = reason
         super().__init__(f"Action failed: {reason}")
+
+
+PERFORMATIVAS = ("request", "inform", "failure")
+
+
+@dataclass
+class Mensagem:
+    """Uma troca entre dois agentes, no envelope do estilo FIPA-ACL.
+
+    `natureza` é "dados" (conteúdo estruturado) ou "texto" (linguagem
+    natural produzida pelo LLM). `tamanho` é o número de caracteres do
+    conteúdo completo (JSON para dados); `conteudo` guarda só um resumo,
+    para o registro não duplicar os dados da análise.
+    """
+
+    remetente: str
+    destinatario: str
+    performativa: str
+    natureza: str
+    conteudo: Any
+    tamanho: int
+    momento: float
+
+    @classmethod
+    def criar(cls, remetente: str, destinatario: str, performativa: str,
+              natureza: str, conteudo: Any, resumo: Any = None) -> "Mensagem":
+        if performativa not in PERFORMATIVAS:
+            raise ValueError(f"performativa desconhecida: {performativa}")
+        if isinstance(conteudo, str):
+            tamanho = len(conteudo)
+            guardado = resumo if resumo is not None else conteudo[:300]
+        else:
+            tamanho = len(json.dumps(conteudo, ensure_ascii=False, default=str))
+            guardado = resumo if resumo is not None else _resumo_de(conteudo)
+        return cls(remetente, destinatario, performativa, natureza, guardado, tamanho, time.time())
+
+    def como_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _resumo_de(conteudo: Any) -> Any:
+    """Contagem de itens por chave, para dados estruturados grandes."""
+    if isinstance(conteudo, dict):
+        return {k: (len(v) if isinstance(v, (list, dict)) else v) for k, v in conteudo.items()}
+    if isinstance(conteudo, list):
+        return {"itens": len(conteudo)}
+    return conteudo
 
 
 class AgenteCoALA:
@@ -67,6 +123,12 @@ class AgenteCoALA:
         self.episodic_memory: list[dict] = []
         self.procedural_memory: dict[str, list[Callable[[dict], None]]] = {}
         self._failed_actions: list[dict] = []
+        # Registro de mensagens da topologia, compartilhado pela raiz com os
+        # nós abaixo dela (None fora de uma análise: nada é registrado).
+        self.registro_mensagens: list[dict] | None = None
+        # Tempo das decisões por LLM do nó (planejamento, revisão) dentro do
+        # relógio da topologia — ver `_deliberar`.
+        self.deliberacao_ms: float = 0.0
 
     def perceive(self) -> dict:
         """Percebe o ambiente (consulta Neo4j ou recebe dados do orquestrador).
@@ -196,6 +258,92 @@ class AgenteCoALA:
                 "timestamp": time.time(),
             }
         )
+
+    def _enviar(
+        self,
+        outro_id: str,
+        performativa: str,
+        natureza: str,
+        conteudo: Any,
+        recebida: bool = False,
+        resumo: Any = None,
+    ) -> None:
+        """Registra uma troca com outro agente no registro da topologia.
+
+        `recebida=True` registra a mensagem do outro agente para este (a
+        resposta a um `request`). Sem registro configurado, não faz nada.
+        """
+        if self.registro_mensagens is None:
+            return
+        remetente, destinatario = (outro_id, self.agent_id) if recebida else (self.agent_id, outro_id)
+        self.registro_mensagens.append(
+            Mensagem.criar(remetente, destinatario, performativa, natureza, conteudo, resumo).como_dict()
+        )
+
+    def _deliberar(self, decisao: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Executa uma decisão por LLM do nó e soma a duração em `deliberacao_ms`.
+
+        Usado pelos coordenadores no planejamento e na revisão das entregas,
+        que rodam dentro do relógio da topologia. Separa, no custo de
+        coordenação, o tempo gasto esperando o LLM do custo estrutural
+        (instanciar, repassar e agregar).
+        """
+        inicio = time.time()
+        try:
+            return decisao(*args, **kwargs)
+        finally:
+            self.deliberacao_ms += (time.time() - inicio) * 1000
+
+    def _delegar(
+        self,
+        outro_tipo: str,
+        outro_id: str,
+        chamada: Callable[[], Any],
+        pedido: Any = None,
+        natureza_resposta: str = "dados",
+        extrair: Callable[[Any], Any] | None = None,
+        natureza_pedido: str = "dados",
+    ) -> Any:
+        """Delega a outro agente registrando `request` e `inform`/`failure`.
+
+        Se o outro for uma ferramenta (`core.quality_metrics.papel_de`), a
+        chamada é uma ação deste agente e não gera mensagem. `extrair`
+        escolhe o que da resposta vira o conteúdo do `inform` (por exemplo,
+        só o texto produzido). `natureza_pedido="texto"` marca um pedido em
+        linguagem natural, como o subobjetivo que o coordenador escreve.
+        """
+        from core.quality_metrics import papel_de
+
+        if papel_de(outro_tipo) == "ferramenta":
+            return chamada()
+        self._enviar(outro_id, "request", natureza_pedido, pedido if pedido is not None else {})
+        try:
+            resposta = chamada()
+        except Exception as exc:
+            self._enviar(outro_id, "failure", "dados", str(exc), recebida=True)
+            raise
+        conteudo = extrair(resposta) if extrair else resposta
+        self._enviar(outro_id, "inform", natureza_resposta, conteudo if conteudo is not None else {},
+                     recebida=True)
+        return resposta
+
+    def reenviar(self) -> dict[str, list[dict]]:
+        """Reenvia a última entrega ao nó que a contestou.
+
+        Devolve cópias das listas de resultado da working memory
+        (`indicadores` e `despesas`), isto é, o mesmo conteúdo que a última
+        chamada a `query()` entregou, sem consultar o banco de novo. Usado
+        pela revisão das entregas (`agents/revisao_entregas.py`) quando um
+        valor recebido parece incompatível com a própria série.
+
+        Returns:
+            Dicionário com as listas presentes na working memory.
+        """
+        return {
+            campo: [dict(r) for r in self.working_memory.get(campo) or []]
+            for campo in ("indicadores", "despesas")
+            if campo in self.working_memory
+        }
 
     def run_coala_cycle(self) -> None:
         """Ciclo CoALA completo.

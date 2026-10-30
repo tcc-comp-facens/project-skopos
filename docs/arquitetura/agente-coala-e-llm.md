@@ -1,6 +1,6 @@
 # Arquitetura Base de um Agente CoALA (e como ele chama o LLM)
 
-> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (DeepSeek por default, OpenAI opcional — ver `LLM_PROVIDER`). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md).
+> Este documento explica a estrutura comum a **todo** agente do sistema — de onde vêm `working_memory`/`semantic_memory`/`episodic_memory`/`procedural_memory`, como o ciclo cognitivo roda, e o caminho exato de código que um agente percorre quando decide chamar o LLM (OpenAI, `gpt-5.6-luna`, fixo no código). Para o pipeline completo de cada topologia, ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md).
 
 ## Sumário
 
@@ -39,8 +39,8 @@ Nenhum agente concreto reimplementa essas quatro estruturas do zero — todos he
 
 | Memória | O que guarda | Exemplo real no código |
 |---|---|---|
-| **`working_memory`** | Buffer ativo de curto prazo — parâmetros da análise em andamento, resultados parciais de outros agentes. Equivalente às antigas "beliefs" de um design BDI. | `AgenteVigilanciaEpidemiologica.working_memory["despesas"]` — despesas retornadas pela última consulta ao Neo4j |
-| **`semantic_memory`** | Fatos/regras declarativas de domínio, lidos via *retrieval* explícito — nunca hardcoded direto do módulo no meio da lógica de decisão. | `AgenteCorrelacao.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4}` |
+| **`working_memory`** | Buffer ativo de curto prazo — parâmetros da análise em andamento, resultados parciais de outros agentes. Equivalente às antigas "beliefs" de um design BDI. | `AgenteOrcamentoSubfuncao.working_memory["despesas"]` — despesas retornadas pela última consulta ao Neo4j |
+| **`semantic_memory`** | Fatos/regras declarativas de domínio, lidos via *retrieval* explícito — nunca hardcoded direto do módulo no meio da lógica de decisão. | `AgenteAnalitico.semantic_memory = {"limiar_alta": 0.7, "limiar_media": 0.4, ...}` |
 | **`episodic_memory`** | Histórico de ações executadas nesta instância (sucesso e falha), gravado automaticamente pela classe base a cada tentativa. Só em memória — descartado ao fim do processo. | Cada entrada: `{"action": goal, "status": "completed"/"failed", "detail": ..., "timestamp": ...}` |
 | **`procedural_memory`** | "Como fazer" — lista ordenada de estratégias (métodos `_act_*`) por `goal`. A primeira é a estratégia primária; as demais são fallbacks tentados em ordem se a anterior falhar. | `{"consultar_despesas": [self._act_consultar_despesas, self._act_fallback_despesas]}` |
 
@@ -93,12 +93,13 @@ def run_coala_cycle(self) -> None:
 **Instrumentação de log (observabilidade):** `run_coala_cycle()` loga início/fim do ciclo com timing e a lista de goals propostos; `execute()` loga início/fim de cada ação individual, também com timing. Isso é herdado automaticamente por todo agente — nenhuma subclasse precisa adicionar logging próprio para ter essa visibilidade. Exemplo real de saída (nível `INFO`):
 
 ```
-Agent star-vigilancia-a1b2c3: iniciando ciclo CoALA
-Agent star-vigilancia-a1b2c3: 3 ação(ões) propostas: ['planejar_consulta', 'consultar_despesas', 'consultar_indicadores']
-Agent star-vigilancia-a1b2c3: iniciando ação 'planejar_consulta' (estratégia 1/1: _act_planejar_consulta)
-Agent star-vigilancia-a1b2c3: ação 'planejar_consulta' concluída em 0.1ms
+Agent star-sinan-a1b2c3: iniciando ciclo CoALA
+Agent star-sinan-a1b2c3: 3 ação(ões) propostas: ['consultar_indicadores', 'consultar_indicadores', 'consultar_indicadores']
+Agent star-sinan-a1b2c3: dimensão de consulta escolhida via score: sem quebra dimensional (total por ano)
+Agent star-sinan-a1b2c3: iniciando ação 'consultar_indicadores' (estratégia 1/2: _act_consultar_indicadores)
+Agent star-sinan-a1b2c3: ação 'consultar_indicadores' concluída em 8.3ms
 ...
-Agent star-vigilancia-a1b2c3: ciclo CoALA concluído em 1.0ms (3 ações, 0 falha(s) nesta rodada)
+Agent star-sinan-a1b2c3: ciclo CoALA concluído em 8.4ms (1 ação, 0 falha(s) nesta rodada)
 ```
 
 ### Os 4 hooks que uma subclasse sobrescreve
@@ -106,8 +107,8 @@ Agent star-vigilancia-a1b2c3: ciclo CoALA concluído em 1.0ms (3 ações, 0 falh
 | Método | Implementação padrão (na base) | O que uma subclasse tipicamente faz |
 |---|---|---|
 | `perceive()` | Retorna `{}` | Lê parâmetros já colocados na `working_memory` pelo caller |
-| `propose_actions()` | Retorna `[]` | Decide quais goals propor, com base no estado da `working_memory` — normalmente 1 candidato por goal aplicável; só `AgentePriorizacaoAnalitica` propõe **múltiplos** candidatos concorrentes para o mesmo goal |
-| `evaluate_and_select(candidates)` | `[dict(c, status="pending") for c in candidates]` — passthrough | Na maioria dos agentes, permanece passthrough (não há candidatos concorrentes a arbitrar — decisão intencional documentada no código, não omissão). Só `AgentePriorizacaoAnalitica` faz arbitragem de verdade aqui |
+| `propose_actions()` | Retorna `[]` | Decide quais goals propor, com base no estado da `working_memory`. Três famílias propõem **múltiplos** candidatos concorrentes para o mesmo goal, arbitrados de fato em `evaluate_and_select`: os agentes de saúde/orçamento com dimensões válidas (1 candidato por dimensão + "sem quebra"), `AgentePriorizacaoAnalitica` (1 candidato por ângulo de ênfase) e `AgenteInterpretacaoIntencao` (classificação de escopo em 3 vias). Os demais (orquestradores, supervisores, `AgenteAnalitico`, `AgenteContextoOrcamentario`) propõem 1 candidato fixo por goal aplicável |
+| `evaluate_and_select(candidates)` | `[dict(c, status="pending") for c in candidates]` — passthrough | Passthrough no `SupervisorAnalitico`, no `SupervisorContexto` e nas ferramentas (`AgenteAnalitico`, `AgenteContextoOrcamentario`), onde não há candidatos concorrentes. Arbitragem real (proposta determinística + seleção pelo LLM, com a proposta como alternativa) nas famílias acima e no planejamento dos coordenadores (`agents/planejamento.py`) |
 | `execute(actions)` | Já implementado na base (ver abaixo) — normalmente **não** é sobrescrito | — |
 
 ---
@@ -139,16 +140,20 @@ def execute(self, actions: list[dict]) -> None:
 Cada estratégia é um método `_act_*(self, action: dict) -> None` da própria subclasse, registrado explicitamente no `__init__`:
 
 ```python
-# Exemplo — agente de domínio
+# Exemplo — agente de saúde (AgenteSINAN)
 self.procedural_memory = {
-    "planejar_consulta": [self._act_planejar_consulta],
-    "consultar_despesas": [
-        self._act_consultar_despesas,   # estratégia primária
-        self._act_fallback_despesas,     # fallback: lista vazia
-    ],
     "consultar_indicadores": [
-        self._act_consultar_indicadores,
-        self._act_fallback_indicadores,
+        self._act_consultar_indicadores,   # estratégia primária
+        self._act_fallback_indicadores,     # fallback: lista vazia
+    ],
+}
+
+# Exemplo — agente orçamentário (AgenteOrcamentoSubfuncao), 3 goals distintos
+self.procedural_memory = {
+    "consultar_despesas": [self._act_consultar_despesas, self._act_fallback_despesas],
+    "analisar_tendencia": [self._act_analisar_tendencia],
+    "consultar_variacao_anual": [
+        self._act_consultar_variacao_anual, self._act_fallback_variacao_anual,
     ],
 }
 ```
@@ -200,26 +205,24 @@ def generate(
     ...
 ```
 
-### O provedor: DeepSeek (default) ou OpenAI
+### Modelos fixos (só OpenAI)
 
-Qual provedor responde é decidido pela variável `LLM_PROVIDER` — lida a cada chamada, não no import, então basta trocar o `.env` e reiniciar o backend. Nenhum agente sabe qual provedor está ativo: todos chamam `generate()`/`generate_stream()`. O SDK é o `openai` nos dois casos (a API do DeepSeek é compatível), e o backend loga o provedor resolvido no startup e em cada chamada (`provider=`).
+Não há escolha de provedor nem de modelo por ambiente. Todos os agentes chamam `generate()`/`generate_stream()` com `llm_client.MODELO_ANALISE` (`gpt-5.6-luna`). Só a avaliação RAGAS passa outro modelo, o juiz fixo `gpt-5-mini`, diferente do gerador para evitar o viés de autopreferência. A única variável obrigatória é `OPENAI_API_KEY`, e o backend loga os dois modelos no startup.
 
-| Aspecto | `LLM_PROVIDER=deepseek` (default) | `LLM_PROVIDER=openai` |
-|---|---|---|
-| Endpoint | `base_url="https://api.deepseek.com"` | endpoint oficial do SDK |
-| Modelo | `deepseek-v4-flash` | `gpt-5.6-luna` |
-| Variável da chave | `DEEPSEEK_API_KEY` | `OPENAI_API_KEY` |
-| Override de modelo | `DEEPSEEK_MODEL` | `OPENAI_MODEL` |
-| `thinking` | Desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) — resposta direta, sem chain-of-thought | Não enviado — é parâmetro proprietário do DeepSeek e a OpenAI responde 400 a parâmetro desconhecido |
-| Limite de saída | `max_tokens` | `max_completion_tokens` (sem `temperature`) nos modelos de raciocínio (`gpt-5*`, série `o*`), que rejeitam a forma clássica; `max_tokens` nos demais |
+| Aspecto | Valor |
+|---|---|
+| Endpoint | endpoint oficial do SDK `openai` |
+| Modelo das análises | `gpt-5.6-luna` |
+| Modelo do juiz RAGAS | `gpt-5-mini` |
+| Limite de saída | `max_completion_tokens` (sem `temperature`) nos modelos de raciocínio (`gpt-5*`, série `o*`), que rejeitam a forma clássica; `max_tokens` nos demais |
 
-Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e hierárquica) correm em paralelo de verdade.
+Um único modelo por uso, sem cadeia de fallback entre modelos; retry de até 2 tentativas com backoff linear (`10s × tentativa`), só para erros de rate limit (429). Não há lock global nem intervalo mínimo auto-imposto — chamadas de threads diferentes (estrela e hierárquica) correm em paralelo de verdade.
 
 ### O que acontece a cada chamada
 
 1. **Antes da chamada** — log em `INFO` com um preview de uma linha do prompt (truncado a ~300 chars) e o tamanho total; o prompt **completo** só aparece em `DEBUG` (`LOG_LEVEL=DEBUG`).
 2. **A chamada em si** — dispara direto, sem espera preventiva; em caso de 429, espera e tenta de novo (até 2x).
-3. **Pós-processamento** — remove automaticamente tags `<think>...</think>` da resposta, caso apareçam (defensivo, já que `thinking` está desabilitado).
+3. **Pós-processamento** — remove automaticamente tags `<think>...</think>` da resposta, caso apareçam (defensivo; a OpenAI não as emite).
 4. **Depois da chamada** — log com o tamanho da resposta recebida e a contagem de tokens (prompt/completion/total). O **conteúdo** da resposta não é logado (só o tamanho) — assimétrico com o prompt, que tem preview + versão completa em DEBUG.
 5. **Falha** (indisponível, erro fatal, ou todas as tentativas de retry esgotadas) — retorna `None` em vez de levantar exceção. Quem chamou decide o que fazer (tipicamente: usar um valor padrão determinístico).
 
@@ -228,14 +231,14 @@ Em ambos: um único modelo por vez, sem cadeia de fallback entre modelos; retry 
 Todo call site passa `caller=` — normalmente o `agent_id` do agente, às vezes com um sufixo de propósito (`f"{self.agent_id}:algum_proposito"`) quando o mesmo agente pode chamar o LLM por mais de um motivo. Isso não afeta o comportamento da chamada — é usado só para os logs, para responder "qual agente disparou qual chamada e por quê" quando várias análises/threads rodam ao mesmo tempo:
 
 ```
-LLM [star-priorizacao-9f8e7d:priorizar_achados]: enviando prompt (model=deepseek-v4-flash, 850 chars) — ...
+LLM [star-priorizacao-9f8e7d:priorizar_achados]: enviando prompt (model=gpt-5.6-luna, 850 chars) — ...
 ```
 
 ---
 
 ## Exemplo completo de ponta a ponta
 
-O `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_intencao.py`) é o exemplo mais direto de um agente CoALA que chama o LLM — sua única ação de fato faz isso:
+O `AgenteInterpretacaoIntencao` (`backend/agents/intent/agente_interpretacao_intencao.py`) é o exemplo mais direto de um agente CoALA que chama o LLM — sua única ação de fato faz isso. Versão simplificada abaixo para foco didático no ciclo CoALA em si — a classificação real de escopo tem 3 vias (fora de escopo / dentro mas sem precisar de análise / dentro precisando de análise, não um booleano `em_escopo`), e o construtor aceita opcionalmente um `neo4j_client` que habilita uma ação extra (`buscar_memoria_episodica`, recupera análises anteriores como contexto) — ver [../02-AGENTES.md](../02-AGENTES.md#agente-de-interpretação-de-intenção-1) para a versão completa:
 
 ```python
 class AgenteInterpretacaoIntencao(AgenteCoALA):
@@ -300,12 +303,15 @@ Esse mesmo padrão — uma ação chama o LLM via `core.llm_client.generate(...,
 
 ## Quem herda de `AgenteCoALA` hoje
 
+20 classes herdam `AgenteCoALA` hoje (ver [../02-AGENTES.md](../02-AGENTES.md) para o detalhamento de cada uma):
+
 | Agente | Chama o LLM? | Arquivo |
 |---|---|---|
-| `AgenteInterpretacaoIntencao` | **Sim** — sempre (guardrail + extração) | `agents/intent/agente_interpretacao_intencao.py` |
-| `AgenteVigilanciaEpidemiologica`, `AgenteSaudeHospitalar`, `AgenteAtencaoPrimaria`, `AgenteMortalidade` | Condicional — só se `USE_LLM_QUERY_PLANNING` estiver ligada **e** o mapeamento estático não for mais trivial (fast-path por padrão) | `agents/domain/*.py` + `agents/domain/query_planning.py` |
-| `AgenteCorrelacao`, `AgenteAnomalias`, `AgenteContextoOrcamentario` | **Não** — cálculo 100% determinístico, decisão intencional | `agents/analytical/correlacao.py`, `anomalias.py`, `agents/context/contexto_orcamentario.py` |
+| `AgenteInterpretacaoIntencao` | **Sim** — sempre (guardrail em 3 vias + extração combinados) | `agents/intent/agente_interpretacao_intencao.py` |
+| 8 agentes de saúde (`AgenteSINAN`, `AgenteSIH`, `AgenteSIM`, `AgenteSIPNI`, `AgenteCOVID`, `AgenteSINASC`, `AgenteSIA`, `AgenteCNES`) | Condicional — arbitragem de dimensão via LLM se `use_llm=True` **e** o sistema tiver dimensões válidas (COVID/SIA nunca chamam) | `agents/domain/*.py` + `agents/domain/query_planning.py` |
+| `AgenteOrcamentoSubfuncao` (7 instâncias) | Condicional — idem, arbitragem de dimensão de despesa | `agents/domain/agente_orcamento.py` |
+| `AgenteAnalitico`, `AgenteContextoOrcamentario` | **Não** — cálculo 100% determinístico, decisão intencional | `agents/analytical/analitico.py`, `agents/context/contexto_orcamentario.py` |
 | `AgentePriorizacaoAnalitica` | Condicional — só se `use_llm=True` na análise | `agents/analytical/priorizacao.py` |
-| `OrquestradorEstrela`, `CoordenadorGeral`, `SupervisorDominio`, `SupervisorAnalitico`, `SupervisorContexto` | Não diretamente — delegam a agentes/serviços que chamam | `agents/star/orchestrator.py`, `agents/hierarchical/*.py` |
+| `OrquestradorEstrela`, `CoordenadorGeral`, `SupervisorOrcamento`, `SupervisorSaude`, `SupervisorAnalitico`, `SupervisorContexto` | Não — delegam a agentes/serviços que chamam. A hierárquica é uma árvore estrita: nenhum supervisor chama o LLM por conta própria só para se comunicar com outro; o `CoordenadorGeral` repassa dados já coletados como parâmetro direto | `agents/star/orchestrator.py`, `agents/hierarchical/*.py` |
 
-`TextSynthesizer` (`agents/analytical/sintetizador.py`) também chama o LLM, mas **não** herda de `AgenteCoALA` — é modelado como serviço comum porque não percebe ambiente mutável, não propõe ações concorrentes, e não escolhe entre estratégias alternativas (quem decide isso é o caller). Ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md) para onde ele entra no pipeline.
+`TextSynthesizer` (`agents/analytical/sintetizador.py`) e o self-check pós-síntese (`core/claim_verifier.py`) também chamam o LLM, mas **não** são agentes CoALA: o primeiro é modelado como serviço comum (não percebe ambiente mutável, não propõe ações concorrentes); o segundo é um módulo funcional de 3 chamadas em sequência (Chain-of-Verification). Ver [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md) para onde cada um entra no pipeline.

@@ -1,5 +1,5 @@
 """
-Diagnóstico de acesso ao endpoint de embeddings do provedor do juiz RAGAS.
+Diagnóstico de acesso ao endpoint de embeddings usado pela avaliação RAGAS.
 
 Existe porque um 403 `model_not_found` no endpoint de embeddings tem duas
 causas indistinguíveis pela mensagem de erro:
@@ -45,19 +45,17 @@ def _rotulo(exc: Exception) -> str:
 
 
 def main() -> int:
-    provider = ragas_metrics.get_judge_provider()
-    print(f"Provedor do juiz : {provider.name}  (RAGAS_PROVIDER)")
-    print(f"Chave            : {provider.api_key_env}", end=" ")
-    if not llm_client.has_api_key(provider):
+    print(f"Chave            : {llm_client.API_KEY_ENV}", end=" ")
+    if not llm_client.has_api_key():
         print("— AUSENTE. Configure antes de rodar.")
         return 1
     print("— configurada")
-    print(f"Modelo do juiz   : {ragas_metrics.get_judge_model(provider)}")
+    print(f"Modelo do juiz   : {ragas_metrics.MODELO_JUIZ}")
     print()
 
     print("1) chat.completions com a mesma chave")
     resposta = llm_client.generate(
-        "Responda apenas: ok", caller="check_embeddings", provider=provider
+        "Responda apenas: ok", ragas_metrics.MODELO_JUIZ, caller="check_embeddings"
     )
     print(f"   {'OK' if resposta else 'FALHOU'} — resposta: {(resposta or '')[:40]!r}")
     print()
@@ -71,7 +69,7 @@ def main() -> int:
         if m and m not in vistos:
             vistos.append(m)
 
-    client = llm_client.build_client(provider)
+    client = llm_client.build_client()
 
     print("2) embeddings, por modelo")
     print(
@@ -99,7 +97,7 @@ def main() -> int:
 
         linha = {}
         for bypass in (False, True):
-            emb = ragas_metrics.SkoposRagasEmbeddings(provider=provider, model=modelo)
+            emb = ragas_metrics.SkoposRagasEmbeddings(model=modelo)
             try:
                 emb._create(modelo, TEXTO, bypass)
                 linha[bypass] = "OK"
@@ -136,7 +134,7 @@ def main() -> int:
 
     print("  Nenhum modelo de embeddings está na allowlist do projeto.")
     print("  Habilite em platform.openai.com > Project > Limits (permissões")
-    print("  de modelo) ou configure RAGAS_EMBEDDING_MODEL com um permitido.")
+    print("  de modelo).")
     return 2
 
 

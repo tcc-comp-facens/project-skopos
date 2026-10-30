@@ -21,6 +21,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from agents.base import ActionFailure, AgenteCoALA
+from agents.data_crossing import subtipos_pedidos
 from db.query_builder import dimensoes_validas
 
 if TYPE_CHECKING:
@@ -87,7 +88,9 @@ class AgenteSIA(AgenteCoALA):
         analysis_id = self.working_memory["analysis_id"]
         date_from = self.working_memory["date_from"]
         date_to = self.working_memory["date_to"]
-        subtipos = list(self.semantic_memory["subtipos"])
+        subtipos = subtipos_pedidos(
+            self.semantic_memory["subtipos"], self.working_memory.get("health_params")
+        )
 
         try:
             logger.info(
@@ -137,8 +140,10 @@ class AgenteSIA(AgenteCoALA):
             intent_summary: Resumo da intenção do usuário (não usado —
                 aceito para uniformidade de assinatura com os demais
                 agentes de saúde).
-            health_params: Indicadores solicitados na análise (idem, não
-                usado para filtrar SUBTIPOS nesta fase).
+            health_params: Indicadores solicitados na análise. O agente
+                consulta só os seus subtipos pedidos (`subtipos_pedidos`);
+                sem pedido, ou se nenhum subtipo dele foi pedido, cobre o
+                domínio inteiro.
 
         Returns:
             Dicionário com chave "indicadores". Lista vazia se não houver
@@ -148,6 +153,7 @@ class AgenteSIA(AgenteCoALA):
             "analysis_id": analysis_id,
             "date_from": date_from,
             "date_to": date_to,
+            "health_params": health_params,
         })
 
         self.run_coala_cycle()

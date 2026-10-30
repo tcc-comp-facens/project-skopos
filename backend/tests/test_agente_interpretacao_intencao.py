@@ -221,6 +221,22 @@ class TestExtracaoDeParametros:
         assert result.params.date_to == 2023
         assert set(result.params.health_params) == {"dengue", "vacinacao"}
 
+    def test_prompt_separa_orcamento_de_indicador(self):
+        """Regressão: em "dengue ... orçamento de vigilância epidemiológica",
+        o LLM chegou a acrescentar o indicador CNES
+        `estabelecimentos_vigilancia_epidemiologica`, confundindo a área de
+        gasto com um indicador. Isso puxava 5 subfunções e dezenas de
+        achados para uma pergunta sobre uma doença só."""
+        with patch("core.llm_client.generate", return_value=_llm_json()) as mock_generate:
+            _agente().parse(
+                "Quantos casos de dengue houve entre 2020 e 2023 e como isso se "
+                "relacionou com o orçamento de vigilância epidemiológica?"
+            )
+        prompt = mock_generate.call_args[0][0]
+        assert "health_params são INDICADORES de saúde" in prompt
+        assert "não acrescente indicador por causa dela" in prompt
+        assert "só entram quando a pergunta fala explicitamente disso" in prompt
+
     def test_intent_summary_is_populated(self):
         llm_response = _llm_json(intent_summary="comparar eficiência dos gastos em vacinação")
         with patch("core.llm_client.generate", return_value=llm_response):

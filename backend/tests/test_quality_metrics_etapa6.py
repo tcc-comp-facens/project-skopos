@@ -48,10 +48,36 @@ class TestComputeTokenCost:
 
 class TestComputeCommunicationVolume:
     def test_star_message_count(self):
-        agent_metrics = [{"agentName": "sinan"}, {"agentName": "analitico"}]
+        agent_metrics = [{"agentName": "sinan"}, {"agentName": "sih"}]
         result = compute_communication_volume("star", agent_metrics)
         assert result["agent_invocations"] == 2
         assert result["message_count"] == 4  # 2 agentes * (1 chamada + 1 retorno)
+        assert result["fonte_mensagens"] == "estimativa"
+
+    def test_ferramentas_nao_contam_como_agentes(self):
+        """Classificação CoALA: analítico, contexto orçamentário, SIA e
+        COVID não decidem com o LLM — são ferramentas de quem os chama."""
+        agent_metrics = [
+            {"agentName": "sinan"}, {"agentName": "analitico"},
+            {"agentName": "contexto_orcamentario"}, {"agentName": "covid"},
+            {"agentName": "sia", "papel": "ferramenta"},
+        ]
+        result = compute_communication_volume("star", agent_metrics)
+        assert result["agent_invocations"] == 1
+        assert result["ferramentas_acionadas"] == 4
+        assert result["message_count"] == 2
+
+    def test_contagem_vem_do_registro_de_mensagens_quando_existe(self):
+        mensagens = [
+            {"natureza": "dados", "tamanho": 900},
+            {"natureza": "texto", "tamanho": 120},
+            {"natureza": "texto", "tamanho": 80},
+        ]
+        result = compute_communication_volume("hierarchical", [{"agentName": "x"}], mensagens=mensagens)
+        assert result["message_count"] == 3
+        assert result["mensagens_dados"] == 1 and result["mensagens_texto"] == 2
+        assert result["caracteres_texto"] == 200
+        assert result["fonte_mensagens"] == "registro"
 
     def test_hierarchical_message_count(self):
         """Árvore estrita: sem canal lateral entre supervisores, o proxy de
@@ -389,7 +415,8 @@ class TestTabelaDeAnomalias:
     def _linhas(self):
         relatorio = generate_comparative_report(
             quality={"quality": {"star": {"completeness": {"score": 0.5}},
-                                 "hierarchical": {"completeness": {"score": 0.5}}},
+                                 "hierarchical": {"completeness": {"score": 0.5}},
+                                 "deterministic_consistency": {"all_identical": True}},
                      "efficiency": {}, "resilience": {}, "cost": {}, "communication": {}},
             star_agent_metrics=[], hier_agent_metrics=[],
             star_result={"anomalias": self.ANOMALIAS, "correlacoes": []},
@@ -414,3 +441,41 @@ class TestTabelaDeAnomalias:
         posicoes = {l.index("sifilis_adquirida") if "sifilis" in l else l.index("dengue")
                     for l in linhas}
         assert len(posicoes) == 1, "a coluna do indicador deve começar na mesma posição"
+
+
+class TestRelatorioComDivergencia:
+    """Quando o planejamento leva as topologias a buscar dados diferentes, o
+    relatório não pode dizer que as correlações são idênticas."""
+
+    CORR = {"subfuncao": 305, "tipo_indicador": "casos", "spearman": -0.8,
+            "classificacao": "alta", "n_pontos": 4}
+
+    def _relatorio(self, identicas, hier_corrs, star_ms=9687.0, hier_ms=31555.0):
+        return generate_comparative_report(
+            quality={"quality": {"star": {"completeness": {"score": 0.5}},
+                                 "hierarchical": {"completeness": {"score": 0.5}},
+                                 "deterministic_consistency": {"all_identical": identicas,
+                                                               "divergences": []}},
+                     "efficiency": {}, "resilience": {}, "cost": {}, "communication": {}},
+            star_agent_metrics=[], hier_agent_metrics=[],
+            star_wall_clock_ms=star_ms, hier_wall_clock_ms=hier_ms,
+            star_result={"correlacoes": [self.CORR], "anomalias": []},
+            hier_result={"correlacoes": hier_corrs, "anomalias": []},
+        )
+
+    def test_divergentes_listam_cada_topologia(self):
+        outra = dict(self.CORR, subfuncao=302, tipo_indicador="internacoes")
+        rel = self._relatorio(False, [self.CORR, outra])
+        assert "idênticas" not in rel
+        assert "Correlações (Estrela):" in rel and "Correlações (Hierárquica):" in rel
+        assert "internacoes" in rel
+
+    def test_identicas_listam_uma_vez(self):
+        rel = self._relatorio(True, [self.CORR])
+        assert rel.count("Correlações (") == 1
+        assert "idênticas nas duas topologias" in rel
+
+    def test_diferenca_de_tempo_nunca_passa_de_100_por_cento(self):
+        rel = self._relatorio(True, [self.CORR])
+        assert "→ Estrela levou 69.3% menos tempo" in rel
+        assert "mais rápida" not in rel

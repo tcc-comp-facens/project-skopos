@@ -7,6 +7,7 @@ from agents.data_crossing import (
     cross_domain_data,
     deduplicate_despesas,
     detect_data_gaps,
+    subtipos_pedidos,
 )
 
 
@@ -247,3 +248,94 @@ class TestDetectDataGaps:
         coverage = result["despesas_coverage"][301]
         assert coverage["present"] == []
         assert coverage["missing"] == [2020]
+
+    def test_token_covid_vira_casos_e_obitos(self):
+        """Regressão: health_params traz o token "covid", mas o Neo4j guarda
+        os subtipos "casos" e "obitos". Sem a tradução, a COVID aparecia
+        como "sem dados" em todos os anos mesmo com os registros presentes."""
+        despesas = [{"subfuncao": 305, "ano": a, "valor": 10.0} for a in (2020, 2021, 2022)]
+        indicadores = [
+            {"tipo": t, "ano": a, "valor": 5.0}
+            for t in ("casos", "obitos") for a in (2020, 2021, 2022)
+        ]
+        result = detect_data_gaps(despesas, indicadores, 2020, 2022, health_params=["covid"])
+        assert "covid" not in result["indicadores_coverage"]
+        assert result["indicadores_coverage"]["casos"]["coverage"] == 1.0
+        assert result["indicadores_coverage"]["obitos"]["coverage"] == 1.0
+        assert 305 in result["despesas_coverage"]
+        assert result["summary"]["has_gaps"] is False
+
+    def test_token_covid_aponta_so_os_anos_sem_serie(self):
+        despesas = [{"subfuncao": 305, "ano": a, "valor": 10.0} for a in range(2019, 2025)]
+        indicadores = [{"tipo": t, "ano": a, "valor": 5.0}
+                       for t in ("casos", "obitos") for a in range(2020, 2024)]
+        result = detect_data_gaps(despesas, indicadores, 2019, 2024, health_params=["covid"])
+        # 2019 é anterior à COVID-19: fora de vigência, não lacuna
+        assert result["indicadores_coverage"]["casos"]["missing"] == [2024]
+        assert result["indicadores_coverage"]["casos"]["fora_de_vigencia"] == [2019]
+
+    def test_covid_antes_de_2020_nao_e_lacuna(self):
+        """Pergunta de 2016 a 2025 sobre covid: os anos de 2016 a 2019 não
+        podem aparecer como "faltam dados", nem derrubar a completude, nem
+        virar descasamento de cruzamento."""
+        despesas = [{"subfuncao": 305, "ano": a, "valor": 10.0} for a in range(2016, 2026)]
+        indicadores = [{"tipo": t, "ano": a, "valor": 5.0}
+                       for t in ("casos", "obitos") for a in range(2020, 2026)]
+        result = detect_data_gaps(despesas, indicadores, 2016, 2025, health_params=["covid"])
+        assert result["fora_de_vigencia"] == {"casos": [2016, 2017, 2018, 2019],
+                                              "obitos": [2016, 2017, 2018, 2019]}
+        assert result["indicadores_coverage"]["obitos"]["coverage"] == 1.0
+        assert result["summary"]["indicadores_completeness"] == 1.0
+        assert not any("2016" in g["description"] for g in result["gaps"])
+        assert result["summary"]["has_gaps"] is False
+
+    def test_covid_com_lacuna_real_depois_de_2020(self):
+        despesas = [{"subfuncao": 305, "ano": a, "valor": 10.0} for a in range(2016, 2026)]
+        indicadores = [{"tipo": t, "ano": a, "valor": 5.0}
+                       for t in ("casos", "obitos") for a in range(2020, 2024)]
+        result = detect_data_gaps(despesas, indicadores, 2016, 2025, health_params=["covid"])
+        assert result["indicadores_coverage"]["casos"]["missing"] == [2024, 2025]
+        assert result["summary"]["indicadores_completeness"] == round(8 / 12, 4)
+        descricoes = " ".join(g["description"] for g in result["gaps"])
+        assert "2024, 2025" in descricoes and "2019" not in descricoes
+
+    def test_indicador_sem_inicio_definido_continua_igual(self):
+        despesas = [{"subfuncao": 305, "ano": a, "valor": 10.0} for a in range(2016, 2019)]
+        indicadores = [{"tipo": "dengue", "ano": 2018, "valor": 5.0}]
+        result = detect_data_gaps(despesas, indicadores, 2016, 2018, health_params=["dengue"])
+        assert result["indicadores_coverage"]["dengue"]["missing"] == [2016, 2017]
+        assert result["fora_de_vigencia"] == {}
+
+    def test_token_vacinacao_vira_subtipos_do_sipni(self):
+        despesas = [{"subfuncao": 301, "ano": 2020, "valor": 10.0}]
+        indicadores = [
+            {"tipo": "cobertura_vacinal", "ano": 2020, "valor": 80.0},
+            {"tipo": "doses_aplicadas", "ano": 2020, "valor": 1000.0},
+        ]
+        result = detect_data_gaps(despesas, indicadores, 2020, 2020, health_params=["vacinacao"])
+        assert set(result["indicadores_coverage"]) == {"cobertura_vacinal", "doses_aplicadas"}
+        assert result["summary"]["has_gaps"] is False
+
+
+class TestSubtiposPedidos:
+    """Cada agente de saúde consulta só os seus subtipos pedidos na pergunta."""
+
+    SINAN = ["dengue", "chikungunya", "tuberculose"]
+
+    def test_sem_pedido_cobre_o_dominio_inteiro(self):
+        assert subtipos_pedidos(self.SINAN, None) == self.SINAN
+        assert subtipos_pedidos(self.SINAN, []) == self.SINAN
+
+    def test_com_pedido_so_os_pedidos_na_ordem_do_agente(self):
+        assert subtipos_pedidos(self.SINAN, ["tuberculose", "dengue"]) == ["dengue", "tuberculose"]
+
+    def test_tokens_sao_traduzidos(self):
+        assert subtipos_pedidos(["casos", "obitos"], ["covid"]) == ["casos", "obitos"]
+        assert subtipos_pedidos(["cobertura_vacinal", "doses_aplicadas"], ["vacinacao"]) == [
+            "cobertura_vacinal", "doses_aplicadas",
+        ]
+
+    def test_agente_acionado_sem_subtipo_pedido_cobre_o_dominio(self):
+        """Ex.: o planejamento acrescentou o agente porque a pergunta cita o
+        tema, mas a interpretação não resolveu nenhum subtipo dele."""
+        assert subtipos_pedidos(self.SINAN, ["leitos"]) == self.SINAN

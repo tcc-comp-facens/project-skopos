@@ -1,4 +1,3 @@
-ker
 # Visão Geral do Projeto
 
 ## Sumário
@@ -18,16 +17,17 @@ ker
 
 Este sistema compara duas arquiteturas multiagente baseadas no framework CoALA (Cognitive Architectures for Language Agents — Sumers et al., 2023) aplicadas à análise de eficiência dos gastos públicos em saúde do município de Sorocaba-SP. O projeto é um Trabalho de Conclusão de Curso (TCC) de Engenharia de Computação.
 
-O sistema cruza dados financeiros do SIOPS (despesas municipais por subfunção orçamentária) com indicadores epidemiológicos do DataSUS (dengue, COVID-19, vacinação, internações, mortalidade) para avaliar a qualidade e eficiência do gasto público em saúde. A entrada é feita via chat em linguagem natural (interpretado por um agente dedicado, sem regex) ou via formulário estruturado.
+O sistema cruza a despesa municipal efetivamente executada em saúde (empenho a empenho, extraída de dados LAI/portal de transparência — inclui recurso próprio, transferências estaduais/federais, operações de crédito e emendas parlamentares) com indicadores epidemiológicos de 8 Sistemas de Informação DATASUS (SINAN, SIM, SIH, SI-PNI, SINASC, SIA, CNES, COVID) para avaliar a qualidade e eficiência do gasto público em saúde. A **única** entrada do sistema é o chat em linguagem natural, interpretado por um agente dedicado (`AgenteInterpretacaoIntencao`, sem regex) — o antigo formulário estruturado foi removido.
 
-As duas arquiteturas — **Estrela** e **Hierárquica** — são executadas em paralelo sobre os mesmos dados, permitindo uma comparação objetiva de desempenho, escalabilidade, overhead de comunicação e adequação ao cenário proposto.
+As duas arquiteturas — **Estrela** e **Hierárquica** — são executadas em paralelo sobre os mesmos dados, permitindo uma comparação objetiva de desempenho, escalabilidade, overhead de comunicação, custo de tokens e qualidade textual (via RAGAS).
 
 ## Problema
 
 - Não existe ferramenta que correlacione automaticamente gastos municipais em saúde com indicadores epidemiológicos
 - A avaliação de eficiência do gasto público em saúde é feita manualmente por auditores
 - Não há comparação empírica entre topologias multiagente para este domínio
-- Dados de saúde estão dispersos em múltiplos sistemas (SIOPS, SINAN, SIM, SIH, SI-PNI) sem integração
+- Dados de saúde estão dispersos em múltiplos sistemas (SINAN, SIM, SIH, SI-PNI, SINASC, SIA, CNES) sem integração
+- Fontes financeiras federais (FNS) sozinhas não refletem o gasto total do município — recurso próprio, repasses estaduais e operações de crédito ficam de fora
 
 ## Objetivo
 
@@ -35,53 +35,38 @@ Avaliar comparativamente duas topologias de sistemas multiagente CoALA:
 
 | Topologia | Descrição | Característica principal |
 |-----------|-----------|--------------------------|
-| **Estrela** | Um agente central (orquestrador) coordena agentes periféricos (ativação condicional de domínio) | Ponto único de controle, comunicação centralizada |
-| **Hierárquica** | Agentes organizados em 3 níveis com supervisores intermediários | Comunicação lateral entre supervisores, degradação graciosa |
+| **Estrela** | Um agente central (`OrquestradorEstrela`) coordena até 15 agentes periféricos (8 de saúde + 7 orçamentários), ativados condicionalmente | Ponto único de controle, comunicação centralizada |
+| **Hierárquica** | 4 supervisores (`SupervisorOrcamento`, `SupervisorSaude`, `SupervisorAnalitico`, `SupervisorContexto`) coordenados por `CoordenadorGeral` | Árvore estrita — nenhum supervisor troca dado com outro, o coordenador repassa tudo como parâmetro direto —, degradação graciosa por camada |
 
 A comparação é feita com base em:
 - Tempo de execução total e por agente
 - Uso de CPU e memória por agente
 - Overhead de coordenação (tempo em supervisores vs. agentes de trabalho)
 - Contagem de mensagens entre agentes
-- Qualidade da análise textual gerada (fidelidade, completude, estrutura)
+- Custo de tokens LLM, por segmento (interpretação de intenção, cada topologia, avaliação)
+- Qualidade da análise textual gerada — fidelidade/relevância medidas pela biblioteca RAGAS, completude medida deterministicamente
 - Consistência determinística (resultados numéricos idênticos entre topologias)
-- Resiliência (cobertura de resultados parciais sob falha)
+- Resiliência (cobertura de resultados parciais sob falha) e sucesso agregado da análise
 
 ## Stack Tecnológica
 
-| Componente | Tecnologia | Versão | Justificativa |
-|------------|-----------|--------|---------------|
-| Backend | Python + FastAPI | 3.11 + latest | Agentes são classes Python dentro do processo FastAPI; async nativo |
-| Frontend | React + TypeScript | 18.3.1 + 5.5.3 | SPA com WebSocket client para streaming em tempo real |
-| Bundler | Vite | 5.3.4 | Build rápido, HMR, suporte nativo a TypeScript |
-| Banco de Dados | Neo4j | 5.x | Grafo nativo para modelar relações entre gastos e indicadores |
-| LLM | DeepSeek (default) ou OpenAI, via `LLM_PROVIDER` | deepseek-v4-flash / gpt-5.6-luna | Interpretação de intenção do chat e geração de análises textuais |
-| Métricas | psutil | latest | Coleta de CPU e memória por agente em tempo real |
-| Estatística | SciPy | latest | Spearman (correlação) |
-| ETL DataSUS | PySUS | >=0.11.0 | Download automatizado de dados do FTP DataSUS |
-| ETL SIOPS | openpyxl + xlrd | latest | Leitura de planilhas .xlsx e .xls |
-| Manipulação de dados | pandas | latest | Transformação e filtragem de DataFrames |
-| Containerização | Docker + Docker Compose | latest | Orquestração de Neo4j, backend e frontend |
-| Testes Backend | pytest | latest | Testes unitários |
-| Testes Frontend | Vitest | 2.0.4 | Testes de componentes |
-| Testing Library | @testing-library/react | 16.0.0 | Testes de componentes React |
+| Componente | Tecnologia | Justificativa |
+|------------|-----------|---------------|
+| Backend | Python 3.11 + FastAPI | Agentes são classes Python dentro do processo FastAPI; async nativo |
+| Frontend | React 18 + TypeScript | SPA com WebSocket client para streaming em tempo real |
+| Bundler | Vite | Build rápido, HMR, suporte nativo a TypeScript |
+| Banco de Dados | Neo4j 5.x | Grafo nativo para modelar relações entre gastos e indicadores |
+| LLM | OpenAI: `gpt-5.6-luna` nas análises e `gpt-5-mini` como juiz RAGAS, fixos no código | Interpretação de intenção do chat, planejamento/arbitragem de dimensão, priorização de achados, síntese textual, self-check |
+| Avaliação de qualidade textual | Biblioteca RAGAS (Es et al., 2024) | Fidelidade, relevância da resposta e relevância do contexto — reference-free |
+| Métricas | psutil | Coleta de CPU e memória por agente em tempo real |
+| Estatística | SciPy | Spearman (correlação) |
+| ETL orçamento | pandas (CSV local, delimitador `\|`, encoding latin-1) | Extração LAI/portal de transparência já baixada, sem chamada de rede |
+| ETL saúde | pandas + openpyxl (XLSX local) | Extratos TabNet DATASUS já baixados, sem FTP/PySUS |
+| Containerização | Docker + Docker Compose | Orquestração de Neo4j, backend e frontend |
+| Testes Backend | pytest + Hypothesis | Testes unitários e baseados em propriedade |
+| Testes Frontend | Vitest + @testing-library/react | Testes de componentes |
 
-### Dependências Backend (requirements.txt)
-
-```
-fastapi, uvicorn[standard], neo4j, pysus>=0.11.0, psutil, pytest,
-python-dotenv, httpx, openai, openpyxl,
-xlrd, pandas, scipy, hypothesis
-```
-
-`openai` é usado como SDK do cliente LLM para os dois provedores suportados — a API do DeepSeek é compatível com o formato OpenAI, mudando só a `base_url` (`https://api.deepseek.com`). `hypothesis` é usado para os testes baseados em propriedade do agente de interpretação de intenção.
-
-### Dependências Frontend (package.json)
-
-```
-react ^18.3.1, react-dom ^18.3.1, typescript ^5.5.3, vite ^5.3.4,
-vitest ^2.0.4, @testing-library/react ^16.0.0
-```
+Não há mais dependência do `pysus` nem do `openpyxl`/`xlrd` sobre planilhas FNS — o pipeline ETL atual lê exclusivamente arquivos locais já extraídos (ver [docs/03-DADOS-ETL.md](03-DADOS-ETL.md)).
 
 ## Arquitetura do Sistema
 
@@ -91,9 +76,9 @@ O sistema é composto por 3 camadas: Frontend (React), Backend (FastAPI) e Neo4j
 ┌──────────────────────────────────────────────────────────────┐
 │                     Frontend (React 18)                        │
 │  ┌──────────────┐  ┌───────────────┐  ┌───────────────┐      │
-│  │ ChatInterface  │ │ArchitecturePanel│ │ArchitecturePanel│    │
-│  │(texto livre,   │ │  Hierárquica   │ │    Estrela     │     │
-│  │ aba Usuário)   │ │  (streaming)   │ │  (streaming)   │     │
+│  │ ChatInterface  │ │  RoundOverview │ │  (aba Técnica) │      │
+│  │(texto livre,   │ │  RoundCard /   │ │  ArchitecturePanel│    │
+│  │ aba Usuário)   │ │  RoundDetail   │ │  ×2, métricas   │     │
 │  └───────┬────────┘ └───────┬────────┘ └───────┬────────┘    │
 │          │                  │                   │             │
 │  useChatWebSocket    useWebSocket hook          │             │
@@ -103,55 +88,46 @@ O sistema é composto por 3 camadas: Frontend (React), Backend (FastAPI) e Neo4j
 │          ▼                  ▼                   ▼             │
 │                Backend (FastAPI + Python 3.11)                 │
 │  ┌────────────────────────────────────────────────────────┐   │
-│  │  AgenteInterpretacaoIntencao (guardrail + extração LLM) │   │
-│  │  → dispatch_analysis() (compartilhado com POST REST)    │   │
+│  │  AgenteInterpretacaoIntencao (guardrail 3 vias + LLM)   │   │
+│  │  → dispatch_analysis() (único caminho de disparo)       │   │
 │  │     ┌─────────────────┬─────────────────┐              │   │
 │  │     ▼                 ▼                 │              │   │
 │  │  Thread 1          Thread 2             │              │   │
 │  │  (Estrela)         (Hierárquica)        │              │   │
 │  │     │                 │                 │              │   │
 │  │  OrquestradorEstrela  CoordenadorGeral  │              │   │
-│  │  (agentes conforme    (3 supervisores    │              │   │
-│  │   health_params)       + agentes conforme │              │   │
-│  │                        health_params)     │              │   │
+│  │  (até 15 agentes      (4 supervisores    │              │   │
+│  │   conforme             + agentes conforme │              │   │
+│  │   health_params)       health_params)     │              │   │
 │  └─────────────┬─────────────────┬─────────┘              │   │
 │                │  ws_queue        │                        │   │
 │                ▼                  ▼                        │   │
 │           WebSocket Server (/ws/{analysisId})              │   │
-│           + quality_metrics + comparative report           │   │
+│           + quality_metrics + RAGAS + relatório comparativo│   │
 └────────────────────────┬──────────────────────────────────┘
                          │ Cypher queries
 ┌────────────────────────▼──────────────────────────────────┐
 │                       Neo4j 5.x                            │
-│  Analise  DespesaSIOPS  IndicadorDataSUS  MetricaExecucao  │
+│  Analise  DespesaAnual  Empenho  IndicadorSaude  MetricaExecucao │
 └────────────────────────────────────────────────────────────┘
 ```
 
-`POST /api/analysis` (formulário estruturado) continua disponível como caminho alternativo, sem passar pelo `AgenteInterpretacaoIntencao` — ambos convergem no mesmo `dispatch_analysis()`.
+Ver [docs/02-AGENTES.md](02-AGENTES.md) para o detalhamento completo dos 20 agentes CoALA e das duas topologias.
 
 ### Fluxo Completo de uma Análise
 
-Há duas portas de entrada equivalentes — o chat (`WS /ws/chat/{sessionId}`) e o formulário REST (`POST /api/analysis`) — que convergem no mesmo disparo de análise (`dispatch_analysis`, compartilhado):
-
-1. **Via chat**: o usuário digita uma pergunta em linguagem natural. O `AgenteInterpretacaoIntencao` (agente CoALA, sem regex) classifica se a mensagem está dentro do escopo do assistente e, se estiver, extrai período e parâmetros de saúde numa única chamada LLM. Fora do escopo ou incompleta → mensagem de esclarecimento/recusa, nenhuma análise é criada. **Via formulário**: o usuário seleciona período e parâmetros de saúde diretamente; parâmetros já estruturados, sem interpretação de linguagem natural.
-2. O backend valida os parâmetros (retorna erro se inválidos)
-3. Cria nó `Analise` no Neo4j e vincula `DespesaSIOPS` e `IndicadorDataSUS` existentes
-4. Duas threads daemon são disparadas em paralelo (uma por arquitetura)
-5. Cada thread executa seu pipeline de agentes CoALA:
-   - Agentes de domínio relevantes aos health_params consultam Neo4j (despesas + indicadores)
-   - 1 agente de contexto analisa tendências orçamentárias
-   - 1 agente de correlação calcula Spearman entre gastos e indicadores
-   - 1 agente de anomalias detecta ineficiências via mediana
-   - 1 sintetizador de texto (`TextSynthesizer`, serviço — não é um agente CoALA) gera texto via LLM com streaming
-6. Chunks de texto (~80 chars) são enviados ao frontend via WebSocket em tempo real
-7. Métricas de execução (tempo, CPU, memória) são coletadas por agente e persistidas no Neo4j
-8. Contagem de mensagens entre agentes é registrada
-9. Após ambas completarem: métricas de qualidade são computadas e relatório comparativo é gerado e transmitido via WebSocket
+1. O usuário digita uma pergunta em linguagem natural no chat (`WS /ws/chat/{sessionId}`). O `AgenteInterpretacaoIntencao` classifica em 3 vias — fora de escopo (recusa), dentro do escopo mas sem precisar de análise (chitchat, resposta direta), ou dentro do escopo precisando de análise (extrai período e `health_params` na mesma chamada LLM).
+2. Se período/tema não forem especificados, o agente completa automaticamente com defaults sensatos (todo o período disponível, todos os indicadores) em vez de recusar — só pede para reformular no caso residual de não haver período algum disponível.
+3. `dispatch_analysis()` valida os parâmetros, cria o nó `Analise` no Neo4j e dispara duas threads daemon em paralelo (uma por arquitetura).
+4. Cada thread executa seu pipeline de agentes CoALA: agentes de saúde relevantes aos `health_params` consultam `IndicadorSaude` (deliberando dimensão via LLM quando aplicável); agentes orçamentários relevantes consultam `DespesaAnual` (idem); `AgenteContextoOrcamentario` calcula tendências (CAGR); `AgenteAnalitico` calcula correlação de Spearman e detecta anomalias; `AgentePriorizacaoAnalitica` escolhe um ângulo de ênfase; `TextSynthesizer` gera o texto via LLM com streaming; opcionalmente, o self-check (Chain-of-Verification) revisa o texto.
+5. Chunks de texto são enviados ao frontend via WebSocket em tempo real.
+6. Métricas de execução (tempo, CPU, memória, tokens) são coletadas por agente e persistidas no Neo4j.
+7. Após ambas as topologias completarem: métricas de qualidade determinísticas são computadas, a avaliação RAGAS roda de forma assíncrona (fidelidade, relevância da resposta, relevância do contexto) e o relatório comparativo é gerado e transmitido via WebSocket.
 
 ### Modelo de Paralelismo
 
 ```
-POST /api/analysis
+dispatch_analysis()  (chamado a partir do chat)
        │
        ├── Thread 1: OrquestradorEstrela.run()  ──┐
        │                                          ├── ws_queue (compartilhada)
@@ -162,7 +138,7 @@ POST /api/analysis
                                               Frontend
 ```
 
-Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O WebSocket server consome a fila e transmite ao frontend até receber 2 eventos `done` (um por arquitetura).
+Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O WebSocket server consome a fila e transmite ao frontend até receber 2 eventos `done` (um por arquitetura). O custo de tokens de cada thread é isolado via `core.llm_client.TokenBucket` (um `ContextVar` por escopo), mesmo rodando concorrentemente.
 
 ---
 
@@ -171,52 +147,33 @@ Ambas as threads compartilham uma `Queue` para streaming de eventos WebSocket. O
 ### Pré-requisitos
 
 - Docker Desktop instalado e rodando
-- (Opcional) Chave de API do provedor de LLM escolhido (DeepSeek ou OpenAI) para interpretação de intenção no chat e geração de texto via LLM — sem ela, o chat sempre pede esclarecimento (não há mais fallback por regex) e a síntese cai no texto estruturado determinístico
+- (Opcional) Chave de API da OpenAI — sem ela, o chat sempre pede esclarecimento (não há fallback por regex) e a síntese cai no texto estruturado determinístico
 - (Opcional) Python 3.11+ e Node.js 20+ para desenvolvimento local
 
 ### Variáveis de Ambiente
 
-**Backend (`backend/.env`):**
+Todas vivem num único `.env` na raiz do repo (`cp .env.example .env`), compartilhado por backend, frontend e docker-compose — não há mais `backend/.env`/`frontend/.env` separados.
 
 | Variável | Descrição | Exemplo |
 |----------|-----------|---------|
 | `NEO4J_URI` | URI de conexão Bolt do Neo4j | `bolt://neo4j:7687` (Docker) ou `bolt://localhost:7687` (local) |
 | `NEO4J_USER` | Usuário do Neo4j | `neo4j` |
 | `NEO4J_PASSWORD` | Senha do Neo4j | `your_password_here` |
-| `LLM_PROVIDER` | Provedor de LLM ativo | `deepseek` (default) ou `openai` |
-| `DEEPSEEK_API_KEY` | Chave API DeepSeek (se `LLM_PROVIDER=deepseek`) | `sk-...` |
-| `OPENAI_API_KEY` | Chave API OpenAI (se `LLM_PROVIDER=openai`) | `sk-proj-...` |
-| `DEEPSEEK_MODEL` / `OPENAI_MODEL` | Sobrescreve o modelo default do provedor | `deepseek-v4-flash` / `gpt-5.6-luna` |
+| `OPENAI_API_KEY` | Chave OpenAI. Os modelos são fixos no código: análises com `gpt-5.6-luna`, juiz RAGAS com `gpt-5-mini` | `sk-proj-...` |
+| `USE_LLM_QUERY_PLANNING` | Liga o planejamento de consulta via LLM (fast-path/cache) nos agentes de domínio | `false` (default) |
 | `CORS_ORIGINS` | Origens CORS permitidas | `*` ou `http://localhost:5173` |
 | `LOG_LEVEL` | Nível de log (`INFO` default; `DEBUG` mostra prompts completos enviados ao LLM) | `INFO` |
-
-**Frontend (variáveis Vite):**
-
-| Variável | Descrição | Default |
-|----------|-----------|---------|
-| `VITE_API_URL` | URL da API REST | `http://localhost:8000` |
-| `VITE_WS_URL` | URL do WebSocket | `ws://localhost:8000` |
+| `VITE_API_URL` / `VITE_WS_URL` | URLs lidas pelo frontend (Vite) | `http://localhost:8000` / `ws://localhost:8000` |
 
 ### Execução com Docker (recomendado)
 
 ```bash
-# 1. Configurar variáveis de ambiente
-cp backend/.env.example backend/.env
-# Edite backend/.env com suas credenciais
+cp .env.example .env
+# Edite .env com suas credenciais Neo4j e a chave do provedor de LLM
 
-# 2. Subir todos os serviços
 docker compose up --build
-
-# 3. Acessar o frontend
-# http://localhost:5173
+# Frontend: http://localhost:5173
 ```
-
-O `entrypoint.sh` do backend executa automaticamente:
-1. Aguarda Neo4j ficar pronto (30 tentativas, 2s entre cada)
-2. Carrega planilhas SIOPS de `backend/data/*.xls` e `*.xlsx`
-3. Baixa/cacheia dados DataSUS para os anos detectados
-4. Executa seed de fallback (indicadores COVID 2018-2022)
-5. Inicia FastAPI via uvicorn na porta 8000
 
 ### Execução Local (desenvolvimento)
 
@@ -224,10 +181,11 @@ O `entrypoint.sh` do backend executa automaticamente:
 # Terminal 1: Neo4j (requer Docker)
 docker compose up neo4j
 
-# Terminal 2: Backend
+# Terminal 2: Backend — rode o ETL antes, com o Neo4j acessível em localhost
 cd backend
 pip install -r requirements.txt
-python -m etl.seed_data          # popular dados mínimos
+python -m etl.orcamento_loader
+python -m etl.saude_indicadores_loader
 uvicorn main:app --reload --port 8000
 
 # Terminal 3: Frontend
@@ -235,6 +193,8 @@ cd frontend
 npm ci
 npm run dev
 ```
+
+Ver [docs/03-DADOS-ETL.md](03-DADOS-ETL.md) para os detalhes do pipeline ETL (fontes, formato dos arquivos, variáveis `DADOS_DIR`).
 
 ### Serviços e Portas
 
@@ -259,13 +219,9 @@ docker compose up -d --build
 # Parar
 docker compose down
 
-# ETL manual
-docker compose exec backend python -m etl.siops_loader data/PlanilhaDetalhada.xls
-docker compose exec backend python -m etl.datasus_loader 2019 2023
-docker compose exec backend python -m etl.seed_data
-
-# Download direto do FTP DataSUS (fora do Docker)
-python download_pysus.py 2019 2025
+# ETL manual (dentro do container ou local)
+docker compose exec backend python -m etl.orcamento_loader
+docker compose exec backend python -m etl.saude_indicadores_loader
 ```
 
 ---
@@ -274,40 +230,10 @@ python download_pysus.py 2019 2025
 
 ### Visão Geral
 
-| Camada | Framework | Tipo | Arquivos | Total de testes |
-|--------|-----------|------|----------|-----------------|
-| Backend | pytest + Hypothesis | Unitários + baseados em propriedade | 13 | 102 |
-| Frontend | Vitest + @testing-library/react | Componentes + Integração + Utilitários | 9 | ~41 |
-
-### Backend — Arquivos de Teste
-
-| Arquivo | Escopo |
-|---------|--------|
-| `test_agente_interpretacao_intencao.py` | AgenteInterpretacaoIntencao (guardrail de escopo, extração via LLM, resiliência, sem regex) |
-| `test_coala_base.py` | Ciclo cognitivo CoALA na classe base (AgenteCoALA) |
-| `test_correlacao.py` | Correlações Spearman (vazio, ponto único, perfeita ±, classificação) |
-| `test_anomalias.py` | Detecção de anomalias (mediana, tipos, regra <2 pontos) |
-| `test_contexto_orcamentario.py` | Tendências orçamentárias (crescimento, corte, estagnação) |
-| `test_data_crossing.py` | Cruzamento de dados, deduplicação, detecção de gaps |
-| `test_domain_agents.py` | Agente de domínio (filtro subfunção, fallback) |
-| `test_sintetizador.py` | TextSynthesizer (fallback, seções, streaming) |
-| `test_streaming_adapter.py` | StreamingAdapter (chunking, formato de evento) |
-| `test_orchestrator_star.py` | OrquestradorEstrela (health_params filtering, degradação, métricas) |
-| `test_dispatch_analysis.py` | Disparo de análise compartilhado (REST + chat), compatibilidade retroativa |
-| `test_chat_websocket.py` | Protocolo do WebSocket de chat (`/ws/chat/{sessionId}`) |
-
-### Frontend — Arquivos de Teste
-
-| Arquivo | Escopo |
-|---------|--------|
-| `src/App.integration.test.tsx` | Integração ponta a ponta (rodadas de chat, abas) |
-| `src/components/ChatInterface.test.tsx` | Chat (envio de mensagem, streaming, validação) |
-| `src/components/TechTab.test.tsx` | Aba técnica (seleção de rodada, painéis) |
-| `src/utils/parseWinner.test.ts` | Extração do vencedor do relatório comparativo |
-| `src/utils/validateMessage.test.ts` | Validação de mensagem de chat (vazio, tamanho máximo) |
-| `src/components/TabNav.test.tsx` | Navegação entre abas (acessibilidade) |
-| `src/components/WinnerPanel.test.tsx` | Painel do vencedor (texto, erro, título) |
-| `src/components/Header.test.tsx` | Identidade visual (Sophia, brasão) |
+| Camada | Framework | Arquivos | Observação |
+|--------|-----------|----------|-----------|
+| Backend | pytest + Hypothesis | ~32 | `test_ragas_metrics.py`/`test_websocket_ragas.py` exigem a dependência `ragas` instalada |
+| Frontend | Vitest + @testing-library/react | 12 | Componentes + integração + utilitários |
 
 ### Como Rodar
 
@@ -332,88 +258,75 @@ cd frontend && npm run test:watch
 ```
 project-skopos/
 ├── docker-compose.yml                # Orquestração: Neo4j + Backend + Frontend
-├── download_pysus.py                 # Script standalone de download FTP DataSUS
-├── README.md                         # Este projeto
+├── .env.example                      # Template de variáveis de ambiente (raiz, compartilhado)
+├── README.md
 ├── docs/                             # Documentação modular
 │   ├── 01-VISAO-GERAL.md            # Este arquivo
-│   ├── 02-AGENTES.md                # Sistema multiagente CoALA
+│   ├── 02-AGENTES.md                # Sistema multiagente CoALA (20 classes)
 │   ├── 03-DADOS-ETL.md              # Fontes de dados e pipeline ETL
 │   ├── 04-BACKEND-API.md            # Backend, API, chat, LLM, métricas
-│   └── 05-FRONTEND.md               # Frontend React (chat + painéis técnicos)
+│   ├── 05-FRONTEND.md               # Frontend React (chat + painéis técnicos)
+│   └── arquitetura/                  # Detalhamento das topologias e das métricas
 │
-├── PLANO_REFATORACAO.md              # Plano de amadurecimento de uso de LLM + novas métricas
+├── PLANO_REFATORACAO.md              # Plano de amadurecimento de uso de LLM + novas métricas (6/6 etapas concluídas)
 │
 ├── backend/
 │   ├── Dockerfile                    # Python 3.11-slim
 │   ├── entrypoint.sh                # ETL automático + uvicorn
 │   ├── requirements.txt             # Dependências Python
-│   ├── .env.example                 # Template de variáveis de ambiente
 │   ├── main.py                      # Entry point — cria app, CORS, registra routers, logging
 │   ├── conftest.py                  # Configuração pytest (sys.path)
 │   │
 │   ├── api/                         # Camada de API
 │   │   ├── routes.py                # Endpoints REST
-│   │   ├── websocket.py             # WebSocket handler (streaming de resultados)
+│   │   ├── websocket.py             # WebSocket handler (streaming de resultados + RAGAS)
 │   │   ├── chat_websocket.py        # WebSocket handler (turno de intenção do chat)
 │   │   ├── chat_runner.py           # Disparo de análise a partir do chat
-│   │   ├── dispatch.py              # Disparo de análise compartilhado (REST + chat)
+│   │   ├── dispatch.py              # Disparo de análise (único caminho de entrada)
 │   │   ├── models.py                # Pydantic models + validação
 │   │   ├── runners.py               # Thread runners (star, hierarchical)
 │   │   └── state.py                 # Estado compartilhado (queues, threads, results)
 │   │
-│   ├── agents/                      # Sistema multiagente CoALA
+│   ├── agents/                      # Sistema multiagente CoALA — 20 classes
 │   │   ├── base.py                  # AgenteCoALA (classe base do framework CoALA)
 │   │   ├── data_crossing.py         # cross_domain_data() + deduplicate_despesas() + detect_data_gaps()
 │   │   ├── intent/
-│   │   │   └── agente_interpretacao_intencao.py  # Guardrail de escopo + extração via LLM (sem regex)
+│   │   │   └── agente_interpretacao_intencao.py  # Guardrail de escopo em 3 vias + extração via LLM
 │   │   ├── domain/
-│   │   │   ├── vigilancia_epidemiologica.py  # Subfunção 305 (dengue, covid)
-│   │   │   ├── saude_hospitalar.py           # Subfunção 302 (internações)
-│   │   │   ├── atencao_primaria.py           # Subfunção 301 (vacinação)
-│   │   │   └── mortalidade.py                # Transversal (todas subfunções)
+│   │   │   ├── agente_sinan.py, agente_sih.py, agente_sim.py, agente_sipni.py,
+│   │   │   │   agente_covid.py, agente_sinasc.py, agente_sia.py, agente_cnes.py  # 8 agentes de saúde
+│   │   │   ├── agente_orcamento.py  # AgenteOrcamentoSubfuncao (classe parametrizada, 7 instâncias)
+│   │   │   └── query_planning.py    # Deliberação de dimensão (score + LLM opcional) + fast-path/cache
 │   │   ├── analytical/
-│   │   │   ├── correlacao.py                 # Spearman (correlação por par)
-│   │   │   ├── anomalias.py                  # Detecção via mediana
+│   │   │   ├── analitico.py                  # AgenteAnalitico (Spearman + anomalias consolidados)
+│   │   │   ├── priorizacao.py                 # AgentePriorizacaoAnalitica (ângulo de ênfase)
 │   │   │   └── sintetizador.py               # TextSynthesizer (serviço LLM, não é agente CoALA)
 │   │   ├── context/
-│   │   │   └── contexto_orcamentario.py      # Tendências YoY
+│   │   │   └── contexto_orcamentario.py      # Tendências YoY + CAGR
 │   │   ├── star/
 │   │   │   └── orchestrator.py               # OrquestradorEstrela (hub)
 │   │   └── hierarchical/
 │   │       ├── coordinator.py                # CoordenadorGeral (nível 0)
-│   │       └── supervisors.py                # 3 supervisores (nível 1)
+│   │       └── supervisors.py                # 4 supervisores (nível 1)
 │   │
 │   ├── core/                        # Utilitários
-│   │   ├── llm_client.py            # Cliente LLM (DeepSeek/OpenAI via LLM_PROVIDER, retry, tokens, logs de chamada com preview de prompt)
+│   │   ├── llm_client.py            # Cliente LLM (OpenAI, modelos fixos, TokenBucket, retry, logs)
 │   │   ├── metrics.py               # MetricsCollector (psutil)
-│   │   ├── quality_metrics.py       # Métricas de qualidade (3 eixos) + relatório
+│   │   ├── quality_metrics.py       # Métricas determinísticas + relatório comparativo
+│   │   ├── ragas_metrics.py         # Avaliação via biblioteca RAGAS
+│   │   ├── claim_verifier.py        # Self-check pós-síntese (Chain-of-Verification)
+│   │   ├── guardrail_stats.py       # Taxa de rejeição do guardrail de escopo
 │   │   └── streaming_adapter.py     # StreamingAdapter (chunking de texto para ws_queue)
 │   │
 │   ├── db/
-│   │   └── neo4j_client.py          # Driver Neo4j + queries Cypher
+│   │   ├── neo4j_client.py          # Driver Neo4j + queries Cypher
+│   │   └── query_builder.py         # Cypher parametrizado + allowlist de dimensões
 │   │
 │   ├── etl/
-│   │   ├── siops_loader.py          # Ingestão planilhas FNS (.xls/.xlsx)
-│   │   ├── datasus_loader.py        # Ingestão DataSUS (PySUS + cache)
-│   │   ├── seed_data.py             # Seed COVID (fallback — dados não disponíveis via PySUS)
-│   │   └── detect_years.py          # Auto-detecção de anos
+│   │   ├── orcamento_loader.py            # Empenhos LAI/portal de transparência
+│   │   └── saude_indicadores_loader.py    # Extratos TabNet DATASUS locais
 │   │
-│   ├── data/                        # Planilhas FNS + cache DataSUS
-│   │   └── datasus/                 # Cache local Parquet
-│   │
-│   └── tests/                       # 13 arquivos de teste (102 testes)
-│       ├── test_agente_interpretacao_intencao.py
-│       ├── test_coala_base.py
-│       ├── test_anomalias.py
-│       ├── test_contexto_orcamentario.py
-│       ├── test_correlacao.py
-│       ├── test_data_crossing.py
-│       ├── test_domain_agents.py
-│       ├── test_orchestrator_star.py
-│       ├── test_sintetizador.py
-│       ├── test_streaming_adapter.py
-│       ├── test_dispatch_analysis.py
-│       └── test_chat_websocket.py
+│   └── tests/                       # ~32 arquivos de teste
 │
 ├── frontend/
 │   ├── Dockerfile                   # Node 20-alpine
@@ -430,28 +343,22 @@ project-skopos/
 │       ├── test-setup.ts           # Setup Vitest (jest-dom)
 │       ├── components/
 │       │   ├── ChatInterface.tsx / .test.tsx    # Chat de texto livre (aba Usuário)
-│       │   ├── MessageBubble.tsx                # Bolha de mensagem (usuário/sistema)
-│       │   ├── TypingIndicator.tsx              # Indicador de streaming
-│       │   ├── ErrorBoundary.tsx                # Captura de crash de componentes filhos
-│       │   ├── RoundSelector.tsx                # Navegação entre rodadas de chat (aba técnica)
+│       │   ├── MessageBubble.tsx, TypingIndicator.tsx, ErrorBoundary.tsx
+│       │   ├── RoundOverview.tsx / .test.tsx    # Panorama de todas as rodadas (aba técnica)
+│       │   ├── RoundCard.tsx / .test.tsx        # Uma rodada, expansível
+│       │   ├── RoundDetail.tsx                  # Conteúdo técnico completo de uma rodada
+│       │   ├── AgentDataCard.tsx / .test.tsx    # Dados brutos + query + gráfico por agente
 │       │   ├── ArchitecturePanel.tsx
-│       │   ├── UserTab.tsx                      # Aba pública (chat + WinnerPanel)
-│       │   ├── TechTab.tsx / .test.tsx          # Aba técnica (painéis + métricas + rodadas)
-│       │   ├── ScoreCard.tsx
-│       │   ├── QualityMetricsSection.tsx
-│       │   ├── ComparativeSection.tsx
-│       │   ├── Header.tsx / .test.tsx
-│       │   ├── TabNav.tsx / .test.tsx
-│       │   └── WinnerPanel.tsx / .test.tsx
+│       │   ├── UserTab.tsx, TechTab.tsx / .test.tsx
+│       │   ├── ScoreCard.tsx, QualityMetricsSection.tsx, ComparativeSection.tsx
+│       │   ├── Header.tsx / .test.tsx, TabNav.tsx / .test.tsx
 │       ├── hooks/
-│       │   ├── useWebSocket.ts       # Streaming de resultados (/ws/{analysisId})
+│       │   ├── useWebSocket.ts       # Streaming de resultados + RAGAS (/ws/{analysisId})
 │       │   └── useChatWebSocket.ts   # Turno de intenção do chat (/ws/chat/{sessionId})
 │       ├── utils/
-│       │   ├── parseWinner.ts / .test.ts
-│       │   ├── validateMessage.ts / .test.ts
-│       │   └── formatRoundSummary.ts
+│       │   ├── parseWinner.ts / .test.ts, validateMessage.ts / .test.ts
+│       │   ├── formatRoundSummary.ts, buildAgentChartData.ts / .test.ts
+│       │   └── renderFormattedText.tsx / .test.tsx
 │       └── types/
-│           └── index.ts             # ChatMessage, ChatRound, WSEvent, ChatWSEvent, QualityMetrics, etc.
-│
-└── datasus_cache/                   # Cache global pré-baixado (Parquet)
+│           └── index.ts             # ChatMessage, ChatRound, WSEvent, AgentDataEntry, QualityMetrics, etc.
 ```

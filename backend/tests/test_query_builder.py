@@ -46,8 +46,19 @@ class TestBuildIndicadorCypherSemDimensao:
         query, _ = build_indicador_cypher("sim", ["mortalidade"], 2019, 2022)
         assert "i.valorTotal AS valor" in query
 
+    def test_only_annual_grain(self):
+        """Regressão: a COVID tem nós mensais do mesmo subtipo e ano que o
+        anual; sem o filtro, o valor de um mês sobrescrevia o total do ano
+        no cruzamento."""
+        query, _ = build_indicador_cypher("covid", ["casos", "obitos"], 2020, 2023)
+        assert "i.mes IS NULL" in query
+
 
 class TestBuildIndicadorCypherComDimensaoValida:
+    def test_dimension_query_only_annual_grain(self):
+        query, _ = build_indicador_cypher("sinan", ["dengue"], 2019, 2022, dimensao="POR_SEXO")
+        assert "i.mes IS NULL" in query
+
     def test_valid_dimension_is_interpolated_as_reltype(self):
         query, params = build_indicador_cypher(
             "sinan", ["dengue"], 2019, 2022, dimensao="POR_FAIXA_ETARIA"

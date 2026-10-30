@@ -73,26 +73,40 @@ As duas arquiteturas continuam sendo avaliadas **concorrentemente** (`asyncio.ga
 ### E1 — Overhead de coordenação
 
 ```python
+NOS_RAIZ = {"orquestrador_estrela", "coordenador_geral"}
+
 def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
-    supervisor_time = 0.0
-    worker_time = 0.0
+    coord_time = worker_time = 0.0
     for m in agent_metrics:
-        if m.get("agentName", "") in FASE_SUPERVISORES:
-            supervisor_time += m.get("executionTimeMs", 0)
+        nome, ms = m.get("agentName", ""), m.get("executionTimeMs", 0)
+        if nome in NOS_RAIZ:
+            coord_time += ms           # já é o overhead (relógio determinístico - Σ folhas)
+        elif nome.startswith("supervisor_"):
+            continue                   # engloba os subordinados: só exibição
         else:
-            worker_time += m.get("executionTimeMs", 0)
-    total = supervisor_time + worker_time
-    ratio = supervisor_time / total if total > 0 else 0.0
+            worker_time += ms
+    ratio = coord_time / (coord_time + worker_time) if (coord_time + worker_time) > 0 else 0.0
     return {"supervisor_time_ms": ..., "worker_time_ms": ..., "overhead_ratio": ratio, "overhead_percent": ratio * 100}
 ```
 
-Separa o tempo gasto em agentes de coordenação (`FASE_SUPERVISORES = {supervisor_dominio, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`) do tempo gasto em agentes de trabalho. Na estrela, o overhead tende a ~0% (o orquestrador não aparece como entrada separada de `agent_metrics` — ver [arquitetura-estrela.md](arquitetura-estrela.md#7-persistir_metricas)); na hierárquica, mede o custo real da camada de supervisores (ver [arquitetura-hierarquica.md](arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead)).
+Overhead = relógio determinístico da topologia menos a soma dos agentes-folha, **com a mesma definição na estrela e na hierárquica**. Esse valor já vem calculado pelo orquestrador/coordenador na entrada `orquestrador_estrela`/`coordenador_geral`. As entradas `supervisor_*` da hierárquica são ignoradas: o tempo de cada supervisor já contém o dos subordinados, e somá-los dobraria a contagem (uma versão anterior fazia isso e reportava ~50% de "overhead" que não existia). O relógio fecha antes da gravação das métricas no Neo4j e da redação (priorização, síntese, verificação), nas duas topologias. As decisões dos coordenadores que vêm antes da coleta e logo depois dela (planejamento e revisão das entregas) ficam dentro do relógio e entram no overhead, porque são o custo de coordenar. Na hierárquica essas decisões são repartidas entre o coordenador e os supervisores — ver [arquitetura-hierarquica.md](arquitetura-hierarquica.md#contabilização-de-métricas-e-overhead).
+
+**Deliberação e estrutura.** Com o planejamento e a revisão por LLM, quase todo o overhead passou a ser espera pelo modelo. Numa pergunta sobre covid, foram 4,59 s de 4,59 s na estrela e 10,51 s de 10,51 s na hierárquica, com cerca de 5 ms de custo estrutural nas duas. Por isso o overhead é dividido em duas partes:
+
+- `deliberation_time_ms` é o tempo das decisões por LLM dos coordenadores dentro do relógio. É medido por `AgenteCoALA._deliberar` em volta de `planejamento.planejar` e de `revisao_entregas.revisar_memoria_do_no`. Na estrela é o orquestrador. Na hierárquica é o coordenador somado aos supervisores de orçamento e de saúde.
+- `structural_time_ms` é o restante, isto é, instanciar, repassar, agregar e registrar mensagens.
+
+`deliberation_share` é a fração do overhead gasta em deliberação. A entrada da raiz em `agentMetrics` traz `deliberacaoMs`, e a bateria grava `overhead_deliberacao_ms` e `overhead_estrutural_ms`. Assim a diferença entre topologias fica separada entre o número de decisões encadeadas, que depende da latência do provedor, e o custo da estrutura em si.
 
 ### E2 — Breakdown de latência por fase
 
-Divide o tempo total em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os mesmos conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO`/`FASE_SUPERVISORES` — note que `FASE_ANALITICO` inclui `"priorizacao"` e `"verificacao"` (Etapas 3 e 4), acompanhando a evolução do pipeline analítico. Retorna tempo absoluto e percentual de cada fase, usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo.
+Divide o tempo total em 4 fases (`dominio`, `analitico`, `contexto`, `supervisores`), usando os mesmos conjuntos `FASE_DOMINIO`/`FASE_ANALITICO`/`FASE_CONTEXTO`/`NOS_RAIZ` (a fase `supervisores` conta só o overhead da raiz, não os `supervisor_*`) — note que `FASE_ANALITICO` inclui `"priorizacao"` e `"verificacao"` (Etapas 3 e 4), acompanhando a evolução do pipeline analítico. Retorna tempo absoluto e percentual de cada fase, usado no relatório comparativo para mostrar onde cada topologia gasta seu tempo.
 
-**Nenhuma das duas métricas usa limiar fixo** (ex.: "overhead > 30% é ruim") — a comparação é sempre relativa entre as duas topologias na mesma análise, nunca contra um corte absoluto. Essa é uma decisão deliberada (D12, ver tabela).
+### E3 — Tempo até o texto (`tempo_total_ms`)
+
+O relógio de E1 fecha antes da parte com LLM, para isolar a coordenação. Mas é justamente na parte com LLM que as topologias passaram a diferir (planejamento, redação por ramo, composição). Por isso cada resultado traz também `tempo_total_ms`, medido do início do `run()` da raiz até o texto final, redação incluída. A bateria grava as duas medidas lado a lado.
+
+**Nenhuma das métricas de tempo usa limiar fixo** (ex.: "overhead > 30% é ruim") — a comparação é sempre relativa entre as duas topologias na mesma análise, nunca contra um corte absoluto. Essa é uma decisão deliberada (D12, ver tabela).
 
 ---
 
@@ -147,6 +161,8 @@ O que justifica o mapeamento é que a posição estrutural do "contexto recupera
 
 **O contexto do juiz tem que ser idêntico ao do gerador.** Uma versão anterior mandava ao juiz uma forma empobrecida dos achados — só subfunção, indicador, coeficiente e classificação — e omitia campos que o gerador tinha: a `leitura` da correlação (que o prompt manda usar como *fonte da verdade* sobre o resultado ser desejável ou indesejável), o `n_pontos`, e a `descricao` da anomalia, que carrega **o valor gasto em R$ e o valor do indicador**. O texto citava esses dados corretamente e era reprovado, porque a evidência não estava no contexto do juiz. A fidelidade media a lacuna entre os dois contextos, não a fidelidade do texto.
 
+**Séries anuais.** Redator e juiz recebem também a série anual de cada indicador pedido e o gasto anual de cada subfunção, uma linha por série, montadas pela mesma função (`core/contextos_avaliacao.linhas_series`). Antes, o redator só via os anos que viravam anomalia. Numa pergunta sobre dengue de 2020 a 2023, ele escreveu que "não há o número de 2020 e 2022", dados que existiam, e não conseguia responder "quantos casos". Na hierárquica, cada redator de ramo recebe só as séries do seu sistema, e a composição recebe todas.
+
 Pelo mesmo motivo entram no contexto as afirmações que o prompt **injeta** no gerador e manda repetir: o período analisado, a nota sobre a pandemia, a tradução das subfunções para linguagem comum e as lacunas de dados. Em termos de RAG, uma afirmação fornecida ao gerador *é* parte do contexto sobre o qual a geração se apoia — o prompt diz literalmente "Sempre mencione esse fator". Excluí-la garantiria infidelidade artificial: o texto seria punido por obedecer à instrução.
 
 Essas strings vivem como constantes em `agents/analytical/sintetizador.py` (`CONTEXTO_PANDEMIA`, `TRADUCAO_SUBFUNCOES`) e são **importadas** por `build_contexts`, não reescritas. Duplicá-las faria o contexto do juiz divergir do prompt na primeira edição, reintroduzindo o mesmo problema de forma silenciosa.
@@ -164,17 +180,21 @@ Um chunk por achado (em vez de um bloco único de texto) é o que torna a *conte
 
 #### O juiz é fixo, de propósito
 
-O provedor que roda as métricas é configurado por `RAGAS_PROVIDER` (default `openai`), **independente de `LLM_PROVIDER`**. Trocar o provedor do sistema avaliado não pode trocar o instrumento de medida, ou scores de execuções diferentes deixam de ser comparáveis (D18). Há também uma razão prática: `answer_relevancy` depende de embeddings, e o DeepSeek não oferece esse endpoint.
+O juiz é o `gpt-5-mini`, fixo no código (`ragas_metrics.MODELO_JUIZ`), e as análises usam o `gpt-5.6-luna`. Há duas razões:
+- **Juiz diferente do gerador.** Um modelo avaliando o próprio texto tende a favorecê-lo, o viés de autopreferência documentado na literatura de LLM como juiz (Zheng et al., 2023; Panickssery et al., 2024). Com modelos distintos, quem escreve nunca é quem julga.
+- **Instrumento fixo.** Sem variável para trocá-lo, os scores de execuções diferentes continuam comparáveis (D18).
 
-As chamadas passam por `core.llm_client.generate(provider=...)` em vez de a ragas abrir seu próprio cliente. Isso preserva três coisas que um `LangchainLLMWrapper(ChatOpenAI(...))` perderia: a contabilização de tokens por `TokenBucket` (sem ela o eixo D não enxergaria o custo da avaliação), o retry em 429, e o tratamento dos modelos de raciocínio da OpenAI — que exigem `max_completion_tokens` e rejeitam temperatura customizada, enquanto a ragas pede temperatura baixa por padrão (o que daria **400** num `gpt-5*`).
+O `gpt-5-mini` foi escolhido por custo-benefício. As tarefas do RAGAS (extrair afirmações, checá-las contra os achados, gerar perguntas) são simples, e um juiz menor e diferente basta para o objetivo, que é eliminar a autopreferência. O desenho pareado ainda protege a comparação, porque as duas topologias são julgadas pelo mesmo juiz.
+
+As chamadas passam por `core.llm_client.generate(model=MODELO_JUIZ)` em vez de a ragas abrir seu próprio cliente. Isso preserva três coisas que um `LangchainLLMWrapper(ChatOpenAI(...))` perderia: a contabilização de tokens por `TokenBucket` (sem ela o eixo D não enxergaria o custo da avaliação), o retry em 429, e o tratamento dos modelos de raciocínio da OpenAI — que exigem `max_completion_tokens` e rejeitam temperatura customizada, enquanto a ragas pede temperatura baixa por padrão (o que daria **400** num `gpt-5*`).
 
 #### O juiz é um modelo de raciocínio — e isso exige cuidado
 
 Nos modelos de raciocínio da OpenAI (`gpt-5*`, série `o*`), `max_completion_tokens` limita **tokens de raciocínio + resposta visível**, não só a resposta. Com o esforço no default da API (`medium`) e o teto de 4096 que o cliente usava para todos os modelos, um prompt grande — a verificação de afirmações do RAGAS sobre dezenas de achados — gastava o orçamento inteiro pensando e devolvia `content` vazio. O sintoma que chegava ao usuário era `faithfulness: RuntimeError: LLM indisponível`, indistinguível de uma queda de API.
 
-A correção está em `core/llm_client.py::_completion_params`, e é o equivalente OpenAI do `thinking: disabled` que o provedor DeepSeek já recebia: esforço de raciocínio baixo (`OPENAI_REASONING_EFFORT`, default `low`) e um teto próprio e folgado (`OPENAI_MAX_COMPLETION_TOKENS`, default 16384). `_generate` também passou a ler `finish_reason`, para que truncagem por orçamento apareça no log como truncagem, não como "resposta vazia".
+A correção está em `core/llm_client.py::_completion_params`: esforço de raciocínio baixo (`OPENAI_REASONING_EFFORT`, default `low`) e um teto próprio e folgado (`OPENAI_MAX_COMPLETION_TOKENS`, default 16384). `_generate` também passou a ler `finish_reason`, para que truncagem por orçamento apareça no log como truncagem, não como "resposta vazia".
 
-O modelo em si nunca foi o problema — a OpenAI recomenda o `gpt-5.6-luna` justamente para classificação, extração estruturada e avaliação. `RAGAS_MODEL` permite subir para `gpt-5.6-terra` se o julgamento se mostrar insuficiente (10x o custo).
+O modelo em si nunca foi o problema: era o orçamento de saída. O juiz atual (`gpt-5-mini`) também é de raciocínio e passa pela mesma regra.
 
 #### Degradação graciosa
 
@@ -187,13 +207,13 @@ Há duas causas possíveis, indistinguíveis pela mensagem:
 1. **A allowlist do projeto não inclui embeddings** — corrige-se em platform.openai.com > Project > Limits (permissões de modelo).
 2. **O cabeçalho `OpenAI-Project`**, que o SDK injeta a partir do projeto da chave, dispara uma checagem de acesso que falha em algumas configurações *mesmo com o modelo liberado*. Mandar o cabeçalho vazio pula a checagem; a chave por si só já identifica organização e projeto.
 
-`SkoposRagasEmbeddings` cobre as duas: ao receber 403, repete a mesma chamada sem o cabeçalho antes de desistir do modelo, e só então desce a cadeia configurada. Memoiza o modelo e o modo que funcionaram e reporta em `judge.embedding_model_used` — o payload nunca afirma ter usado um modelo que apenas pediu. O fallback dispara só em erro de acesso a modelo; 429 e falhas de rede propagam para o retry existente.
+`SkoposRagasEmbeddings` cobre as duas: ao receber 403, repete a mesma chamada sem o cabeçalho antes de desistir do modelo, e só então desce a cadeia de alternativas. Memoiza o modelo e o modo que funcionaram e reporta em `judge.embedding_model_used` — o payload nunca afirma ter usado um modelo que apenas pediu. O fallback dispara só em erro de acesso a modelo; 429 e falhas de rede propagam para o retry existente.
 
 Para distinguir as duas causas sem adivinhar: `python -m scripts.check_embeddings` testa cada modelo quanto à presença na allowlist **e** à chamada real, nas duas condições de cabeçalho, e imprime a matriz. A distinção importa porque "fora da allowlist" e "na allowlist mas negado" produzem o mesmo 403 e têm soluções diferentes — foi exatamente o que separou o diagnóstico quando a liberação dos modelos registrou no plano de controle antes de o caminho de inferência aplicá-la.
 
 #### Qual modelo de embeddings, e por quê
 
-A escolha vive no `.env` (`RAGAS_EMBEDDING_MODEL` e `RAGAS_EMBEDDING_FALLBACKS`), não no código — as constantes do módulo são só o último recurso para o sistema subir sem configuração.
+O modelo e as alternativas são constantes do módulo (`DEFAULT_EMBEDDING_MODEL` e `DEFAULT_EMBEDDING_FALLBACKS`), sem configuração por ambiente, como o juiz.
 
 O `answer_relevancy` compara a pergunta do usuário com perguntas geradas a partir da resposta: **similaridade semântica entre textos curtos em português**. É nesse eixo que os modelos se separam:
 
@@ -210,6 +230,18 @@ Entre `3-small` e `3-large` o custo não é critério: são 4 textos curtos por 
 Fontes: [OpenAI, *New embedding models and API updates*](https://openai.com/index/new-embedding-models-and-api-updates/); Stekel, T. R. C., *MTEB-BR: A Text Embedding Benchmark for Brazilian Portuguese*, IFSP ([arXiv:2607.04581](https://arxiv.org/abs/2607.04581)).
 
 Detalhe de implementação com consequência real: quando uma métrica não pode ser calculada, a ragas devolve `float("nan")`. `json.dumps(nan)` emite o literal `NaN`, que é **JSON inválido** e quebra o `JSON.parse` do browser — levando junto o evento WebSocket inteiro, não só a métrica. `_clean_score` converte `NaN`/infinito para `null` e normaliza escalares numpy.
+
+### Q4 — Fidelidade numérica
+
+```python
+# core/quality_metrics.py
+def compute_numeric_fidelity(texto, contextos, anos=None) -> dict:
+    # score = números do texto encontrados no material entregue / números do texto
+```
+
+Complemento determinístico da fidelidade do RAGAS. Extrai os números citados no texto (formato pt-BR, com escalas como "mil", "milhões" e "bilhões") e confere cada um contra os números do material entregue ao redator, que é o mesmo `build_contexts` usado pelo RAGAS (movido para `core/contextos_avaliacao.py`). A tolerância relativa é de 2%, para cobrir arredondamentos. Anos entre 1900 e 2100, escritos sem separador de milhar, contam como verificados quando estão dentro do período analisado. Com separador ("2.000 casos"), o número é uma contagem e é conferido como os demais, e inteiros de um dígito são ignorados (enumerações, ordinais). O retorno traz `score` (`null` quando o texto não cita números), `numeros_no_texto`, `verificados` e `nao_verificados` (os literais).
+
+O motivo é a estabilidade. O juiz do RAGAS é um LLM e varia de uma execução para outra, enquanto esta conferência dá sempre o mesmo resultado para o mesmo texto. Ela não julga afirmações qualitativas, só números. O valor vai para `quality.{star,hierarchical}.numeric_fidelity`, para a bateria (`fidelidade_numerica`) e para a consolidação.
 
 ### Q3 — Completude
 
@@ -256,6 +288,30 @@ score = completed / total  # total = 7
 
 Mede quantos dos 7 componentes do resultado estão presentes e não-vazios — reflete diretamente a degradação graciosa que ambas as arquiteturas implementam (falha de um agente não derruba a análise inteira, ver seções de degradação graciosa em [arquitetura-estrela.md](arquitetura-estrela.md) e [arquitetura-hierarquica.md](arquitetura-hierarquica.md)). Base de `compute_analysis_success` (Eixo E).
 
+### R2 — Resiliência a dados corrompidos (revisão das entregas)
+
+As falhas de R1 fazem um componente parar com uma exceção. Huang et al. (2025, ICML) testam outro modo de falha: um agente que continua respondendo, mas com erros no conteúdo. O AutoInject do artigo corrompe cerca de 20% das linhas da mensagem. A vantagem que o artigo atribui à hierarquia vem de um agente de nível superior que julga o que recebe.
+
+No Skopos, essa capacidade existe nas duas topologias, pela mesma regra: o nó que recebe as entregas dos agentes de dados as revisa numa chamada ao LLM e contesta os suspeitos por reenvio (`agents/revisao_entregas.py`).
+- Na estrela, o orquestrador revisa tudo numa chamada.
+- Na hierárquica, cada supervisor de dados revisa o seu ramo.
+
+O resumo fica em `result["revisao"]` com os campos `chamadas`, `registros_revisados`, `sinalizados`, `confirmados`, `corrigidos`, `descartados`, `nao_verificados`, `reenvios` e `falhou`.
+
+**O teste equivalente** fica em `scripts/falhas_semanticas.py` e é acionado por `batch_eval --experimento-revisao`. Um agente de saúde por vez (o alvo) entrega cerca de 20% dos registros não nulos com o valor multiplicado por 0,1, 0,5, 2 ou 10. A corrupção acontece entre o agente e o nó que recebe a entrega, então a memória do agente fica limpa:
+- no modo `dados_corrompidos`, só a primeira entrega é corrompida e o reenvio chega limpo;
+- no modo `dados_corrompidos_persistente`, toda entrega é corrompida.
+
+A semente é `(analysis_id, agente, entrega)`, então as duas topologias recebem a mesma corrupção. O gabarito permite medir, por topologia:
+- `revisao_vp` e `revisao_fp`: sinais em registros corrompidos e em registros limpos;
+- `contaminados_finais`: registros que chegaram ao resultado ainda corrompidos;
+- `perdidos`: corrompidos descartados;
+- `achados_iguais_limpos`: se as correlações e anomalias coincidem com as que os dados limpos produziriam, recalculadas com o mesmo `AgenteAnalitico`.
+
+`scripts/analise_revisao.py` consolida as rodadas por topologia e por amplitude de escopo, com teste exato de Fisher para os achados limpos e Wilcoxon pareado por análise para sensibilidade, tokens e tempo.
+
+**Custo:** a revisão acrescenta uma chamada ao LLM na estrela e até duas na hierárquica em toda análise. Execuções feitas antes da revisão existir não têm essas chamadas.
+
 ---
 
 ## Eixo D — Custo e Comunicação (Etapa 6, novo)
@@ -301,17 +357,21 @@ O resultado final no payload separa 4 segmentos: `cost.star`, `cost.hierarchical
 ### Volume de comunicação
 
 ```python
-def compute_communication_volume(architecture, agent_metrics, despesas_count=0, indicadores_count=0):
-    n_agents = len(agent_metrics)
-    lateral_hops = 3 if architecture == "hierarchical" else 0
-    lateral_summaries = 2 if architecture == "hierarchical" else 0
-    message_count = n_agents * 2 + lateral_hops
-    return {"agent_invocations": n_agents, "lateral_hops": lateral_hops,
-            "lateral_summaries": lateral_summaries, "message_count": message_count,
-            "payload_records": despesas_count + indicadores_count}
+def compute_communication_volume(architecture, agent_metrics, despesas_count=0,
+                                 indicadores_count=0, mensagens=None) -> dict:
+    # agent_invocations   — só agentes de linguagem (papel "agente")
+    # ferramentas_acionadas — ferramentas (papel "ferramenta")
+    # message_count, mensagens_dados, mensagens_texto, caracteres_texto
+    # fonte_mensagens: "registro" (log real) ou "estimativa" (2 × agentes)
 ```
 
-O sistema não mantém um log de mensagens brutas (sockets/filas reais) — o proxy é determinístico e real, nunca estimado: cada entrada em `agent_metrics` é 1 agente efetivamente invocado (contado como 1 chamada + 1 retorno = 2 mensagens). A hierárquica soma os 3 hops de comunicação lateral fixos entre supervisores (Etapa 5 — `Dominio→Analitico`, `Dominio→Contexto`, `Contexto→Analitico`, sempre propostos por `CoordenadorGeral.propose_actions()` independente de falha upstream) e os 2 resumos textuais semânticos que os acompanham. A estrela nunca tem comunicação lateral (hub-and-spoke por definição), então ambos ficam em 0 — o harness de escalabilidade (ver seção própria abaixo) confirma que esse overhead lateral é **fixo**, não cresce com o volume de dados.
+**Registro real das mensagens.** Cada delegação entre agentes gera mensagens no estilo FIPA-ACL (Wooldridge, 2009), com o envelope `Mensagem` de `agents/base.py`: remetente, destinatário, performativa (`request`, `inform` ou `failure`), natureza (`dados` ou `texto`), conteúdo resumido e tamanho em caracteres. A raiz de cada topologia cria o registro, e na hierárquica o coordenador o repassa aos supervisores. O registro vai para `result["mensagens"]`, e a métrica conta as mensagens dele. O proxy antigo de 2 mensagens por agente só é usado quando um resultado não traz registro (`fonte_mensagens = "estimativa"`).
+
+O conteúdo continua estruturado quando é dado e passa a ser linguagem natural quando é produção do LLM. É o caso dos subobjetivos do coordenador, dos textos dos ramos e da resposta do supervisor analítico. Por isso a métrica separa `mensagens_dados` de `mensagens_texto` e soma `caracteres_texto`.
+
+**Agentes e ferramentas (CoALA).** Em CoALA (Sumers et al., 2024), um agente de linguagem decide com o LLM, e as consultas e os cálculos sem decisão são ações de grounding no espaço de ações de quem os chama. `papel_de` (`core/quality_metrics.py`) classifica como ferramentas o `AgenteAnalitico`, o contexto orçamentário e as consultas sem deliberação de dimensão (SIA e COVID), conforme `FERRAMENTAS`. Chamar uma ferramenta não gera mensagem, e ela conta em `ferramentas_acionadas`, não em `agent_invocations`. As entradas de `agentMetrics` ganham o campo `papel`, e as ferramentas continuam ali porque o tempo delas entra na decomposição por fase.
+
+> **Nota histórica:** uma versão anterior somava `lateral_hops`/`lateral_summaries` fixos para a hierárquica — a comunicação lateral entre supervisores (Etapa 5, ver nota abaixo) foi removida por decisão explícita de tornar a hierárquica uma árvore estrita, e esses dois campos deixaram de existir no payload.
 
 ---
 
@@ -374,7 +434,7 @@ def compute_cache_hit_rate() -> dict[str, Any]:
 `backend/tests/test_scalability_benchmark.py` roda as duas topologias com dados sintéticos em dois volumes (N=3 e N=10 anos, todos os 4 subfunções/tipos de indicador ativos), `use_llm=False` (determinístico, sem custo real de API — a variação do custo de tokens com N exigiria chamadas reais, fora do escopo de um harness automatizado de CI). Produz os 2 pontos de comparação exigidos pelo critério de aceite da Etapa 6 e valida invariantes estruturais em vez de comparar contra um limiar fixo (mesma filosofia de D12):
 
 - Q1 continua consistente em qualquer N (nenhuma divergência introduzida pelo crescimento da base).
-- O overhead lateral da hierárquica (`lateral_hops`, `lateral_summaries`) é fixo em qualquer N — só o `payload_records` cresce.
+- `message_count` cresce só com `agent_invocations` (× 2) em qualquer N, em ambas as topologias — a árvore estrita da hierárquica não introduz overhead de comunicação que escale com o volume de dados.
 - Todos os despesas/indicadores sintéticos são processados sem perda silenciosa, em ambas as escalas.
 
 ---
@@ -389,7 +449,7 @@ Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às dec
 | D7 | Volume de comunicação (`compute_communication_volume`) | Li et al. (2024), Seção 3.4.1 ("Message delivery"); complementar: *"Beyond Self-Talk: A Communication-Centric Survey of LLM-Based Multi-Agent Systems"* (arXiv:2502.14321) | "message delivery must account for supplementary overhead, including transmission efficiency, bandwidth, and the timeliness of message delivery"; "current leaderboards remain agent-centric and rarely capture system-level properties, including coordination efficiency, communication bandwidth and latency". **Ressalva:** o proxy usado (contagem de invocações + hops laterais fixos, não um log de mensagens brutas) é decisão de engenharia própria. |
 | D8 | Adoção da **biblioteca** RAGAS (`core/ragas_metrics.py`) no lugar de toda métrica caseira de fidelidade | Es, S., James, J., Espinosa-Anke, L., Schockaert, S. (2024). *"RAGAS: Automated Evaluation of Retrieval Augmented Generation"*. Proceedings of the 18th Conference of the EACL: System Demonstrations, pp. 150–158. Biblioteca: `ragas` 0.4.x | O paper define três aspectos reference-free: faithfulness (`F = \|V\|/\|S\|`, afirmações suportadas sobre total de afirmações), answer relevance (média das similaridades de cosseno entre `n` perguntas geradas a partir da resposta e a pergunta original) e context relevance. A versão anterior desta linha citava a *metodologia* e implementava uma aproximação própria; agora a implementação **é** a da referência. **Ressalva:** o pipeline não é um RAG clássico — o mapeamento da tripla `(user_input, response, retrieved_contexts)` para achados determinísticos está documentado na seção do Eixo B e é decisão de engenharia própria. |
 | D17 | Remoção do LLM-as-judge de nota 1–5 (`compute_faithfulness_llm`) | Es et al. (2024), Tabela 4 e Seção 5 | O paper mede exatamente essa abordagem como baseline ("we ask ChatGPT to assign a score between 0 and 10 for the three quality dimensions") e reporta a concordância com anotadores humanos em faithfulness: **RAGAS 0.95, GPT Score 0.72, GPT Ranking 0.54**. Manter a nota holística ao lado da métrica do RAGAS seria manter, ao lado do instrumento validado, o instrumento que a mesma fonte demonstra ser pior — sem nenhuma pergunta que só ele responda. Citação direta, não decisão de engenharia. |
-| D18 | Juiz fixo (`RAGAS_PROVIDER`), independente do `LLM_PROVIDER` do pipeline | Es et al. (2024), Seção 5.1 ("Reproducibility") | "Obtaining reproducible results with (large) language models is challenging... several runs of the same experiment under the same configuration might yield different results". A fonte motiva controlar as fontes de variação da medida; deixar o juiz seguir o provedor do sistema avaliado acrescentaria uma variação a mais, e os scores de execuções com provedores diferentes deixariam de ser comparáveis entre si. **Ressalva:** a escolha do provedor específico (OpenAI) é decisão de engenharia — motivada por `answer_relevancy` exigir embeddings, que o DeepSeek não oferece. |
+| D18 | Juiz fixo no código (`gpt-5-mini`) e diferente do modelo das análises (`gpt-5.6-luna`) | Es et al. (2024), Seção 5.1 ("Reproducibility"); Zheng et al. (2023) e Panickssery et al. (2024) sobre autopreferência | "Obtaining reproducible results with (large) language models is challenging... several runs of the same experiment under the same configuration might yield different results". A fonte motiva controlar as fontes de variação da medida; fixar o juiz no código elimina essa variação entre execuções. Ser um modelo diferente do gerador evita que o juiz favoreça o próprio texto. **Ressalva:** a escolha do `gpt-5-mini` é decisão de engenharia por custo-benefício. |
 | D19 | Correção da cobertura de anomalias em `compute_completeness` (Q3) | — | **Decisão de engenharia, sem embasamento acadêmico direto — correção de bug de medição.** A busca global por palavra-chave de categoria marcava todas as anomalias de um tipo como cobertas a partir de uma única ocorrência no texto, tornando o score insensível à quantidade de achados efetivamente mencionados. Consequência a registrar: valores de Q3 anteriores à correção não são comparáveis com os atuais. |
 | D9 | Eixo de escalabilidade (harness de N variável) | Li et al. (2024), Seção 5.1 ("Scaling Up the Multi-Agent System") | "Scaling up multi-agent systems involves increasing the number of agents... introduces challenges related to computational resources, communication efficiency, and system coordination... static adjustment and dynamic scaling methods are widely applied." **Ressalva:** a fonte discute a necessidade de medir escalabilidade em termos gerais, não prescreve a métrica exata nem o desenho do benchmark sintético usado aqui. |
 | D10 | Taxonomia E/Q/R vs. reestruturação Outcome/Process/Product/Framework (não adotada) | *"A Catalogue of Evaluation Metrics for LLM-Based Multi-Agent Frameworks in Software Engineering"*, AGENT 2026 workshop @ ICSE 2026 | Propõe 37 métricas nessas 4 categorias contra "frameworks often relying on self-defined or inconsistent metrics, hindering reproducibility". Registrada como referência; não adotada nesta versão do sistema (custo/risco de quebrar a API atual do frontend maior que o ganho para o prazo do TCC). |
@@ -398,7 +458,7 @@ Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às dec
 | D16 | Remoção do rate limiting próprio em `core/llm_client.py`, mantendo só retry reativo a 429 real | — | **Decisão de engenharia, sem embasamento acadêmico direto — pedido explícito do usuário.** Motivada por evidência empírica direta (log de execução real mostrando uma chamada presa 177s atrás do lock global de outra topologia em streaming), relevante para este documento porque afeta diretamente a precisão da métrica de custo de tokens sob concorrência real. |
 | D20 | Critério lexicográfico do veredito (fidelidade > completude > eficiência) e a regra de não tratar fidelidade ausente como zero | — | **Decisão de engenharia, sem embasamento acadêmico direto.** Nenhuma fonte consultada prescreve como combinar métricas de eixos diferentes num veredito único. A ordem lexicográfica foi escolhida sobre a média ponderada justamente por não exigir pesos arbitrários — a prioridade da fidelidade se apoia em ela ser a única métrica de qualidade textual com validação publicada (D8), não numa fórmula. A regra do `None` é correção de viés: sem ela, a arquitetura cuja medição falhou perderia por falha de instrumento. |
 | D21 | ~~Teto de contextos (`RAGAS_MAX_CONTEXTS`) aplicado só à precisão de contexto~~ — **superada por D25**, que removeu a métrica que exigia o teto | — | **Decisão de engenharia, sem embasamento acadêmico direto — correção de viés de medição.** O teto existe pelo custo (a precisão de contexto gasta 1 chamada LLM por achado); a fidelidade gasta 2 chamadas independente do volume. Truncar o contexto dela não economizava nada e fazia as afirmações sobre os achados removidos serem julgadas "não suportadas", deprimindo o score artificialmente. **Ressalva:** medições de fidelidade anteriores a esta correção estão subestimadas e não são comparáveis com as atuais. |
-| D22 | Esforço de raciocínio limitado (`OPENAI_REASONING_EFFORT=low`) e teto de saída próprio para modelos de raciocínio | — | **Decisão de engenharia, sem embasamento acadêmico direto.** Nesses modelos `max_completion_tokens` cobre raciocínio + resposta; com o default `medium` da API e teto apertado, prompts grandes retornavam vazio, e a fidelidade falhava com "LLM indisponível". É o mesmo raciocínio do `thinking: disabled` já usado no provedor DeepSeek: extração e julgamento de JSON estruturado não se beneficiam de chain-of-thought longo. |
+| D22 | Esforço de raciocínio limitado (`OPENAI_REASONING_EFFORT=low`) e teto de saída próprio para modelos de raciocínio | — | **Decisão de engenharia, sem embasamento acadêmico direto.** Nesses modelos `max_completion_tokens` cobre raciocínio + resposta; com o default `medium` da API e teto apertado, prompts grandes retornavam vazio, e a fidelidade falhava com "LLM indisponível". Extração e julgamento de JSON estruturado não se beneficiam de chain-of-thought longo. |
 | D23 | Contexto do juiz espelhando integralmente o do gerador, inclusive o enquadramento injetado pelo prompt (período, pandemia, traduções, lacunas) | — | **Decisão de engenharia, sem embasamento acadêmico direto — correção de viés de medição.** O paper pressupõe que o contexto avaliado é o mesmo que alimentou a geração; aqui os dois divergiam, e a métrica media a diferença. A inclusão do enquadramento injetado decorre da mesma premissa: o prompt manda o modelo repetir essas afirmações, então elas fazem parte do que sustenta a geração. **Ressalva:** é discutível se instruções de sistema devem contar como "contexto recuperado"; a alternativa (excluí-las) reprovaria o texto por obedecer à instrução, o que seria pior. |
 | D24 | Uso de `text-embedding-3-large` no `answer_relevancy`, divergindo do `text-embedding-ada-002` do paper | Es et al. (2024), Seção 3; OpenAI, *New embedding models and API updates*; Stekel (MTEB-BR, arXiv:2607.04581) | O paper especifica o *procedimento* ("obtemos embeddings para todas as perguntas... calculamos a similaridade de cosseno"), não o modelo — a definição de `AR` não depende de qual encoder produz os vetores; o `ada-002` foi simplesmente o disponível em 2023. Aqui os textos comparados são todos em português, e o `ada-002` é o pior dos três nesse eixo (31,4% no MIRACL, contra 54,9% do `3-large`), com custo 5× maior que o `3-small`. Manter o modelo do paper degradaria a medida sem ganho de comparabilidade. **Ressalva:** os scores de `answer_relevancy` não são numericamente comparáveis com os do paper nem com implementações que usem `ada-002`. |
 | D25 | Terceiro pilar medido por `ContextRelevance` em vez de `ContextPrecisionWithoutReference` | Es et al. (2024), Seção 3 | A definição do paper é uma **proporção** ("número de sentenças extraídas / total de sentenças no contexto"), não uma *average precision* ranqueada. A precisão de contexto da biblioteca calcula AP, que pressupõe um resultado de retrieval **ordenado por relevância** e pontua conforme a posição dos chunks úteis. Aqui não há retriever nem ranking: `build_contexts` emite numa ordem estrutural fixa, então o score virava função dessa ordem arbitrária. Medido com os 77 chunks de uma execução real, variando **só** a posição dos mesmos 6 chunks úteis: AP **1,00** no início, **0,09** dispersos, **0,05** no fim. `ContextRelevance` concatena o contexto e o avalia com dois juízes (escala 0/1/2), sem depender de ordem. **Consequência:** torna obsoleto o teto de contextos de D21, e as medições de precisão de contexto anteriores (0,09 / 0,23) não são comparáveis com as atuais. |
@@ -412,7 +472,7 @@ Tabela no mesmo formato da Seção 3 do `PLANO_REFATORACAO.md`, filtrada às dec
 Registradas explicitamente porque afetam a leitura dos números:
 
 1. **O pipeline não é um RAG clássico.** Não há retriever nem corpus; `retrieved_contexts` são os achados determinísticos que os agentes entregaram ao sintetizador. O mapeamento é defensável (ver Eixo B) mas é decisão de engenharia, não algo prescrito pela fonte.
-2. **A relevância do contexto não discrimina as topologias.** Ela julga contexto × pergunta sem ver a resposta, e o Q1 verifica que as duas arquiteturas produzem correlações e anomalias idênticas — logo `build_contexts` gera os mesmos chunks para ambas e o score sai igual. Os dois números no relatório são **iguais por construção, não um empate medido**: a métrica descreve a qualidade do conjunto de achados que o pipeline produz, que é o mesmo nas duas topologias. Só divergem sob falha parcial, quando uma arquitetura entrega menos achados que a outra.
+2. **A relevância do contexto não discrimina as topologias, e a diferença entre elas é ruído do juiz.** Ela julga contexto × pergunta sem ver a resposta, e o Q1 verifica que as duas arquiteturas produzem correlações e anomalias idênticas. Logo `build_contexts` entrega o mesmo contexto às duas, e qualquer diferença de score vem só da variação do juiz, que é um LLM e não responde igual a duas chamadas com a mesma entrada. Isso foi observado numa execução real: com achados idênticos, a estrela recebeu 0,75 e a hierárquica 0,50 (juiz `gpt-5-mini`, escala 0/1/2 de dois julgamentos). Uma versão anterior deste texto dizia que os scores eram "iguais por construção", o que só valeria com um juiz determinístico. A métrica descreve o conjunto de achados que o pipeline produz, que é o mesmo nas duas topologias, e não deve ser usada para compará-las. A diferença entre elas serve, no máximo, como estimativa do ruído do juiz. Uma diferença real só aparece sob falha parcial, quando uma arquitetura entrega menos achados que a outra.
 3. **O juiz é um LLM.** O próprio paper registra a limitação: "It relies heavily on the performance of the LLMs used for evaluating the different components" (Seção 8). Os scores são estimativas, não medidas exatas — diferente de Q1, que é uma igualdade numérica.
 4. **Q3 e a fidelidade mudaram de valor mais de uma vez.** As correções D19 (cobertura de anomalias), D21 (truncagem) e D23 (contexto incompleto) tornam os números atuais incomparáveis com execuções anteriores. A fidelidade, em particular, esteve subestimada duas vezes: uma medição de 0.28 (estrela) / 0.10 (hierárquica) obtida antes de D23 refletia sobretudo a lacuna entre o contexto do gerador e o do juiz, não infidelidade do texto.
 5. **O juiz depende de acesso a embeddings.** Projetos da OpenAI restringem modelos individualmente e devolvem 403 `model_not_found`; a cadeia de fallback e o contorno do cabeçalho cobrem os casos comuns, mas se nenhum modelo estiver acessível, `answer_relevancy` fica indisponível e o payload diz isso — o pilar de relevância da resposta não é coberto naquela execução. Diagnóstico: `python -m scripts.check_embeddings`.
@@ -445,6 +505,7 @@ GET /api/analysis/{id}/quality  (e evento WebSocket "quality_metrics")
 │   ├── deterministic_consistency                                              Q1
 │   └── {star,hierarchical}
 │       ├── completeness                                                       Q3
+│       ├── numeric_fidelity.{score, numeros_no_texto, verificados, nao_verificados}   Q4
 │       └── ragas                             (eventos "ragas"/"ragas_done")
 │           ├── metrics.faithfulness.score
 │           ├── metrics.answer_relevancy.score

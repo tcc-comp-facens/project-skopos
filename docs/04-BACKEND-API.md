@@ -22,64 +22,20 @@
 
 **Arquivo:** `backend/api/routes.py`, `backend/api/websocket.py`, `backend/api/chat_websocket.py`
 
-O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (nível via `LOG_LEVEL`) e registra os routers de `api/routes.py` (REST), `api/websocket.py` (WebSocket de resultados) e `api/chat_websocket.py` (WebSocket de chat). A lógica de endpoints, modelos, estado compartilhado e thread runners está organizada em `backend/api/`. `api/dispatch.py` concentra o disparo de análise (persistência + threads) compartilhado entre o formulário REST (`routes.py`) e o chat (`chat_runner.py`).
+O `main.py` é o entry point que cria o app FastAPI, configura CORS, logging (nível via `LOG_LEVEL`) e registra os routers de `api/routes.py` (REST), `api/websocket.py` (WebSocket de resultados) e `api/chat_websocket.py` (WebSocket de chat). A lógica de endpoints, modelos, estado compartilhado e thread runners está organizada em `backend/api/`. `api/dispatch.py` concentra o disparo de análise (persistência + threads) — hoje chamado **exclusivamente** pelo chat (`chat_runner.py`); o antigo `POST /api/analysis` (formulário estruturado) foi removido.
 
 ### Endpoints
 
 | Método | Rota | Descrição | Retorno |
 |--------|------|-----------|---------|
-| `POST` | `/api/analysis` | Inicia análise comparativa (parâmetros já estruturados) | `{ "analysisId": "uuid" }` |
 | `GET` | `/api/analysis/{id}` | Recupera resultado da análise do Neo4j | Nó Analise completo |
-| `GET` | `/api/analysis/{id}/quality` | Métricas de qualidade (3 eixos) | Dict com efficiency, quality, resilience |
+| `GET` | `/api/analysis/{id}/quality` | Métricas de qualidade (eficiência, qualidade, resiliência, custo, comunicação, outcome) | Dict organizado por eixo |
 | `GET` | `/api/analysis/{id}/report` | Relatório comparativo textual | `{ "report": "texto..." }` |
 | `GET` | `/api/benchmarks` | Métricas de todas as análises | Lista de MetricaExecucao |
 | `GET` | `/api/data-range` | Intervalo de anos com dados carregados no Neo4j | `{ "minYear": int\|null, "maxYear": int\|null }` |
-| `WS` | `/ws/chat/{sessionId}` | Turno de intenção do chat — ver [Chat e Interpretação de Intenção](#chat-e-interpretação-de-intenção) | eventos JSON |
-
-### POST /api/analysis
-
-**Request body:**
-```json
-{
-  "dateFrom": 2018,
-  "dateTo": 2023,
-  "healthParams": {
-    "dengue": true,
-    "covid": true,
-    "vaccination": true,
-    "internacoes": true,
-    "mortalidade": true
-  },
-  "useLlm": true,
-}
-```
-
-| Campo | Tipo | Default | Descrição |
-|-------|------|---------|-----------|
-| `dateFrom` | `int` | `2018` | Ano inicial do período |
-| `dateTo` | `int` | `2021` | Ano final do período |
-| `healthParams` | `object` | — | Parâmetros de saúde (pelo menos um `true`) |
-| `useLlm` | `bool` | `true` | Se `true`, usa LLM para síntese textual; se `false`, gera texto estruturado (fallback) |
-
-**Validações (retorna 400):**
-- `dateFrom` deve ser < `dateTo` (intervalo mínimo de 2 anos)
-- Pelo menos um `healthParam` deve ser `true`
-
-**Conversão de healthParams:**
-- `dengue: true` → `"dengue"`
-- `covid: true` → `"covid"`
-- `vaccination: true` → `"vacinacao"` (com 'c', sem 'ç')
-- `internacoes: true` → `"internacoes"`
-- `mortalidade: true` → `"mortalidade"`
-
-**Fluxo interno:**
-1. Valida parâmetros
-2. Gera UUID para a análise
-3. Persiste nó `Analise` no Neo4j (status "pending")
-4. Vincula nós `DespesaSIOPS` e `IndicadorDataSUS` existentes à análise via MERGE
-5. Cria `Queue` compartilhada para WebSocket
-6. Lança duas threads daemon (star + hierarchical)
-7. Retorna `analysisId` imediatamente
+| `GET` | `/api/metrics/guardrail` | Taxa de rejeição do guardrail de escopo (Etapa 1), process-wide | `{ "total_messages", "rejected", "rejection_rate" }` |
+| `GET` | `/api/metrics/query-planning-cache` | Taxa de acerto do cache de planejamento de consulta (Etapa 2), process-wide | Dict com contagens por origem (fast_path/cache/llm) |
+| `WS` | `/ws/chat/{sessionId}` | Turno de intenção do chat — único ponto de disparo de análise, ver [Chat e Interpretação de Intenção](#chat-e-interpretação-de-intenção) | eventos JSON |
 
 ### GET /api/analysis/{id}/quality
 
@@ -167,7 +123,7 @@ Streaming de eventos em tempo real das duas arquiteturas.
 
 ### Endpoint: `WS /ws/chat/{sessionId}`
 
-Cuida apenas do turno de intenção: interpreta a mensagem do usuário, dispara a análise (reaproveitando `dispatch_analysis`, o mesmo usado pelo `POST /api/analysis`) e confirma em texto. O streaming dos resultados da análise em si continua exclusivamente pelo `/ws/{analysisId}` já existente — o WebSocket de chat não lê a mesma `ws_queue` (é um consumidor de fila único, removida ao terminar), então não pode competir por ela.
+Cuida apenas do turno de intenção: interpreta a mensagem do usuário, dispara a análise (via `dispatch_analysis`, o **único** caminho de disparo desde a remoção do antigo formulário REST) e confirma em texto. O streaming dos resultados da análise em si continua exclusivamente pelo `/ws/{analysisId}` já existente — o WebSocket de chat não lê a mesma `ws_queue` (é um consumidor de fila único, removida ao terminar), então não pode competir por ela.
 
 ### Protocolo
 
@@ -192,8 +148,8 @@ servidor → cliente:
 ### Fluxo por mensagem
 
 1. Servidor responde `user_ack` imediatamente
-2. `AgenteInterpretacaoIntencao.parse(text)` roda o ciclo CoALA (1 chamada LLM que classifica escopo e extrai parâmetros na mesma resposta — ver `docs/02-AGENTES.md`)
-3. **Fora de escopo, incompleto ou LLM indisponível** → `system_chunk`/`system_done` com a mensagem de esclarecimento/recusa; nenhuma análise é criada
+2. `AgenteInterpretacaoIntencao.parse(text)` roda o ciclo CoALA (1 chamada LLM que classifica escopo em 3 vias — fora de escopo / dentro mas sem precisar de análise / dentro precisando de análise — e, no último caso, já extrai os parâmetros na mesma resposta — ver `docs/02-AGENTES.md`)
+3. **Fora de escopo, chitchat (sem precisar de análise) ou LLM indisponível** → `system_chunk`/`system_done` com a mensagem de esclarecimento/recusa/resposta direta (escrita pelo próprio LLM na mesma chamada); nenhuma análise é criada
 4. **Sucesso** → `run_chat_analysis()` chama `dispatch_analysis()` (persiste `Analise`, dispara as duas threads star/hierarchical); servidor envia `analysis_started` com o `analysisId` e o texto de confirmação (`pretty_print` da intenção interpretada)
 5. Cliente troca de socket para `/ws/{analysisId}` para acompanhar o processamento da análise
 
@@ -207,25 +163,22 @@ Diferente de um design anterior (regex-primário, LLM como fallback), hoje **tod
 
 **Arquivo:** `backend/core/llm_client.py`
 
-### Provider
+### Modelos
 
-| Provider | Modelo | Variável de ambiente |
-|----------|--------|---------------------|
-| **DeepSeek** (API compatível OpenAI) — default | `deepseek-v4-flash` | `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` (opcional) |
-| **OpenAI** | `gpt-5.6-luna` | `OPENAI_API_KEY`, `OPENAI_MODEL` (opcional) |
+Só OpenAI, com os modelos fixos no código, sem variável para trocá-los:
 
-O provedor ativo é escolhido por `LLM_PROVIDER` (`deepseek` ou `openai`; default `deepseek`). Nenhum call site muda — todos chamam `generate()`/`generate_stream()` de `core/llm_client.py`, que resolve o provedor a cada chamada. O SDK é o `openai` nos dois casos; só a `base_url` difere.
+| Uso | Modelo | Onde |
+|---|---|---|
+| Análises (interpretação, agentes, redação) | `gpt-5.6-luna` | `llm_client.MODELO_ANALISE` |
+| Juiz da avaliação RAGAS | `gpt-5-mini` | `ragas_metrics.MODELO_JUIZ` |
 
-Um único modelo por provedor — sem cadeia de fallback entre modelos (diferente de um design anterior com múltiplos modelos Groq em cascata). No DeepSeek, `thinking` é desabilitado na chamada (`extra_body={"thinking": {"type": "disabled"}}`) para resposta direta, sem chain-of-thought; esse parâmetro é proprietário e não é enviado à OpenAI. Modelos de raciocínio da OpenAI (`gpt-5*`, série `o*`) recebem `max_completion_tokens` em vez de `max_tokens` e sem `temperature`, exigência da API deles.
+O juiz é diferente do gerador para evitar o viés de autopreferência de um modelo avaliando o próprio texto. A única variável obrigatória é `OPENAI_API_KEY`. Modelos de raciocínio (`gpt-5*`, série `o*`) recebem `max_completion_tokens` em vez de `max_tokens` e sem `temperature`, exigência da API.
 
-`OPENAI_STORE_LOGS=true` (opt-in, só OpenAI) envia `store=True` e `metadata={"app": "skopos", "caller": ...}` em cada chamada, tornando-as visíveis e filtráveis por agente na aba Logs do dashboard — a API não retém nada por default (`store=False`), então sem isso só o consumo aparece no billing. Numa organização com Zero Data Retention o parâmetro é ignorado.
+`OPENAI_STORE_LOGS=true` (opt-in) envia `store=True` e `metadata={"app": "skopos", "caller": ...}` em cada chamada, tornando-as visíveis e filtráveis por agente na aba Logs do dashboard — a API não retém nada por default (`store=False`), então sem isso só o consumo aparece no billing. Numa organização com Zero Data Retention o parâmetro é ignorado.
 
-### Rate Limiting
+### Sem rate limiting próprio
 
-| Mecanismo | Valor |
-|-----------|-------|
-| Lock global | `threading.Lock()` — serializa todas as chamadas |
-| Intervalo mínimo | 2.0 segundos entre chamadas |
+Um design anterior serializava todas as chamadas via lock global + intervalo mínimo entre elas — removido por completo depois de um log de execução real mostrar uma chamada em streaming presa 177s atrás do lock de outra topologia. Hoje chamadas de threads diferentes (estrela e hierárquica rodam concorrentes — ver `api/runners.py`) acontecem em paralelo de verdade, sem serialização artificial. O único ponto protegido por lock é a mutação do contador global de tokens (`_token_usage`), mantido pelo tempo mínimo possível — nunca durante uma chamada de rede.
 
 ### Retry
 
@@ -243,10 +196,10 @@ O cliente LLM oferece dois modos de geração:
 
 | Modo | Função | Descrição |
 |------|--------|-----------|
-| **Batch** | `generate(prompt, model=None, *, caller="desconhecido", provider=None, temperature=None)` | Retorna o texto completo de uma vez. Usado pelo `AgenteInterpretacaoIntencao`, pelo `TextSynthesizer` (fallback) e pela avaliação RAGAS — que passa `provider` explícito para fixar o juiz num provedor independente de `LLM_PROVIDER`. Para modelos de raciocínio da OpenAI (`gpt-5*`, `o*`) a chamada leva `max_completion_tokens` (`OPENAI_MAX_COMPLETION_TOKENS`, default 16384) e `reasoning_effort` (`OPENAI_REASONING_EFFORT`, default `low`) em vez de `max_tokens`/`temperature` — esse teto é compartilhado com os tokens de raciocínio, e sem limitar o esforço um prompt grande volta vazio. |
-| **Streaming** | `generate_stream(prompt, model=None, *, caller="desconhecido")` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
+| **Batch** | `generate(prompt, model=None, *, caller="desconhecido", temperature=None)` | Retorna o texto completo de uma vez. Usado pelo `AgenteInterpretacaoIntencao`, pelo `TextSynthesizer` (fallback) e pela avaliação RAGAS — a única que passa `model`, com o juiz fixo `gpt-5-mini`. Para modelos de raciocínio da OpenAI (`gpt-5*`, `o*`) a chamada leva `max_completion_tokens` (`OPENAI_MAX_COMPLETION_TOKENS`, default 16384) e `reasoning_effort` (`OPENAI_REASONING_EFFORT`, default `low`) em vez de `max_tokens`/`temperature` — esse teto é compartilhado com os tokens de raciocínio, e sem limitar o esforço um prompt grande volta vazio. |
+| **Streaming** | `generate_stream(prompt, *, caller="desconhecido")` | Yield de tokens incrementalmente conforme chegam da API. Usado pelo `TextSynthesizer` para streaming em tempo real via WebSocket. |
 
-Ambos os modos compartilham o mesmo lock global, rate limiting e retry em caso de 429.
+Ambos os modos compartilham a mesma lógica de retry em caso de 429 (sem lock global — ver acima).
 
 ### Observabilidade das chamadas
 
@@ -277,7 +230,7 @@ O `AgenteInterpretacaoIntencao`, quando o LLM falha, cai na estratégia de fallb
 
 ### Consumo por análise
 
-Cada comparação estrela vs. hierárquica consome **2 chamadas LLM** de síntese (1 sintetizador estrela + 1 sintetizador hierárquica) — mais **1 chamada adicional** de interpretação de intenção quando a análise se origina do chat (não conta quando vem do formulário REST direto). A avaliação RAGAS (sempre executada) acrescenta, por topologia, um custo **fixo**: 2 chamadas para faithfulness, 3 para answer relevancy e 2 para context relevance, mais 1 requisição de embeddings por pergunta gerada. Nenhuma métrica escala com o número de achados.
+Cada comparação estrela vs. hierárquica consome, no mínimo, **1 chamada** de interpretação de intenção (chat) + **2 chamadas** de síntese (1 sintetizador por topologia). A esse piso somam-se, condicionalmente: 1 chamada de arbitragem de dimensão por agente de saúde/orçamento ativado com dimensões válidas (a menos de `use_llm=False`), 1 chamada de priorização de ênfase por topologia (Etapa 3), e 3 chamadas de self-check por topologia quando `use_self_check=True` (Etapa 4). A hierárquica não soma nenhum custo extra por sua camada de supervisores — é uma árvore estrita, nenhum supervisor chama o LLM por conta própria. A avaliação RAGAS (sempre executada) acrescenta, por topologia, um custo **fixo**: 2 chamadas para faithfulness, 3 para answer relevancy e 2 para context relevance, mais 1 requisição de embeddings por pergunta gerada. Nenhuma métrica de RAGAS escala com o número de achados. O custo de cada segmento (interpretação de intenção, cada topologia, avaliação) é isolado via `core.llm_client.TokenBucket` e exposto em `quality.cost` (ver E1/E2 abaixo).
 
 ---
 
@@ -345,7 +298,7 @@ Cada chunk é enviado como evento `WSEvent` com `type: "chunk"` e o `architectur
 
 **Arquivo:** `backend/core/quality_metrics.py`
 
-Calculadas automaticamente após ambas as topologias completarem, organizadas em 3 eixos com 9 métricas individuais. Cada métrica é descrita abaixo com sua fórmula, significado, valores-alvo e contribuição para a comparação entre as topologias Estrela e Hierárquica.
+Calculadas automaticamente após ambas as topologias completarem, organizadas em 6 eixos. Esta seção detalha as métricas E/Q/R originais (fórmula, significado, valores-alvo); os três eixos acrescentados na Etapa 6 do plano de refatoração (custo de tokens, volume de comunicação, sucesso agregado da análise) — mais o guardrail de escopo e o cache de planejamento de consulta, ambos process-wide — têm justificativa acadêmica completa em [metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md), não duplicada aqui.
 
 ### Visão Geral
 
@@ -354,6 +307,8 @@ Calculadas automaticamente após ambas as topologias completarem, organizadas em
 | **E. Eficiência** | E1, E2 | Qual topologia usa melhor seus recursos computacionais e de comunicação? |
 | **Q. Qualidade** | Q1, Q3 (determinísticas) + RAGAS (opcional) | Os resultados são corretos, fiéis aos dados e respondem à pergunta feita? |
 | **R. Resiliência** | R1 | O sistema se comporta bem quando algo falha? |
+| **D. Custo e Comunicação** | `compute_token_cost`, `compute_communication_volume` (Etapa 6) | Quanto custa (tokens) e quantas mensagens cada topologia troca por análise? |
+| **Outcome** | `compute_analysis_success` (Etapa 6) | A análise, como um todo, foi bem-sucedida (R1 completo + self-check ok + dentro do orçamento de tempo)? |
 
 ---
 
@@ -363,18 +318,19 @@ Calculadas automaticamente após ambas as topologias completarem, organizadas em
 
 **Função:** `compute_coordination_overhead(agent_metrics)`
 
-**O que mede:** A fração do tempo total de execução gasta em supervisores e coordenadores (camada de gerenciamento) em relação ao tempo gasto em agentes de trabalho efetivo.
+**O que mede:** A fração do relógio determinístico da topologia que não é trabalho de agente-folha: tempo do orquestrador/coordenador, instanciação e repasses. A definição é a mesma para estrela e hierárquica.
 
 **Como é calculado:**
 
 ```
-overhead_ratio = tempo_supervisores / (tempo_supervisores + tempo_workers)
-overhead_percent = overhead_ratio × 100
+overhead_ms      = relógio determinístico - soma(executionTimeMs dos agentes folha)   # já calculado por orquestrador/coordenador
+overhead_percent = overhead_ms / (overhead_ms + soma dos folhas) × 100
 ```
 
 Onde:
-- `tempo_supervisores` = soma de `executionTimeMs` dos agentes cujo nome pertence ao conjunto `{supervisor_dominio, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral}`
-- `tempo_workers` = soma de `executionTimeMs` de todos os demais agentes (domínio, analíticos, contexto)
+- `supervisor_time_ms` = `executionTimeMs` das entradas `orquestrador_estrela` / `coordenador_geral` (que carregam o `overhead_ms`)
+- `tempo_workers` = soma de `executionTimeMs` dos agentes folha (saúde, orçamento, analíticos, contexto)
+- As entradas `supervisor_*` da hierárquica são ignoradas: o tempo de cada uma já contém o dos subordinados
 
 **Valores retornados:**
 - `supervisor_time_ms`: tempo total dos supervisores (ms)
@@ -384,10 +340,9 @@ Onde:
 - `overhead_percent`: 0% a 100%
 
 **Valores-alvo:**
-- **Estrela:** ~0% (o orquestrador não aparece nas métricas individuais de agentes, pois ele é o próprio pipeline)
-- **Hierárquica:** < 15% é bom, 15-30% é aceitável, > 30% indica overhead excessivo de coordenação
+- **Ambas:** valores próximos de 0% (da ordem de milissegundos sobre segundos de trabalho nos agentes). Sem limiar fixo: a leitura é relativa entre as duas topologias na mesma análise.
 
-**Significado para o TCC:** Quantifica o "custo" da hierarquia de supervisores. Se a topologia hierárquica gasta 25% do tempo apenas coordenando, isso é evidência empírica de que a camada extra de supervisores tem um custo real. Permite argumentar se a escalabilidade e a degradação graciosa da hierárquica compensam esse overhead.
+**Significado para o TCC:** Quantifica o "custo" da hierarquia de supervisores. Compara o custo de coordenação das duas topologias sob a mesma régua. Em execuções reais com LLM, os dois ficam abaixo de 0,2% do relógio determinístico, o que indica que a camada extra de supervisores não custa tempo mensurável (o custo da hierárquica aparece em invocações de agente e mensagens, não em latência).
 
 ---
 
@@ -403,10 +358,10 @@ Para cada agente, classifica-o em uma das 4 fases com base no `agentName`:
 
 | Fase | Agentes incluídos |
 |------|-------------------|
-| `dominio` | vigilancia_epidemiologica, saude_hospitalar, atencao_primaria, mortalidade |
-| `analitico` | correlacao, anomalias, sintetizador |
+| `dominio` | sinan, sih, sim, sipni, covid, sinasc, sia, cnes, orcamento_subfuncao |
+| `analitico` | analitico, priorizacao, sintetizador, verificacao |
 | `contexto` | contexto_orcamentario |
-| `supervisores` | supervisor_dominio, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral |
+| `supervisores` | supervisor_orcamento, supervisor_saude, supervisor_analitico, supervisor_contexto, orquestrador_estrela, coordenador_geral |
 
 ```
 percentual_fase = (tempo_fase / tempo_total) × 100
@@ -439,7 +394,7 @@ percentual_fase = (tempo_fase / tempo_total) × 100
 
 1. Extrai `correlacoes` e `anomalias` de cada resultado
 2. Normaliza cada lista ordenando por chave natural:
-   - Correlações: `(subfuncao, tipo_indicador, spearman, estrategia, confianca)`
+   - Correlações: `(subfuncao, tipo_indicador, spearman)`
    - Anomalias: `(subfuncao, tipo_indicador, ano, tipo_anomalia)`
 3. Compara as listas normalizadas com `==`
 
@@ -457,7 +412,7 @@ all_identical = corr_identical AND anom_identical
 
 **Valor-alvo:** `all_identical = true` (sempre)
 
-**Significado para o TCC:** Esta é uma métrica de validação fundamental. Como ambas as topologias usam os mesmos agentes analíticos (`AgenteCorrelacao`, `AgenteAnomalias`) com os mesmos dados de entrada, os resultados numéricos **devem** ser idênticos. Se não forem, há um bug no sistema. Isso garante que a comparação entre topologias é justa — a diferença está apenas na orquestração, não nos resultados.
+**Significado para o TCC:** Esta é uma métrica de validação fundamental. Como ambas as topologias usam o mesmo `AgenteAnalitico` (correlação + anomalias consolidadas) com os mesmos dados de entrada, os resultados numéricos **devem** ser idênticos. Se não forem, há um bug no sistema. Isso garante que a comparação entre topologias é justa — a diferença está apenas na orquestração, não nos resultados.
 
 ---
 
@@ -477,9 +432,9 @@ Substituiu três implementações caseiras que existiam aqui (`compute_faithfuln
 
 **Como a tripla do RAGAS é montada:** o sistema não é um RAG clássico (não há retriever nem corpus). O mapeamento é `user_input` = pergunta original do chat, `response` = `texto_analise`, `retrieved_contexts` = **tudo** que o sintetizador recebeu: um chunk por achado (com a leitura do sinal, o n e a descrição com valores em R$), mais o período, a cobertura de dados e as afirmações que o próprio prompt injeta (pandemia, traduções de subfunção) — que o modelo é instruído a repetir e sem as quais o texto seria reprovado por obedecer à instrução. Justificativa completa em [metricas-de-avaliacao.md](arquitetura/metricas-de-avaliacao.md).
 
-**Juiz:** provedor fixo via `RAGAS_PROVIDER` (default `openai`), **independente de `LLM_PROVIDER`** — trocar o provedor do pipeline não pode trocar o instrumento de medida. As chamadas passam por `core.llm_client.generate(provider=...)`, então continuam contabilizadas no `TokenBucket` e cobertas pelo retry de 429.
+**Juiz:** `gpt-5-mini`, fixo no código (`ragas_metrics.MODELO_JUIZ`) e diferente do modelo das análises (`gpt-5.6-luna`), para evitar o viés de autopreferência. As chamadas passam por `core.llm_client.generate(model=MODELO_JUIZ)`, então continuam contabilizadas no `TokenBucket` e cobertas pelo retry de 429.
 
-**Configuração (toda via `.env`):** `RAGAS_PROVIDER`, `RAGAS_MODEL`, `RAGAS_EMBEDDING_MODEL` (default `text-embedding-3-large` — melhor qualidade multilíngue, que é o que importa para comparar textos curtos em português), e `RAGAS_EMBEDDING_FALLBACKS` (cadeia separada por vírgula; vazio desliga o fallback). Não há teto de contextos: todas as métricas recebem o conjunto completo, porque nenhuma escala em número de chamadas com a quantidade de achados.
+**Embeddings:** `text-embedding-3-large` (melhor qualidade multilíngue, que é o que importa para comparar textos curtos em português), com as alternativas `text-embedding-3-small` e `text-embedding-ada-002` se o projeto não tiver acesso. Fixos no código, como o juiz. Não há teto de contextos: todas as métricas recebem o conjunto completo, porque nenhuma escala em número de chamadas com a quantidade de achados.
 
 **Embeddings sem acesso (403 `model_not_found`):** pode ocorrer com a mesma chave que funciona no `chat.completions`. O código repete a chamada sem o cabeçalho `OpenAI-Project` (que dispara uma checagem que falha em algumas configurações) e, persistindo, desce a cadeia de fallback, reportando o modelo efetivo em `judge.embedding_model_used`. Para separar "fora da allowlist" de "na allowlist mas negado" — mesmo erro, soluções diferentes: `cd backend && python -m scripts.check_embeddings`.
 
@@ -568,11 +523,11 @@ Verifica a presença (valor truthy) de 7 componentes no resultado:
 
 | Componente | Agente responsável |
 |------------|-------------------|
-| `despesas` | Agentes de domínio (4) |
-| `indicadores` | Agentes de domínio (4) |
+| `despesas` | Agentes orçamentários (até 7, `AgenteOrcamentoSubfuncao`) |
+| `indicadores` | Agentes de saúde (até 8) |
 | `dados_cruzados` | `cross_domain_data()` |
-| `correlacoes` | `AgenteCorrelacao` |
-| `anomalias` | `AgenteAnomalias` |
+| `correlacoes` | `AgenteAnalitico` |
+| `anomalias` | `AgenteAnalitico` |
 | `contexto_orcamentario` | `AgenteContextoOrcamentario` |
 | `texto_analise` | `TextSynthesizer` |
 
@@ -596,11 +551,11 @@ score = componentes_presentes / 7
 
 Além das métricas de qualidade do módulo `quality_metrics.py`, os agentes analíticos produzem métricas de domínio que alimentam as métricas de qualidade:
 
-#### Correlações Estatísticas (`AgenteCorrelacao`)
+#### Correlações Estatísticas e Anomalias (`AgenteAnalitico`)
 
-**Arquivo:** `backend/agents/analytical/correlacao.py`
+**Arquivo:** `backend/agents/analytical/analitico.py`
 
-Coeficiente Spearman calculado por par subfunção-indicador. Spearman é baseado em ranks — robusto a outliers e captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos.
+Consolida num único agente CoALA o que antes eram dois agentes separados (`AgenteCorrelacao`, `AgenteAnomalias`) — mesmos cálculos, sem mudança de comportamento. Coeficiente Spearman calculado por par subfunção-indicador. Spearman é baseado em ranks — robusto a outliers e captura relações monotônicas não-lineares. Ideal para dados de saúde pública com amostras pequenas e possíveis anos atípicos. Cada correlação também carrega uma `leitura` — tradução explícita do sinal em "desejável"/"indesejável" dado a polaridade do indicador, para o sintetizador (via LLM) não ter que adivinhar sozinho se uma correlação positiva com "mortalidade" é boa ou má notícia.
 
 **Comportamento:**
 - n < 2 pontos → retorna 0.0, classificação `"baixa"`
@@ -625,15 +580,15 @@ Coeficiente Spearman calculado por par subfunção-indicador. Spearman é basead
 
 ---
 
-#### Detecção de Anomalias (`AgenteAnomalias`)
+#### Detecção de Anomalias (`AgenteAnalitico`, ação `detectar_anomalia`)
 
-**Arquivo:** `backend/agents/analytical/anomalias.py`
+**Arquivo:** `backend/agents/analytical/analitico.py`
 
 **Método:** Comparação com mediana por par subfunção-indicador, considerando a polaridade do indicador.
 
 **Polaridade dos indicadores:**
-- Indicadores NEGATIVOS (mais = pior): dengue, covid, internacoes, mortalidade
-- Indicadores POSITIVOS (mais = melhor): vacinacao
+- Indicadores NEGATIVOS (mais = pior): dengue, casos, obitos, internacoes, mortalidade, chikungunya, sífilis (3 subtipos), coqueluche, hepatites_virais, tuberculose, hanseniase
+- Indicadores POSITIVOS (mais = melhor): cobertura_vacinal, doses_aplicadas
 
 Constantes: `INDICADORES_NEGATIVOS`, `INDICADORES_POSITIVOS`
 
@@ -687,8 +642,10 @@ variação = ((valor_ano_n - valor_ano_n-1) / valor_ano_n-1) × 100
 **Métricas de cobertura:**
 ```
 despesas_completeness = células_presentes / (num_subfunções × num_anos_esperados)
-indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados)
+indicadores_completeness = células_presentes / soma, por tipo, dos anos esperados em vigência
 ```
+
+Anos anteriores ao início da série do indicador (COVID-19 antes de 2020) ficam fora de vigência e não contam como lacuna.
 
 **Significado para o TCC:** Transparência sobre limitações dos dados. Se o sistema reporta correlação "baixa" entre subfunção 303 e algum indicador, pode ser porque simplesmente não há dados suficientes, não porque a correlação é fraca. O sintetizador recebe essa informação para incluir ressalvas no texto gerado.
 
@@ -696,13 +653,13 @@ indicadores_completeness = células_presentes / (num_tipos × num_anos_esperados
 
 ### Função Agregadora
 
-`compute_all_quality_metrics()` calcula todas as métricas determinísticas de uma vez e retorna dict organizado por eixo, pronto para envio via WebSocket. **Nenhuma delas chama o LLM** — a avaliação RAGAS roda à parte, de forma assíncrona, em `api/websocket.py`. Parâmetros fixos: estrela = 8 agentes, hierárquica = 11 agentes (8 + 3 supervisores). Aceita `star_wall_clock_ms` e `hier_wall_clock_ms` (default `0`) para usar o tempo real (wall-clock) percebido pelo usuário no cálculo do latency breakdown, evitando dupla contagem de supervisores na soma dos tempos individuais dos agentes.
+`compute_all_quality_metrics()` calcula todas as métricas determinísticas de uma vez e retorna dict organizado por eixo (efficiency, quality, resilience, cost, communication, outcome), pronto para envio via WebSocket. **Nenhuma delas chama o LLM** — a avaliação RAGAS roda à parte, de forma assíncrona, em `api/websocket.py`. O número de agentes varia por análise (ativação condicional conforme `health_params`) — até 15 na estrela (8 de saúde + 7 orçamentários), até 15 agentes-folha + 4 supervisores na hierárquica. Aceita `star_wall_clock_ms`/`hier_wall_clock_ms` e os `TokenBucket` de cada segmento (estrela, hierárquica, interpretação de intenção) para os eixos de custo/outcome.
 
 ### Resumo de Valores-Alvo
 
 | Métrica | Valor-alvo | Interpretação |
 |---------|-----------|---------------|
-| E1 Overhead | Estrela ~0%, Hierárquica < 15% | Custo aceitável de coordenação |
+| E1 Overhead | Sem alvo fixo; comparar deliberação × estrutura | Quase todo o overhead é espera pelo LLM dos coordenadores (planejamento e revisão); a parte estrutural fica em milissegundos |
 | E2 Breakdown | Fase analítica 30-50% | LLM é o gargalo esperado |
 | Q1 Consistência | `true` (sempre) | Resultados numéricos idênticos |
 | RAGAS faithfulness | ≥ 0.80 | Texto sustentado pelos dados |

@@ -95,6 +95,60 @@ SUBFUNCAO_INDICADOR_MAP: dict[int, list[str]] = {
     306: list(_CNES_TIPOS),
 }
 
+# Tokens de health_params que não são o subtipo nativo do indicador. Os
+# outros 25 tokens do vocabulário da interpretação já são o próprio subtipo
+# (agravos do SINAN, subtipos do CNES, internacoes, mortalidade, ...).
+# Quem compara health_params com `IndicadorSaude.tipo` (detect_data_gaps)
+# precisa traduzir antes, ou um sistema com dados aparece como ausente.
+TOKEN_SUBTIPOS: dict[str, list[str]] = {
+    "covid": ["casos", "obitos"],
+    "vacinacao": ["cobertura_vacinal", "doses_aplicadas"],
+}
+
+
+# Primeiro ano em que a série do indicador pode existir. Anos anteriores do
+# período pedido ficam fora de vigência: não são lacuna, não entram na
+# completude nem nos descasamentos de cruzamento. A COVID-19 só existe a
+# partir de 2020 (primeiro caso no Brasil em fevereiro), então "sem casos em
+# 2016" não é falta de dado, é ausência do agravo.
+INICIO_DA_SERIE: dict[str, int] = {
+    "casos": 2020,
+    "obitos": 2020,
+}
+
+
+def anos_vigentes(tipo: str, anos: list[int]) -> list[int]:
+    """Anos de `anos` em que a série de `tipo` pode existir."""
+    inicio = INICIO_DA_SERIE.get(tipo)
+    return [a for a in anos if inicio is None or a >= inicio]
+
+
+def subtipos_de(health_params: list[str]) -> list[str]:
+    """Traduz tokens de health_params para os subtipos nativos, sem repetir."""
+    subtipos: list[str] = []
+    for token in health_params:
+        for tipo in TOKEN_SUBTIPOS.get(token, [token]):
+            if tipo not in subtipos:
+                subtipos.append(tipo)
+    return subtipos
+
+
+def subtipos_pedidos(subtipos_do_agente: list[str], health_params: list[str] | None) -> list[str]:
+    """Subtipos que um agente de saúde deve consultar nesta análise.
+
+    Só os pedidos na pergunta (`health_params`, já traduzidos por
+    `subtipos_de`), na ordem do agente. Sem pedido, ou quando nenhum subtipo
+    do agente foi pedido (o agente foi acionado por outro motivo, por exemplo
+    um acréscimo do planejamento), o agente cobre o seu domínio inteiro, em
+    vez de não trazer nada.
+    """
+    if not health_params:
+        return list(subtipos_do_agente)
+    pedidos = set(subtipos_de(health_params))
+    escolhidos = [s for s in subtipos_do_agente if s in pedidos]
+    return escolhidos or list(subtipos_do_agente)
+
+
 # Subfunções com as quais mortalidade cruza (transversal) — mantido
 # igual à Fase 1 (301/302/303/305), não estendido às 3 subfunções novas
 # sem SI de saúde específico (122/304/306).
@@ -264,19 +318,23 @@ def detect_data_gaps(
         Dict com:
         - expected_years: lista de anos no intervalo
         - despesas_coverage: cobertura por subfunção e ano
-        - indicadores_coverage: cobertura por tipo e ano
+        - indicadores_coverage: cobertura por tipo e ano (anos antes do
+          início da série em "fora_de_vigencia", fora do cálculo)
         - gaps: lista de lacunas detectadas (descrição textual)
+        - fora_de_vigencia: {tipo: anos anteriores ao início da série}
         - summary: resumo com contagens
     """
     expected_years = list(range(date_from, date_to + 1))
 
     # Determinar quais subfunções e indicadores são relevantes
     if health_params:
-        # Apenas os tipos selecionados pelo usuário
-        relevant_tipos: set[str] = set(health_params)
+        # Apenas os tipos selecionados pelo usuário, já como subtipos
+        # nativos ("covid" vira casos+obitos, como no Neo4j)
+        tipos_pedidos = subtipos_de(health_params)
+        relevant_tipos: set[str] = set(tipos_pedidos)
         # Subfunções correspondentes aos indicadores selecionados
         relevant_subfuncoes: set[int] = set()
-        for tipo in health_params:
+        for tipo in tipos_pedidos:
             for sf, tipos in SUBFUNCAO_INDICADOR_MAP.items():
                 if tipo in tipos:
                     relevant_subfuncoes.add(sf)
@@ -352,15 +410,20 @@ def detect_data_gaps(
 
     # Indicadores
     indicadores_coverage: dict[str, dict[str, Any]] = {}
+    fora_de_vigencia: dict[str, list[int]] = {}
     for tipo in all_tipos:
         available_years = ind_available.get(tipo, set())
-        missing_years = [y for y in expected_years if y not in available_years]
-        present_years = [y for y in expected_years if y in available_years]
+        vigentes = anos_vigentes(tipo, expected_years)
+        if len(vigentes) < len(expected_years):
+            fora_de_vigencia[tipo] = [y for y in expected_years if y not in vigentes]
+        missing_years = [y for y in vigentes if y not in available_years]
+        present_years = [y for y in vigentes if y in available_years]
 
         indicadores_coverage[tipo] = {
             "present": present_years,
             "missing": missing_years,
-            "coverage": len(present_years) / len(expected_years) if expected_years else 1.0,
+            "fora_de_vigencia": fora_de_vigencia.get(tipo, []),
+            "coverage": len(present_years) / len(vigentes) if vigentes else 1.0,
         }
 
         if missing_years:
@@ -385,8 +448,12 @@ def detect_data_gaps(
             if tipo not in all_tipos:
                 continue
             tipo_years = ind_available.get(tipo, set())
-            # Anos onde só um lado tem dados
-            only_despesa = sorted(sf_years - tipo_years)
+            # Anos onde só um lado tem dados; antes do início da série do
+            # indicador, a despesa sem indicador não é descasamento.
+            inicio = INICIO_DA_SERIE.get(tipo)
+            only_despesa = sorted(
+                y for y in sf_years - tipo_years if inicio is None or y >= inicio
+            )
             only_indicador = sorted(tipo_years - sf_years)
             if only_despesa:
                 gaps.append({
@@ -411,13 +478,13 @@ def detect_data_gaps(
 
     # Resumo
     total_desp_cells = len(all_subfuncoes) * len(expected_years)
-    total_ind_cells = len(all_tipos) * len(expected_years)
+    total_ind_cells = sum(len(anos_vigentes(t, expected_years)) for t in all_tipos)
     present_desp = sum(
         len(desp_available.get(sf, set()) & set(expected_years))
         for sf in all_subfuncoes
     )
     present_ind = sum(
-        len(ind_available.get(t, set()) & set(expected_years))
+        len(ind_available.get(t, set()) & set(anos_vigentes(t, expected_years)))
         for t in all_tipos
     )
 
@@ -442,5 +509,6 @@ def detect_data_gaps(
         "despesas_coverage": despesas_coverage,
         "indicadores_coverage": indicadores_coverage,
         "gaps": gaps,
+        "fora_de_vigencia": fora_de_vigencia,
         "summary": summary,
     }

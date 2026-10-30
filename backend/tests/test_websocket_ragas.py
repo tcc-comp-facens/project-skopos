@@ -118,7 +118,7 @@ class TestFormatRagasReport:
     def test_indisponivel_explica_o_motivo(self):
         indisponivel = {
             "available": False,
-            "unavailable_reason": "OPENAI_API_KEY não configurada (RAGAS_PROVIDER=openai)",
+            "unavailable_reason": "OPENAI_API_KEY não configurada",
             "metrics": {},
         }
         texto = ws._format_ragas_report(
@@ -132,7 +132,6 @@ class TestFormatRagasReport:
 class TestRunRagasEvaluation:
     @pytest.fixture(autouse=True)
     def _limpa_estado(self, monkeypatch):
-        monkeypatch.setenv("RAGAS_PROVIDER", "openai")
         monkeypatch.setenv("OPENAI_API_KEY", "chave-de-teste")
         active_results.pop("analise-teste", None)
         yield

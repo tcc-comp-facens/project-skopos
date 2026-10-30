@@ -66,26 +66,17 @@ def _reset_token_usage():
 
 
 @pytest.fixture(autouse=True)
-def _clean_provider_env(monkeypatch):
-    """Isola os testes do ambiente real da máquina/CI: sem isto, um
-    `LLM_PROVIDER=openai` exportado no shell mudaria o provedor ativo no
-    meio da suíte."""
+def _clean_env(monkeypatch):
+    """Isola os testes do ambiente real da máquina/CI."""
     for var in (
-        "LLM_PROVIDER",
-        "DEEPSEEK_MODEL", "DEEPSEEK_BASE_URL",
-        "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL", "OPENAI_STORE_LOGS",
+        "OPENAI_API_KEY", "OPENAI_STORE_LOGS",
+        "OPENAI_REASONING_EFFORT", "OPENAI_MAX_COMPLETION_TOKENS",
     ):
         monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
 def has_api_key(monkeypatch):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-
-
-@pytest.fixture
-def openai_provider(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
 
@@ -303,50 +294,38 @@ class TestTokenBucket:
         assert bucket.snapshot()["call_count"] == 0
 
 
-class TestProviderSelection:
-    """Escolha de provedor via `LLM_PROVIDER` — o resto do backend chama
-    sempre `generate`/`generate_stream`, sem saber qual provedor está ativo."""
+class TestModelosFixos:
+    """Só OpenAI, com o modelo das análises fixo no código: nenhuma variável
+    de ambiente troca modelo ou provedor."""
 
-    def test_default_provider_is_deepseek(self):
-        provider = llm_client.get_provider()
-        assert provider.name == "deepseek"
-        assert provider.api_key_env == "DEEPSEEK_API_KEY"
-        assert llm_client.resolve_model(provider) == "deepseek-v4-flash"
+    def test_modelo_das_analises_e_o_luna(self):
+        assert llm_client.MODELO_ANALISE == "gpt-5.6-luna"
+        assert llm_client.resolve_model() == "gpt-5.6-luna"
 
-    def test_openai_selected_by_env(self, openai_provider):
-        provider = llm_client.get_provider()
-        assert provider.name == "openai"
-        assert provider.api_key_env == "OPENAI_API_KEY"
+    def test_variaveis_antigas_nao_mudam_nada(self, monkeypatch, has_api_key):
+        for var, valor in (
+            ("LLM_PROVIDER", "deepseek"), ("OPENAI_MODEL", "gpt-4o"),
+            ("DEEPSEEK_API_KEY", "x"), ("OPENAI_BASE_URL", "https://gateway.interno/v1"),
+        ):
+            monkeypatch.setenv(var, valor)
+        assert llm_client.resolve_model() == "gpt-5.6-luna"
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _fake_response("ok")
+        with patch("core.llm_client._client", return_value=mock_client):
+            llm_client.generate("prompt", caller="test")
+        _, kwargs = mock_client.chat.completions.create.call_args
+        assert kwargs["model"] == "gpt-5.6-luna"
 
-    def test_unknown_provider_falls_back_to_default(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "provedor-inexistente")
-        assert llm_client.get_provider().name == llm_client.DEFAULT_PROVIDER
-
-    def test_provider_name_is_case_insensitive(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "  OpenAI  ")
-        assert llm_client.get_provider().name == "openai"
-
-    def test_model_override_by_env(self, monkeypatch, openai_provider):
-        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
-        assert llm_client.resolve_model() == "gpt-4o"
-
-    def test_openai_key_checked_when_openai_active(self, monkeypatch):
-        """Ter DEEPSEEK_API_KEY não habilita o provedor OpenAI, e vice-versa."""
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
+    def test_so_a_chave_da_openai_habilita(self, monkeypatch):
         monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
         assert llm_client._has_api_key() is False
-
+        assert llm_client.generate("prompt", caller="test") is None
         monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
         assert llm_client._has_api_key() is True
 
-    def test_missing_key_of_active_provider_returns_none(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-        assert llm_client.generate("prompt", caller="test") is None
 
-
-class TestProviderRequestShape:
-    """O que muda de fato na chamada HTTP conforme o provedor ativo."""
+class TestRequestShape:
+    """Parâmetros enviados à API, que dependem da família do modelo."""
 
     def _capture_create_kwargs(self, **generate_kwargs) -> dict:
         mock_client = MagicMock()
@@ -356,23 +335,16 @@ class TestProviderRequestShape:
         _, kwargs = mock_client.chat.completions.create.call_args
         return kwargs
 
-    def test_deepseek_disables_thinking(self, has_api_key):
-        kwargs = self._capture_create_kwargs()
-        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
-        assert kwargs["model"] == "deepseek-v4-flash"
-
-    def test_openai_sends_no_extra_body(self, openai_provider):
-        """`thinking` é proprietário do DeepSeek — mandá-lo para a OpenAI
-        resultaria em 400 (parâmetro desconhecido)."""
+    def test_sem_extra_body(self, has_api_key):
         kwargs = self._capture_create_kwargs()
         assert "extra_body" not in kwargs
         assert kwargs["model"] == "gpt-5.6-luna"
 
-    def test_openai_reasoning_model_uses_max_completion_tokens(self, openai_provider):
-        """O modelo default da OpenAI aqui (gpt-5.6-luna) é da família de
-        raciocínio: rejeita `max_tokens` com 400 ("Unsupported parameter:
-        'max_tokens' is not supported with this model. Use
-        'max_completion_tokens' instead") — verificado contra a API real."""
+    def test_reasoning_model_uses_max_completion_tokens(self, has_api_key):
+        """O modelo das análises (gpt-5.6-luna) é da família de raciocínio:
+        rejeita `max_tokens` com 400 ("Unsupported parameter: 'max_tokens'
+        is not supported with this model. Use 'max_completion_tokens'
+        instead") — verificado contra a API real."""
         kwargs = self._capture_create_kwargs()
         assert kwargs["max_completion_tokens"] == llm_client.REASONING_MAX_TOKENS
         assert "max_tokens" not in kwargs
@@ -385,61 +357,39 @@ class TestProviderRequestShape:
         vazia com finish_reason=length."""
         assert llm_client.REASONING_MAX_TOKENS > llm_client.MAX_TOKENS
 
-    def test_openai_reasoning_model_limits_reasoning_effort(self, openai_provider):
+    def test_reasoning_model_limits_reasoning_effort(self, has_api_key):
         """Sem `reasoning_effort` explícito o default da API é `medium`, e
         um prompt grande gasta o orçamento inteiro pensando."""
         kwargs = self._capture_create_kwargs()
         assert kwargs["reasoning_effort"] == llm_client.REASONING_EFFORT
 
-    def test_reasoning_params_configuraveis_por_env(self, monkeypatch, openai_provider):
+    def test_reasoning_params_configuraveis_por_env(self, monkeypatch, has_api_key):
         monkeypatch.setenv("OPENAI_REASONING_EFFORT", "none")
         monkeypatch.setenv("OPENAI_MAX_COMPLETION_TOKENS", "32000")
         kwargs = self._capture_create_kwargs()
         assert kwargs["reasoning_effort"] == "none"
         assert kwargs["max_completion_tokens"] == 32000
 
-    def test_reasoning_effort_invalido_cai_no_default(self, monkeypatch, openai_provider):
+    def test_reasoning_effort_invalido_cai_no_default(self, monkeypatch, has_api_key):
         """Um valor inválido é 400 na API — melhor cair no default aqui."""
         monkeypatch.setenv("OPENAI_REASONING_EFFORT", "turbinado")
         assert self._capture_create_kwargs()["reasoning_effort"] == llm_client.REASONING_EFFORT
 
-    def test_openai_classic_model_uses_max_tokens(self, monkeypatch, openai_provider):
-        """A linha gpt-4o continua usando a forma clássica — a distinção é
-        por modelo, não por provedor."""
-        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
-        kwargs = self._capture_create_kwargs()
+    def test_classic_model_uses_max_tokens(self, has_api_key):
+        """A linha gpt-4o usa a forma clássica — a distinção é por modelo."""
+        kwargs = self._capture_create_kwargs(model="gpt-4o-mini")
         assert kwargs["temperature"] == llm_client.TEMPERATURE
         assert kwargs["max_tokens"] == llm_client.MAX_TOKENS
         assert "max_completion_tokens" not in kwargs
         assert "reasoning_effort" not in kwargs
 
-    def test_deepseek_nao_recebe_reasoning_effort(self, has_api_key):
-        """`reasoning_effort` é da OpenAI; o DeepSeek desliga raciocínio
-        pelo `extra_body.thinking`."""
-        assert "reasoning_effort" not in self._capture_create_kwargs()
-
-    def test_deepseek_client_uses_deepseek_base_url(self, has_api_key):
+    def test_client_uses_only_the_openai_key(self, has_api_key):
         with patch("openai.OpenAI") as mock_openai:
             llm_client._client()
         _, kwargs = mock_openai.call_args
-        assert kwargs["base_url"] == "https://api.deepseek.com"
-        assert kwargs["api_key"] == "test-key"
+        assert kwargs == {"api_key": "test-openai-key"}
 
-    def test_openai_client_uses_sdk_default_base_url(self, openai_provider):
-        with patch("openai.OpenAI") as mock_openai:
-            llm_client._client()
-        _, kwargs = mock_openai.call_args
-        assert kwargs["base_url"] is None
-        assert kwargs["api_key"] == "test-openai-key"
-
-    def test_base_url_override_by_env(self, monkeypatch, openai_provider):
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.interno/v1")
-        with patch("openai.OpenAI") as mock_openai:
-            llm_client._client()
-        _, kwargs = mock_openai.call_args
-        assert kwargs["base_url"] == "https://gateway.interno/v1"
-
-    def test_streaming_respects_active_provider(self, openai_provider):
+    def test_streaming_uses_the_analysis_model(self, has_api_key):
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = iter(_fake_stream_chunks(["x"]))
         with patch("core.llm_client._client", return_value=mock_client):
@@ -450,9 +400,10 @@ class TestProviderRequestShape:
         assert "extra_body" not in kwargs
         assert kwargs["stream_options"] == {"include_usage": True}
 
-    def test_explicit_model_argument_overrides_provider_default(self, has_api_key):
-        kwargs = self._capture_create_kwargs(model="deepseek-chat")
-        assert kwargs["model"] == "deepseek-chat"
+    def test_explicit_model_is_used_by_the_judge(self, has_api_key):
+        """Só a avaliação RAGAS passa outro modelo: o juiz fixo."""
+        kwargs = self._capture_create_kwargs(model="gpt-5-mini")
+        assert kwargs["model"] == "gpt-5-mini"
 
 
 class TestOpenAIStoreLogs:
@@ -471,34 +422,26 @@ class TestOpenAIStoreLogs:
         _, kwargs = mock_client.chat.completions.create.call_args
         return kwargs
 
-    def test_disabled_by_default(self, openai_provider):
+    def test_disabled_by_default(self, has_api_key):
         kwargs = self._capture_create_kwargs()
         assert "store" not in kwargs
         assert "metadata" not in kwargs
 
-    def test_enabled_sends_store_and_caller_metadata(self, monkeypatch, openai_provider):
+    def test_enabled_sends_store_and_caller_metadata(self, monkeypatch, has_api_key):
         monkeypatch.setenv("OPENAI_STORE_LOGS", "true")
         kwargs = self._capture_create_kwargs(caller="agente_sim:sintese")
 
         assert kwargs["store"] is True
         assert kwargs["metadata"] == {"app": "skopos", "caller": "agente_sim:sintese"}
 
-    def test_long_caller_is_truncated(self, monkeypatch, openai_provider):
+    def test_long_caller_is_truncated(self, monkeypatch, has_api_key):
         """Metadata da OpenAI limita cada valor a 512 chars — estourar
         derrubaria a chamada com 400."""
         monkeypatch.setenv("OPENAI_STORE_LOGS", "true")
         kwargs = self._capture_create_kwargs(caller="x" * 900)
         assert len(kwargs["metadata"]["caller"]) == 512
 
-    def test_never_sent_to_deepseek(self, monkeypatch, has_api_key):
-        """O DeepSeek não tem equivalente — mandar `store` seria um
-        parâmetro desconhecido."""
-        monkeypatch.setenv("OPENAI_STORE_LOGS", "true")
-        kwargs = self._capture_create_kwargs()
-        assert "store" not in kwargs
-        assert "metadata" not in kwargs
-
-    def test_streaming_also_stores(self, monkeypatch, openai_provider):
+    def test_streaming_also_stores(self, monkeypatch, has_api_key):
         monkeypatch.setenv("OPENAI_STORE_LOGS", "true")
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = iter(_fake_stream_chunks(["x"]))
@@ -536,13 +479,13 @@ class TestRespostaTruncada:
     "LLM indisponível" sem nenhuma pista da causa.
     """
 
-    def _generate_with(self, response, provider_env=None, monkeypatch=None):
+    def _generate_with(self, response):
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = response
         with patch("core.llm_client._client", return_value=mock_client):
             return llm_client.generate("prompt", caller="test")
 
-    def test_truncagem_e_logada_como_orcamento_esgotado(self, openai_provider, caplog):
+    def test_truncagem_e_logada_como_orcamento_esgotado(self, has_api_key, caplog):
         resposta = _fake_response("", finish_reason="length")
         with caplog.at_level("ERROR"):
             resultado = self._generate_with(resposta)

@@ -1,27 +1,13 @@
 """
-Cliente LLM centralizado (DeepSeek ou OpenAI) — sem rate limiting
-próprio, com retry em caso de rate limit (429) reportado pelo provedor e
-contabilização de gastos (tokens) em log.
+Cliente LLM centralizado (OpenAI) — sem rate limiting próprio, com retry
+em caso de rate limit (429) reportado pela API e contabilização de gastos
+(tokens) em log.
 
-O provedor é escolhido pela variável de ambiente `LLM_PROVIDER`
-(`deepseek`, o default histórico, ou `openai`) — ver `PROVIDERS` abaixo.
-Ambos falam a mesma API (o SDK da OpenAI é usado nos dois casos; o
-DeepSeek é compatível, mudando só `base_url`), então a troca não afeta
-nenhum call site: todo o resto do backend continua chamando
-`generate()`/`generate_stream()` sem saber qual provedor está ativo.
-
-No DeepSeek o default é `deepseek-v4-flash` com `thinking` desabilitado
-(resposta direta, sem chain-of-thought) — adequado para síntese de texto
-e extração de JSON estruturado; na OpenAI, `gpt-5.6-luna`. Cada provedor
-tem sua própria variável de API key (`DEEPSEEK_API_KEY` /
-`OPENAI_API_KEY`) e aceita override de modelo por env (`DEEPSEEK_MODEL` /
-`OPENAI_MODEL`) — sem precisar mexer em código para testar outro modelo.
-
-`generate()` aceita ainda um `provider` explícito, que ignora
-`LLM_PROVIDER` só naquela chamada. É o que `core/ragas_metrics.py` usa
-para manter o juiz da avaliação num provedor fixo (independente do que o
-pipeline está usando) sem abrir um cliente próprio — assim a avaliação
-continua contabilizada no mesmo `TokenBucket` e coberta pelo retry de 429.
+Os modelos são fixos no código, sem configuração por ambiente: as análises
+usam sempre `MODELO_ANALISE` (`gpt-5.6-luna`), e a avaliação RAGAS usa o
+seu próprio juiz, `core.ragas_metrics.MODELO_JUIZ`, passado em `model=`.
+Juiz diferente do gerador evita o viés de autopreferência de um modelo
+avaliando o próprio texto. A única variável obrigatória é `OPENAI_API_KEY`.
 
 Chamadas de diferentes threads (estrela e hierárquica rodam concorrentes
 — ver api/runners.py) acontecem em paralelo de verdade, sem
@@ -35,8 +21,8 @@ que este módulo impõe), o retry com backoff exponencial em
 `_try_model`/`generate_stream` ainda se aplica — essa é uma reação a um
 erro real da API, não uma limitação preventiva própria.
 
-No provedor OpenAI, `OPENAI_STORE_LOGS=true` (opt-in) faz cada chamada
-ir com `store=True` + `metadata` do `caller`, o que a torna visível e
+`OPENAI_STORE_LOGS=true` (opt-in) faz cada chamada ir com `store=True` +
+`metadata` do `caller`, o que a torna visível e
 filtrável por agente na aba Logs do dashboard — sem isso a API não retém
 nada (default `store=False`) e só o consumo aparece no billing.
 
@@ -57,7 +43,6 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -85,53 +70,11 @@ MAX_TOKENS = 4096
 REASONING_MAX_TOKENS = 16384
 REASONING_EFFORT = "low"
 
-# thinking desabilitado — resposta direta, sem reasoning_content
-_THINKING_DISABLED = {"type": "disabled"}
+# Modelo de todas as análises (interpretação, agentes, redação). Fixo:
+# trocar o modelo muda o sistema avaliado, então não há override por env.
+MODELO_ANALISE = "gpt-5.6-luna"
 
-
-@dataclass(frozen=True)
-class ProviderConfig:
-    """Descreve um provedor de LLM compatível com o SDK da OpenAI.
-
-    O que varia de fato entre DeepSeek e OpenAI é pouco — endpoint,
-    variável da API key, modelo default e parâmetros proprietários
-    (`extra_body`) —, então o resto do módulo trata os dois de forma
-    idêntica a partir daqui.
-    """
-
-    name: str
-    api_key_env: str  # variável de ambiente com a chave
-    model_env: str  # override do modelo por env (opcional)
-    base_url_env: str  # override do endpoint por env (opcional)
-    default_model: str
-    default_base_url: Optional[str] = None  # None = default do SDK (OpenAI)
-    extra_body: dict[str, Any] = field(default_factory=dict)
-
-
-PROVIDERS: dict[str, ProviderConfig] = {
-    "deepseek": ProviderConfig(
-        name="deepseek",
-        api_key_env="DEEPSEEK_API_KEY",
-        model_env="DEEPSEEK_MODEL",
-        base_url_env="DEEPSEEK_BASE_URL",
-        default_model="deepseek-v4-flash",
-        default_base_url="https://api.deepseek.com",
-        extra_body={"thinking": _THINKING_DISABLED},
-    ),
-    "openai": ProviderConfig(
-        name="openai",
-        api_key_env="OPENAI_API_KEY",
-        model_env="OPENAI_MODEL",
-        base_url_env="OPENAI_BASE_URL",
-        default_model="gpt-5.6-luna",
-        default_base_url=None,
-        # `thinking` é proprietário do DeepSeek — a OpenAI rejeita
-        # parâmetros desconhecidos com 400, então aqui não vai nada.
-        extra_body={},
-    ),
-}
-
-DEFAULT_PROVIDER = "deepseek"
+API_KEY_ENV = "OPENAI_API_KEY"
 
 # Famílias de modelos de raciocínio da OpenAI: não aceitam `max_tokens`
 # (exigem `max_completion_tokens`) nem `temperature` diferente do default.
@@ -163,8 +106,7 @@ def resolve_reasoning_effort() -> str:
     Default `low`: os prompts que este sistema manda para modelos de
     raciocínio são extração e julgamento de JSON estruturado, que não se
     beneficiam de chain-of-thought longo — e cada token de raciocínio sai
-    do mesmo orçamento da resposta (e é cobrado). É o análogo OpenAI do
-    `thinking: disabled` que o provedor DeepSeek já manda.
+    do mesmo orçamento da resposta (e é cobrado).
     """
     raw = os.environ.get("OPENAI_REASONING_EFFORT", "").strip().lower() or REASONING_EFFORT
     if raw not in _REASONING_EFFORTS:
@@ -184,39 +126,18 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-def get_provider() -> ProviderConfig:
-    """Provedor ativo, conforme `LLM_PROVIDER` (default: deepseek).
-
-    Lido do ambiente a cada chamada (não no import) para que o valor
-    valha mesmo se o `.env` for carregado depois deste módulo e para que
-    testes possam alternar de provedor com `monkeypatch.setenv`.
-    """
-    raw = os.environ.get("LLM_PROVIDER", "").strip().lower() or DEFAULT_PROVIDER
-    provider = PROVIDERS.get(raw)
-    if provider is None:
-        logger.warning(
-            "LLM_PROVIDER=%r desconhecido (opções: %s) — usando %s",
-            raw, ", ".join(sorted(PROVIDERS)), DEFAULT_PROVIDER,
-        )
-        provider = PROVIDERS[DEFAULT_PROVIDER]
-    return provider
+def resolve_model() -> str:
+    """Modelo das análises (fixo)."""
+    return MODELO_ANALISE
 
 
-def resolve_model(provider: Optional[ProviderConfig] = None) -> str:
-    """Modelo default do provedor ativo, com override por env."""
-    provider = provider or get_provider()
-    return os.environ.get(provider.model_env, "").strip() or provider.default_model
-
-
-def _completion_params(
-    provider: ProviderConfig, model: str, temperature: Optional[float] = None
-) -> dict[str, Any]:
-    """Parâmetros de geração aceitos por este par provedor/modelo.
+def _completion_params(model: str, temperature: Optional[float] = None) -> dict[str, Any]:
+    """Parâmetros de geração aceitos por este modelo.
 
     Os modelos de raciocínio da OpenAI (gpt-5, série o*) renomearam
     `max_tokens` para `max_completion_tokens` e só aceitam a temperatura
-    default — mandar os parâmetros antigos resulta em 400. Todo o resto
-    (DeepSeek e a linha gpt-4o) usa a forma clássica.
+    default — mandar os parâmetros antigos resulta em 400. Os demais
+    modelos usam a forma clássica.
 
     `temperature` sobrescreve o default do módulo (`TEMPERATURE`) só onde
     o parâmetro é aceito — é o que a avaliação RAGAS usa para pedir
@@ -229,7 +150,7 @@ def _completion_params(
     `reasoning_effort` — sem ele o esforço fica no default `medium` e um
     prompt grande esgota o orçamento pensando, devolvendo resposta vazia.
     """
-    if provider.name == "openai" and model.lower().startswith(_OPENAI_REASONING_PREFIXES):
+    if model.lower().startswith(_OPENAI_REASONING_PREFIXES):
         return {
             "max_completion_tokens": _env_int(
                 "OPENAI_MAX_COMPLETION_TOKENS", REASONING_MAX_TOKENS
@@ -242,8 +163,8 @@ def _completion_params(
     }
 
 
-def _logging_params(provider: ProviderConfig, caller: str) -> dict[str, Any]:
-    """Retenção da chamada nos logs do provedor, quando ele oferece isso.
+def _logging_params(caller: str) -> dict[str, Any]:
+    """Retenção da chamada nos logs da OpenAI.
 
     Na OpenAI, o par requisição/resposta só é retido — e só aparece na
     aba Logs do dashboard — se a chamada mandar `store=True`; o default
@@ -256,10 +177,9 @@ def _logging_params(provider: ProviderConfig, caller: str) -> dict[str, Any]:
     Quando ligado, vai junto o `metadata` com o `caller` — o mesmo
     identificador (`agent_id`/`synthesizer_id`) que aparece nos logs do
     backend —, o que permite filtrar no dashboard as chamadas por agente
-    e cruzar com o log local. O DeepSeek não tem equivalente, então nada
-    é enviado a ele.
+    e cruzar com o log local.
     """
-    if provider.name != "openai" or not _env_flag("OPENAI_STORE_LOGS"):
+    if not _env_flag("OPENAI_STORE_LOGS"):
         return {}
 
     return {
@@ -330,16 +250,15 @@ class TokenBucket:
         return dict(self.usage)
 
 
-def _has_api_key(provider: Optional[ProviderConfig] = None) -> bool:
-    provider = provider or get_provider()
-    return bool(os.environ.get(provider.api_key_env, "").strip())
+def _has_api_key() -> bool:
+    return bool(os.environ.get(API_KEY_ENV, "").strip())
 
 
-def has_api_key(provider: Optional[ProviderConfig] = None) -> bool:
-    """Se a chave do provedor está configurada — face pública de
+def has_api_key() -> bool:
+    """Se `OPENAI_API_KEY` está configurada — face pública de
     `_has_api_key` (que os testes substituem como seam interno), usada
-    pelo log de startup em main.py."""
-    return _has_api_key(provider)
+    pelo log de startup em main.py e pela avaliação RAGAS."""
+    return _has_api_key()
 
 
 def _strip_think_tags(text: str) -> str:
@@ -362,51 +281,40 @@ def _preview(text: str, max_chars: int = 300) -> str:
     return single_line
 
 
-def _client(provider: Optional[ProviderConfig] = None):
-    """Cliente do SDK da OpenAI apontado para o provedor ativo.
-
-    O DeepSeek expõe uma API compatível, então a única diferença é a
-    `base_url` (para a OpenAI, `None` — deixa o SDK usar o endpoint
-    oficial).
-    """
+def _client():
+    """Cliente do SDK da OpenAI."""
     from openai import OpenAI
 
-    provider = provider or get_provider()
-    base_url = os.environ.get(provider.base_url_env, "").strip() or provider.default_base_url
-    return OpenAI(api_key=os.environ[provider.api_key_env], base_url=base_url)
+    return OpenAI(api_key=os.environ[API_KEY_ENV])
 
 
-def build_client(provider: Optional[ProviderConfig] = None):
-    """Cliente do SDK apontado para `provider` — face pública de `_client`
-    (que os testes substituem como seam interno).
+def build_client():
+    """Face pública de `_client` (que os testes substituem como seam interno).
 
     Existe para `core.ragas_metrics` poder falar com o endpoint de
     *embeddings* (que não passa por `generate()`, é outra rota da API)
-    sem duplicar a resolução de api key/base_url por provedor.
+    sem duplicar a criação do cliente.
     """
-    return _client(provider)
+    return _client()
 
 
 def _generate(
     prompt: str,
     model: str,
-    provider: Optional[ProviderConfig] = None,
     caller: str = "desconhecido",
     temperature: Optional[float] = None,
 ) -> tuple[Optional[str], dict[str, int], Optional[str]]:
-    """Chama a API do provedor e retorna (texto, token_usage, finish_reason).
+    """Chama a API e retorna (texto, token_usage, finish_reason).
 
     `finish_reason` sobe junto porque é o que distingue "o modelo não
     tinha o que dizer" de "o orçamento de tokens acabou no meio" — sem
     ele, os dois casos chegam ao caller como um texto vazio idêntico.
     """
-    provider = provider or get_provider()
-    response = _client(provider).chat.completions.create(
+    response = _client().chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        **_completion_params(provider, model, temperature),
-        **_logging_params(provider, caller),
-        **({"extra_body": provider.extra_body} if provider.extra_body else {}),
+        **_completion_params(model, temperature),
+        **_logging_params(caller),
     )
 
     usage: dict[str, int] = {}
@@ -486,10 +394,9 @@ def _try_model(
     prompt: str,
     model: str,
     caller: str,
-    provider: Optional[ProviderConfig] = None,
     temperature: Optional[float] = None,
 ) -> Optional[str]:
-    """Tenta gerar, com retry em caso de 429 real retornado pelo provedor.
+    """Tenta gerar, com retry em caso de 429 real retornado pela API.
 
     Sem espera preventiva antes da chamada (rate limiting próprio
     removido) — dispara direto. Retorna o texto gerado ou None se falhar
@@ -500,9 +407,7 @@ def _try_model(
     """
     for attempt in range(MAX_RETRIES):
         try:
-            text, usage, finish_reason = _generate(
-                prompt, model, provider, caller, temperature
-            )
+            text, usage, finish_reason = _generate(prompt, model, caller, temperature)
             _accumulate_tokens(usage)
 
             if usage:
@@ -531,7 +436,7 @@ def _try_model(
                     "esgotado (limite atual: %s). Reduza OPENAI_REASONING_EFFORT "
                     "ou aumente OPENAI_MAX_COMPLETION_TOKENS.",
                     caller, model,
-                    _completion_params(provider or get_provider(), model).get(
+                    _completion_params(model).get(
                         "max_completion_tokens", MAX_TOKENS
                     ),
                 )
@@ -562,52 +467,43 @@ def generate(
     model: Optional[str] = None,
     *,
     caller: str = "desconhecido",
-    provider: Optional[ProviderConfig] = None,
     temperature: Optional[float] = None,
 ) -> Optional[str]:
-    """Chama o LLM do provedor ativo (`LLM_PROVIDER`), sem rate limiting
-    próprio, com retry em caso de 429 real do provedor e contabilização
-    de gastos em log.
+    """Chama o LLM, sem rate limiting próprio, com retry em caso de 429
+    real da API e contabilização de gastos em log.
 
     Chamadas de threads diferentes acontecem em paralelo de verdade —
     nenhum lock global serializa esta função entre threads.
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Default: o modelo do provedor
-            ativo (ver `resolve_model`).
+        model: Modelo da chamada. Default: `MODELO_ANALISE`. Só a avaliação
+            RAGAS passa outro, o seu juiz fixo (`ragas_metrics.MODELO_JUIZ`),
+            sem abrir um cliente próprio — assim a avaliação continua
+            passando pela contabilização de tokens (`TokenBucket`) e pelo
+            retry de 429 deste módulo.
         caller: Identificador de quem está chamando (tipicamente `agent_id`
             ou `synthesizer_id`) — usado só para logging/observabilidade,
             não afeta o comportamento da chamada.
-        provider: Provedor específico (opcional). Default: o de
-            `LLM_PROVIDER`. Usado por `core.ragas_metrics` para fixar o
-            juiz da avaliação num provedor independente do que o pipeline
-            está usando, sem abrir um cliente próprio — assim a avaliação
-            continua passando pela contabilização de tokens (`TokenBucket`)
-            e pelo retry de 429 deste módulo.
         temperature: Sobrescreve `TEMPERATURE` onde o modelo aceita o
             parâmetro (ver `_completion_params`).
 
     Returns:
         Texto gerado, ou None se falhar ou API key ausente.
     """
-    provider = provider or get_provider()
-    if not _has_api_key(provider):
-        logger.warning(
-            "LLM [%s]: %s não configurada (LLM_PROVIDER=%s)",
-            caller, provider.api_key_env, provider.name,
-        )
+    if not _has_api_key():
+        logger.warning("LLM [%s]: %s não configurada", caller, API_KEY_ENV)
         return None
 
-    resolved_model = model or resolve_model(provider)
+    resolved_model = model or MODELO_ANALISE
     logger.info(
-        "LLM [%s]: enviando prompt (provider=%s, model=%s, %d chars) — %s",
-        caller, provider.name, resolved_model, len(prompt), _preview(prompt),
+        "LLM [%s]: enviando prompt (model=%s, %d chars) — %s",
+        caller, resolved_model, len(prompt), _preview(prompt),
     )
     logger.debug("LLM [%s]: prompt completo:\n%s", caller, prompt)
 
     try:
-        result = _try_model(prompt, resolved_model, caller, provider, temperature)
+        result = _try_model(prompt, resolved_model, caller, temperature)
         if result:
             return result
         logger.warning("LLM [%s]: falhou", caller)
@@ -636,35 +532,28 @@ def _stream_response(
     prompt: str,
     model: str,
     usage_out: dict[str, int] | None = None,
-    provider: Optional[ProviderConfig] = None,
     caller: str = "desconhecido",
 ):
-    """Chama a API do provedor ativo em modo streaming e yield tokens
-    incrementalmente.
+    """Chama a API em modo streaming e yield tokens incrementalmente.
 
-    No DeepSeek, com `thinking` desabilitado a resposta não deveria
-    conter blocos <think>/reasoning_content; o filtro é mantido
-    defensivamente (e é inofensivo na OpenAI, que não emite esses blocos).
+    O filtro de blocos <think> é defensivo: a OpenAI não os emite.
 
-    `stream_options={"include_usage": True}` (padrão OpenAI-compatível,
-    suportado pelo DeepSeek) faz a API emitir um chunk final só com
+    `stream_options={"include_usage": True}` faz a API emitir um chunk final só com
     `usage` populado (sem `choices`) — capturado em `usage_out` (dict
     mutável passado pelo caller) para alimentar a contabilização de
     tokens por bucket (Etapa 6 do PLANO_REFATORACAO.md), que antes desta
     mudança ficava sempre zerada em chamadas de streaming (só
-    `call_count` era incrementado). Se o provedor não enviar esse chunk
+    `call_count` era incrementado). Se a API não enviar esse chunk
     (API mudar/não suportar), `usage_out` simplesmente permanece vazio —
     degrada para o comportamento anterior, sem quebrar nada.
     """
-    provider = provider or get_provider()
-    stream = _client(provider).chat.completions.create(
+    stream = _client().chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         stream=True,
         stream_options={"include_usage": True},
-        **_completion_params(provider, model),
-        **_logging_params(provider, caller),
-        **({"extra_body": provider.extra_body} if provider.extra_body else {}),
+        **_completion_params(model),
+        **_logging_params(caller),
     )
 
     buffer = ""
@@ -709,10 +598,9 @@ def _stream_response(
         buffer = ""
 
 
-def generate_stream(prompt: str, model: str | None = None, *, caller: str = "desconhecido"):
-    """Streaming via provedor ativo (`LLM_PROVIDER`), sem rate limiting
-    próprio, com retry em caso de 429 real do provedor. Yields tokens
-    conforme chegam.
+def generate_stream(prompt: str, *, caller: str = "desconhecido"):
+    """Streaming com `MODELO_ANALISE`, sem rate limiting próprio, com retry
+    em caso de 429 real da API. Yields tokens conforme chegam.
 
     Sem lock global: diferente do comportamento anterior (onde este
     generator segurava um lock durante toda a transmissão, bloqueando
@@ -721,26 +609,20 @@ def generate_stream(prompt: str, model: str | None = None, *, caller: str = "des
 
     Args:
         prompt: Texto do prompt.
-        model: Modelo específico (opcional). Default: o modelo do provedor
-            ativo (ver `resolve_model`).
         caller: Identificador de quem está chamando — só para
             logging/observabilidade (ver `generate`).
 
     Yields:
         Tokens de texto conforme são gerados pelo LLM.
     """
-    provider = get_provider()
-    if not _has_api_key(provider):
-        logger.warning(
-            "LLM [%s]: %s não configurada (LLM_PROVIDER=%s)",
-            caller, provider.api_key_env, provider.name,
-        )
+    if not _has_api_key():
+        logger.warning("LLM [%s]: %s não configurada", caller, API_KEY_ENV)
         return
 
-    resolved_model = model or resolve_model(provider)
+    resolved_model = MODELO_ANALISE
     logger.info(
-        "LLM [%s]: enviando prompt em modo streaming (provider=%s, model=%s, %d chars) — %s",
-        caller, provider.name, resolved_model, len(prompt), _preview(prompt),
+        "LLM [%s]: enviando prompt em modo streaming (model=%s, %d chars) — %s",
+        caller, resolved_model, len(prompt), _preview(prompt),
     )
     logger.debug("LLM [%s]: prompt completo (streaming):\n%s", caller, prompt)
 
@@ -750,7 +632,7 @@ def generate_stream(prompt: str, model: str | None = None, *, caller: str = "des
         try:
             got_tokens = False
             usage_out: dict[str, int] = {}
-            for token in _stream_response(prompt, resolved_model, usage_out, provider, caller):
+            for token in _stream_response(prompt, resolved_model, usage_out, caller):
                 got_tokens = True
                 total_chars += len(token)
                 yield token

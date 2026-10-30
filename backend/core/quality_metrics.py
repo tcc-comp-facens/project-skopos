@@ -15,6 +15,10 @@ Q. Qualidade da Resposta:
 R. Resiliência:
    - R1: Partial result coverage (agentes que completaram com sucesso)
 
+   - Q4: Fidelidade numérica (números citados no texto que existem no
+     material entregue ao redator) — complemento determinístico do RAGAS,
+     que não oscila entre avaliações
+
 A fidelidade do texto aos dados (o antigo Q2) NÃO está mais aqui: é
 medida por `core/ragas_metrics.py`, que usa a biblioteca RAGAS (Es et
 al., 2024). As três implementações caseiras que existiam neste módulo
@@ -33,6 +37,7 @@ Requisitos: 11.1, 11.2, 11.3, 11.4
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -89,18 +94,26 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
     Args:
         agent_metrics: Lista de dicts com agentName e executionTimeMs.
 
+    O overhead se divide em deliberação (tempo das decisões por LLM dos
+    coordenadores dentro do relógio, planejamento e revisão das entregas,
+    `deliberacaoMs` na entrada da raiz) e estrutura (o restante: instanciar,
+    repassar e agregar).
+
     Returns:
         Dict com supervisor_time_ms, worker_time_ms, total_time_ms,
-        overhead_ratio (0.0 a 1.0) e overhead_percent.
+        overhead_ratio (0.0 a 1.0), overhead_percent, deliberation_time_ms,
+        structural_time_ms e deliberation_share (fração do overhead).
     """
     supervisor_time = 0.0
     worker_time = 0.0
+    deliberation_time = 0.0
 
     for m in agent_metrics:
         name = m.get("agentName", "")
         time_ms = m.get("executionTimeMs", 0)
         if name in NOS_RAIZ:
             supervisor_time += time_ms
+            deliberation_time += min(m.get("deliberacaoMs", 0) or 0, time_ms)
         elif name.startswith("supervisor_"):
             continue
         else:
@@ -115,6 +128,9 @@ def compute_coordination_overhead(agent_metrics: list[dict]) -> dict[str, Any]:
         "total_time_ms": round(total, 2),
         "overhead_ratio": round(ratio, 4),
         "overhead_percent": round(ratio * 100, 2),
+        "deliberation_time_ms": round(deliberation_time, 2),
+        "structural_time_ms": round(supervisor_time - deliberation_time, 2),
+        "deliberation_share": round(deliberation_time / supervisor_time, 4) if supervisor_time > 0 else 0.0,
     }
 
 
@@ -336,6 +352,104 @@ def compute_completeness(
     }
 
 
+# Números colados a letras ou hífen não são valores (COVID-19, CID-10, sf305);
+# um sinal de menos só conta depois de espaço ou parêntese ("-0.8").
+_INICIO = r"(?:(?<![\w\-/])|(?<=[\s(]-)|(?<=^-))"
+_NUM_TEXTO = re.compile(
+    _INICIO + r"(\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)"
+    r"(?:\s*(mil|milhão|milhões|milhao|milhoes|bilhão|bilhões|bilhao|bilhoes)\b)?",
+    re.IGNORECASE,
+)
+_NUM_CONTEXTO = re.compile(_INICIO + r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)")
+_ESCALAS = {"mil": 1e3, "milhão": 1e6, "milhões": 1e6, "milhao": 1e6, "milhoes": 1e6,
+            "bilhão": 1e9, "bilhões": 1e9, "bilhao": 1e9, "bilhoes": 1e9}
+TOLERANCIA_RELATIVA = 0.02
+
+
+def _numeros_do_texto(texto: str) -> list[tuple[str, float, float]]:
+    """Números do texto em formato brasileiro: (literal, valor, meia unidade).
+
+    `54.647` é cinquenta e quatro mil, `24,4 milhões` é 24 400 000. A meia
+    unidade é a precisão que o próprio texto declarou (24,4 milhões vale
+    ±50 mil), usada como tolerância de arredondamento.
+    """
+    numeros = []
+    for m in _NUM_TEXTO.finditer(texto):
+        literal, escala = m.group(1), (m.group(2) or "").lower()
+        inteiro, _, decimais = literal.replace(".", "").partition(",")
+        valor = float(f"{inteiro}.{decimais}" if decimais else inteiro)
+        fator = _ESCALAS.get(escala, 1.0)
+        meia_unidade = 0.5 * fator * (10 ** -len(decimais))
+        numeros.append((m.group(0).strip(), valor * fator, meia_unidade))
+    return numeros
+
+
+def _numeros_do_contexto(contextos: list[str]) -> list[float]:
+    """Números dos trechos de contexto, formatados pelo Python (7,629,751.43)."""
+    return [float(m.group(1).replace(",", "")) for c in contextos for m in _NUM_CONTEXTO.finditer(c)]
+
+
+def compute_numeric_fidelity(
+    texto: str, contextos: list[str], anos: tuple[int, int] | None = None
+) -> dict[str, Any]:
+    """Q4 — Fidelidade numérica: números do texto que existem no material.
+
+    Complemento determinístico da fidelidade do RAGAS. Cada número citado
+    no texto (contagens, valores em reais, percentuais, coeficientes) é
+    procurado nos trechos de contexto que o redator recebeu
+    (`core/contextos_avaliacao.build_contexts`). Conta como verificado se
+    coincide com algum número do contexto dentro do arredondamento que o
+    texto declarou ou de 2% do valor. Anos (1900 a 2100) contam como
+    verificados quando estão no período analisado. Inteiros de um dígito
+    ficam de fora, porque no texto quase sempre são contagens de itens
+    ("dois exemplos", "4 pontos").
+
+    Returns:
+        score (None quando o texto não cita números), numeros_no_texto,
+        verificados e nao_verificados (os literais).
+    """
+    if not texto:
+        return {"score": None, "numeros_no_texto": 0, "verificados": 0, "nao_verificados": []}
+
+    referencia = [abs(v) for v in _numeros_do_contexto(contextos)]
+    verificados, nao_verificados, total = 0, [], 0
+    for literal, valor, meia_unidade in _numeros_do_texto(texto):
+        if valor.is_integer() and valor < 10 and meia_unidade >= 0.5 and not literal[-1:].isalpha():
+            continue
+        total += 1
+        # Só é ano o número escrito sem separador: "2.000 casos" é contagem.
+        if valor.is_integer() and 1900 <= valor <= 2100 and meia_unidade == 0.5 and literal.isdigit():
+            ok = anos is not None and anos[0] <= valor <= anos[1]
+        else:
+            ok = any(
+                abs(valor - c) <= max(meia_unidade, TOLERANCIA_RELATIVA * abs(c))
+                for c in referencia
+            )
+        if ok:
+            verificados += 1
+        else:
+            nao_verificados.append(literal)
+    return {
+        "score": round(verificados / total, 4) if total else None,
+        "numeros_no_texto": total,
+        "verificados": verificados,
+        "nao_verificados": nao_verificados,
+    }
+
+
+def _anos_do_resultado(result: dict[str, Any]) -> tuple[int, int] | None:
+    anos = ((result.get("data_coverage") or {}).get("expected_years")) or []
+    return (min(anos), max(anos)) if anos else None
+
+
+def numeric_fidelity_of(result: dict[str, Any]) -> dict[str, Any]:
+    """Q4 de uma topologia, montando o mesmo material que o RAGAS julga."""
+    from core.contextos_avaliacao import build_contexts
+
+    anos = _anos_do_resultado(result)
+    contextos = build_contexts(result, *(anos or (None, None)))
+    return compute_numeric_fidelity(result.get("texto_analise") or "", contextos, anos)
+
 
 # =========================================================================
 # C. Resiliência
@@ -413,46 +527,78 @@ def compute_token_cost(token_usage: dict[str, int] | None) -> dict[str, Any]:
     }
 
 
+# Classificação CoALA (Sumers et al., 2024): agente de linguagem é quem
+# decide com o LLM. Componentes que só executam cálculo ou consulta, sem
+# deliberação, são ferramentas — ações de grounding no espaço de ações de
+# quem as chama. O cálculo estatístico, o contexto orçamentário e as
+# consultas sem dimensão a escolher (SIA, COVID) estão nesse grupo.
+FERRAMENTAS: frozenset[str] = frozenset({"analitico", "contexto_orcamentario", "sia", "covid"})
+
+
+def papel_de(entrada: dict[str, Any] | str) -> str:
+    """'agente' ou 'ferramenta' para uma entrada de agentMetrics (ou um nome)."""
+    if isinstance(entrada, dict):
+        if entrada.get("papel"):
+            return entrada["papel"]
+        entrada = entrada.get("agentName", "")
+    return "ferramenta" if entrada in FERRAMENTAS else "agente"
+
+
 def compute_communication_volume(
     architecture: str,
     agent_metrics: list[dict],
     despesas_count: int = 0,
     indicadores_count: int = 0,
+    mensagens: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Volume de comunicação de uma topologia nesta análise.
 
-    **Decisão de engenharia** (desvio do nome de parâmetro sugerido no
-    plano original, `message_log`): o sistema não mantém um log de
-    mensagens brutas (sockets/filas) — o proxy usado aqui é determinístico
-    e real, nunca estimado: cada entrada em `agent_metrics` corresponde a
-    exatamente 1 agente (ou supervisor, na hierárquica) efetivamente
-    invocado nesta análise (contabilizado como 1 chamada + 1 retorno = 2
-    mensagens). A hierárquica é uma árvore estrita — supervisores nunca
-    trocam dado diretamente entre si, só com o `CoordenadorGeral` (seu
-    pai) — então o proxy é o mesmo para as duas topologias; a diferença
-    real de volume entre elas já aparece em `agent_invocations` (a
-    hierárquica invoca também os 4 supervisores, além dos agentes-folha).
+    Conta só agentes de linguagem em `agent_invocations` (ver `papel_de`);
+    as ferramentas acionadas aparecem à parte, porque chamar uma ferramenta
+    é uma ação do agente, não uma troca de mensagens entre agentes.
+
+    Mensagens: quando a topologia entrega o registro real das trocas
+    (`result["mensagens"]`, envelope no estilo FIPA-ACL — ver
+    `agents/base.Mensagem`), a contagem vem dele, separando as mensagens de
+    dados das de texto em linguagem natural. Sem o registro (execuções
+    antigas, testes unitários de métrica), vale a estimativa anterior de
+    uma chamada e um retorno por agente.
 
     Args:
         architecture: "star" ou "hierarchical".
-        agent_metrics: Métricas por agente desta topologia (usado só para
-            contar quantos agentes foram de fato invocados).
-        despesas_count: Nº de registros de despesa no resultado (proxy de
-            tamanho do payload transportado).
+        agent_metrics: Métricas por agente desta topologia.
+        despesas_count: Nº de registros de despesa no resultado.
         indicadores_count: Nº de registros de indicador, idem.
+        mensagens: Registro de mensagens da topologia, se houver.
 
     Returns:
-        Dict com contagem de invocações, total de mensagens e tamanho
-        aproximado do payload.
+        Dict com agentes e ferramentas acionados, mensagens (total, por
+        natureza e em caracteres), a fonte da contagem e o volume de
+        registros transportados.
     """
-    n_agents = len(agent_metrics)
-    message_count = n_agents * 2
-
-    return {
-        "agent_invocations": n_agents,
-        "message_count": message_count,
+    agentes = [m for m in agent_metrics if papel_de(m) == "agente"]
+    resultado: dict[str, Any] = {
+        "agent_invocations": len(agentes),
+        "ferramentas_acionadas": len(agent_metrics) - len(agentes),
         "payload_records": despesas_count + indicadores_count,
     }
+    if mensagens is not None:
+        resultado.update({
+            "message_count": len(mensagens),
+            "mensagens_dados": sum(1 for m in mensagens if m.get("natureza") == "dados"),
+            "mensagens_texto": sum(1 for m in mensagens if m.get("natureza") == "texto"),
+            "caracteres_texto": sum(m.get("tamanho", 0) for m in mensagens if m.get("natureza") == "texto"),
+            "fonte_mensagens": "registro",
+        })
+    else:
+        resultado.update({
+            "message_count": len(agentes) * 2,
+            "mensagens_dados": None,
+            "mensagens_texto": None,
+            "caracteres_texto": None,
+            "fonte_mensagens": "estimativa",
+        })
+    return resultado
 
 
 # =========================================================================
@@ -602,6 +748,7 @@ def compute_all_quality_metrics(
                 star_result.get("contexto_orcamentario", {}),
                 star_result.get("texto_analise", ""),
             ),
+            "numeric_fidelity": numeric_fidelity_of(star_result),
         },
         "hierarchical": {
             "completeness": compute_completeness(
@@ -610,6 +757,7 @@ def compute_all_quality_metrics(
                 hier_result.get("contexto_orcamentario", {}),
                 hier_result.get("texto_analise", ""),
             ),
+            "numeric_fidelity": numeric_fidelity_of(hier_result),
         },
     }
 
@@ -630,11 +778,13 @@ def compute_all_quality_metrics(
             "star", star_agent_metrics,
             despesas_count=len(star_result.get("despesas", [])),
             indicadores_count=len(star_result.get("indicadores", [])),
+            mensagens=star_result.get("mensagens"),
         ),
         "hierarchical": compute_communication_volume(
             "hierarchical", hier_agent_metrics,
             despesas_count=len(hier_result.get("despesas", [])),
             indicadores_count=len(hier_result.get("indicadores", [])),
+            mensagens=hier_result.get("mensagens"),
         ),
     }
 
@@ -740,6 +890,65 @@ def _decide_winner(
     return ("tie", criterio)
 
 
+def _secao_achados(rotulo: str, corrs: list[dict], anoms: list[dict]) -> list[str]:
+    """Correlações e tabela de anomalias de uma topologia (ou das duas, se iguais)."""
+    linhas_secao: list[str] = []
+    if corrs:
+        linhas_secao.append(f"  Correlações ({rotulo}):")
+        for c in corrs:
+            sf = c.get("subfuncao", "?")
+            sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
+            tipo = c.get("tipo_indicador", "?")
+            sp = c.get("spearman", 0)
+            cls = c.get("classificacao", "?")
+            n = c.get("n_pontos", "?")
+            linhas_secao.append(
+                f"    • {sf_nome} (sf{sf}) × {tipo}: "
+                f"ρ={sp:.4f} ({cls}, n={n})"
+            )
+        linhas_secao.append("")
+
+    if anoms:
+        # Ordena por ano (mais antigo primeiro)
+        sorted_anoms = sorted(anoms, key=lambda a: (a.get("ano", 0), a.get("subfuncao", 0)))
+        linhas_secao.append(f"  Anomalias ({rotulo}, {len(sorted_anoms)} detectadas):")
+        linhas_secao.append("")
+
+        # Larguras derivadas do conteúdo, não fixas: nomes de subfunção
+        # ("Suporte Profilático e Terapêutico", 33 chars) e indicadores
+        # ("sifilis_adquirida", 17) estouravam as constantes 28/16 e as
+        # colunas colidiam no relatório ("Terapêuticodengue").
+        linhas = [
+            (
+                str(a.get("ano", "?")),
+                SUBFUNCAO_NOMES.get(a.get("subfuncao", "?"), str(a.get("subfuncao", "?"))),
+                str(a.get("tipo_indicador", "?")),
+                "ineficiência"
+                if a.get("tipo_anomalia") == "alto_gasto_baixo_resultado"
+                else "eficiência",
+            )
+            for a in sorted_anoms
+        ]
+        w_ano = max(len("Ano"), *(len(l[0]) for l in linhas)) + 2
+        w_sf = max(len("Subfunção"), *(len(l[1]) for l in linhas)) + 2
+        w_ind = max(len("Indicador"), *(len(l[2]) for l in linhas)) + 2
+        w_diag = max(len("Diagnóstico"), *(len(l[3]) for l in linhas))
+
+        linhas_secao.append(
+            f"    {'Ano':<{w_ano}}{'Subfunção':<{w_sf}}"
+            f"{'Indicador':<{w_ind}}{'Diagnóstico'}"
+        )
+        linhas_secao.append(
+            f"    {'─' * w_ano}{'─' * w_sf}{'─' * w_ind}{'─' * w_diag}"
+        )
+        for ano, sf_nome, tipo, label in linhas:
+            linhas_secao.append(
+                f"    {ano:<{w_ano}}{sf_nome:<{w_sf}}{tipo:<{w_ind}}{label}"
+            )
+        linhas_secao.append("")
+    return linhas_secao
+
+
 def generate_comparative_report(
     quality: dict[str, Any],
     star_agent_metrics: list[dict],
@@ -795,11 +1004,13 @@ def generate_comparative_report(
     sections.append(f"  Tempo total de execução:")
     sections.append(f"    Estrela:      {star_total:,.0f} ms")
     sections.append(f"    Hierárquica:  {hier_total:,.0f} ms")
-    if star_total > 0 and hier_total > 0:
-        diff_pct = ((hier_total - star_total) / star_total) * 100
+    if star_total > 0 and hier_total > 0 and star_total != hier_total:
+        # Redução relativa ao tempo da mais lenta: "X% menos tempo" nunca passa
+        # de 100%, ao contrário do antigo "X% mais rápida" (que chegava a 225%).
         faster = "Estrela" if star_total < hier_total else "Hierárquica"
+        lenta, rapida = max(star_total, hier_total), min(star_total, hier_total)
         sections.append(
-            f"    → {faster} foi {abs(diff_pct):.1f}% mais rápida"
+            f"    → {faster} levou {(lenta - rapida) / lenta * 100:.1f}% menos tempo"
         )
     sections.append("")
 
@@ -833,64 +1044,15 @@ def generate_comparative_report(
             sections.append(f"    - {d}")
     sections.append("")
 
-    # Detalhar correlações e anomalias de cada topologia
-    _src = star_result if star_result else {}
-    star_corrs = _src.get("correlacoes", [])
-    star_anoms = _src.get("anomalias", [])
-
-    if star_corrs:
-        sections.append("  Correlações (ambas topologias — idênticas):")
-        for c in star_corrs:
-            sf = c.get("subfuncao", "?")
-            sf_nome = SUBFUNCAO_NOMES.get(sf, str(sf))
-            tipo = c.get("tipo_indicador", "?")
-            sp = c.get("spearman", 0)
-            cls = c.get("classificacao", "?")
-            n = c.get("n_pontos", "?")
-            sections.append(
-                f"    • {sf_nome} (sf{sf}) × {tipo}: "
-                f"ρ={sp:.4f} ({cls}, n={n})"
-            )
-        sections.append("")
-
-    if star_anoms:
-        # Ordena por ano (mais antigo primeiro)
-        sorted_anoms = sorted(star_anoms, key=lambda a: (a.get("ano", 0), a.get("subfuncao", 0)))
-        sections.append(f"  Anomalias ({len(sorted_anoms)} detectadas):")
-        sections.append("")
-
-        # Larguras derivadas do conteúdo, não fixas: nomes de subfunção
-        # ("Suporte Profilático e Terapêutico", 33 chars) e indicadores
-        # ("sifilis_adquirida", 17) estouravam as constantes 28/16 e as
-        # colunas colidiam no relatório ("Terapêuticodengue").
-        linhas = [
-            (
-                str(a.get("ano", "?")),
-                SUBFUNCAO_NOMES.get(a.get("subfuncao", "?"), str(a.get("subfuncao", "?"))),
-                str(a.get("tipo_indicador", "?")),
-                "ineficiência"
-                if a.get("tipo_anomalia") == "alto_gasto_baixo_resultado"
-                else "eficiência",
-            )
-            for a in sorted_anoms
-        ]
-        w_ano = max(len("Ano"), *(len(l[0]) for l in linhas)) + 2
-        w_sf = max(len("Subfunção"), *(len(l[1]) for l in linhas)) + 2
-        w_ind = max(len("Indicador"), *(len(l[2]) for l in linhas)) + 2
-        w_diag = max(len("Diagnóstico"), *(len(l[3]) for l in linhas))
-
-        sections.append(
-            f"    {'Ano':<{w_ano}}{'Subfunção':<{w_sf}}"
-            f"{'Indicador':<{w_ind}}{'Diagnóstico'}"
-        )
-        sections.append(
-            f"    {'─' * w_ano}{'─' * w_sf}{'─' * w_ind}{'─' * w_diag}"
-        )
-        for ano, sf_nome, tipo, label in linhas:
-            sections.append(
-                f"    {ano:<{w_ano}}{sf_nome:<{w_sf}}{tipo:<{w_ind}}{label}"
-            )
-        sections.append("")
+    # Correlações e anomalias: uma listagem só quando as topologias coincidem,
+    # uma por topologia quando divergem (o planejamento pode levar cada uma a
+    # buscar dados diferentes).
+    if consistency.get("all_identical"):
+        listagens = [("idênticas nas duas topologias", star_result or {})]
+    else:
+        listagens = [("Estrela", star_result or {}), ("Hierárquica", hier_result or {})]
+    for rotulo, res in listagens:
+        sections.extend(_secao_achados(rotulo, res.get("correlacoes", []), res.get("anomalias", [])))
 
     for arch_name, arch_key in [("Estrela", "star"), ("Hierárquica", "hierarchical")]:
         arch_qual = qual.get(arch_key, {})

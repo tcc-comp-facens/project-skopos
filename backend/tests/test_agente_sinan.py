@@ -128,6 +128,14 @@ class TestConsultarIndicadores:
         assert set(args[1]) == set(SUBTIPOS)
         assert "indicadores" in result
 
+    def test_query_consulta_so_os_subtipos_pedidos(self, agente, neo4j_client):
+        """Regressão: a pergunta sobre dengue trazia os 9 agravos e gerava
+        achados de chikungunya, sífilis etc."""
+        neo4j_client.get_indicadores_por_sistema.return_value = []
+        agente.query("a1", 2019, 2021, health_params=["dengue", "internacoes"], use_llm=False)
+        args = neo4j_client.get_indicadores_por_sistema.call_args[0]
+        assert args[1] == ["dengue"]
+
     def test_no_despesas_key_in_result(self, agente, neo4j_client):
         """Diferente dos agentes legados, AgenteSINAN não consulta
         despesas — isso é responsabilidade de AgenteOrcamentoSubfuncao."""

@@ -140,6 +140,12 @@ class TestConsultarIndicadores:
         assert set(args[1]) == set(SUBTIPOS)
         assert "indicadores" in result
 
+    def test_query_consulta_so_os_subtipos_pedidos(self, agente, neo4j_client):
+        neo4j_client.get_indicadores_por_sistema.return_value = []
+        agente.query("a1", 2019, 2021, health_params=["leitos", "dengue"], use_llm=False)
+        args = neo4j_client.get_indicadores_por_sistema.call_args[0]
+        assert args[1] == ["leitos"]
+
     def test_dimensao_escolhida_naturalmente_escopa_a_um_subtipo(self, agente, neo4j_client):
         """POR_TIPO_ESTABELECIMENTO só existe nos nós do subtipo
         estabelecimentos_por_tipo — o mock aqui simula o Neo4j retornando

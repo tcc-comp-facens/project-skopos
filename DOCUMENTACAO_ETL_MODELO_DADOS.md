@@ -73,7 +73,7 @@ Ambos os loaders resolvem o caminho de `Dados/` via variável de ambiente `DADOS
 
 Isso importa porque os arquivos de origem extrapolam a janela: os CSVs de orçamento têm nomes de pasta como `2015-2019` (mas os dados reais de `Data Empenho` começam em 2016 — nenhuma linha foi de fato descartada aí), e os arquivos DATASUS têm nomes como `..._2015-2025.xlsx` e `..._2015-2026.xlsx` (SI-PNI) — esses **sim** tiveram linhas descartadas (ano 2015 nos extratos DATASUS, ano 2026 nas doses do SI-PNI).
 
-**Exceção conhecida**: `OrcamentoPrograma` (ver §4.1.9) não tem coluna de ano por linha — o grão é o bloco plurianual inteiro do arquivo de origem. Não há como aplicar o filtro com precisão aí; os três blocos (`"2015-2019"`, `"2020-2022"`, `"2023-2025"`) foram mantidos integralmente, sabendo que o primeiro nominalmente inclui 2015.
+**Previsto × realizado não é carregado**: os CSVs `*_previsto_e_empenhado_por_programa_e_secretaria_*.csv` não têm coluna de ano por linha (grão = bloco plurianual) e foram retirados do modelo (ver §4.1.9). Os empenhos são filtrados pelo ano de `dataEmpenho`.
 
 ---
 
@@ -110,7 +110,7 @@ Nó granular, **1 por linha do CSV de empenho** (não agregado). Fonte: `Dados/o
 | `subfuncaoNome` | string | `"Atenção Básica"` | |
 | `natureza` | string | `"3.3.90.30.00-Material de Consumo"` | Natureza de despesa (classificação orçamentária padrão) |
 | `modalidadeLicitacao` | string | | |
-| `valorEmpenhoOriginal`, `valorEstorno`, `saldoEmpenho`, `valorProcessado`, `valorPago` | float | | Valores em R$, já em formato numérico direto no CSV (não precisou conversão de formato brasileiro) |
+| `valorEmpenhoOriginal`, `valorEstorno`, `saldoEmpenho`, `valorProcessado`, `valorPago` | float | | Valores em R$, já em formato numérico direto no CSV (não precisou conversão de formato brasileiro). **`valorEstorno` é negativo** (anulações) e `saldoEmpenho = valorEmpenhoOriginal + valorEstorno` em todas as linhas (empenhado líquido de anulações) |
 | `periodoOrigem` | string | `"2015-2019"` | Qual dos 3 blocos de arquivo originou o registro |
 | `fonte` | string | sempre `"lai_transparencia"` | |
 | `importedAt` | string ISO 8601 | | |
@@ -186,7 +186,7 @@ Calculado a partir de `Empenho` **no fim do ETL** via uma agregação Cypher (n�
 | Propriedade | Observação |
 |---|---|
 | `subfuncaoCodigo`, `subfuncaoNome`, `ano` | Chave lógica (índice composto, não constraint de unicidade — Neo4j Community Edition) |
-| `valorProcessado`, `valorPago`, `valorEmpenhado` | Somas de `Empenho` |
+| `valorProcessado`, `valorPago`, `valorEmpenhado` | Somas de `Empenho`. `valorEmpenhado` = Σ `saldoEmpenho` = Σ (`valorEmpenhoOriginal` + `valorEstorno`): empenhado **líquido de anulações**. As análises usam `valorProcessado` como valor oficial |
 | `valorProprio`, `valorFederal`, `valorEstadual`, `valorCredito`, `valorEmendaParlamentar`, `valorOutros` | Breakdown por `tipoRecurso` — **soma exatamente igual** ao `valorProcessado` total (validado: diferença = 0,0000 em toda a base) |
 | `fonte`, `importedAt` | |
 
@@ -194,17 +194,11 @@ Este breakdown por `tipoRecurso` é o que resolve a limitação documentada do m
 
 **Nota**: o relacionamento `VARIACAO_ANUAL` (encadear `DespesaAnual` de anos consecutivos com a variação percentual já calculada) foi desenhado e aprovado durante a sessão, mas **não foi implementado** — fica para execução futura (ver `PLANO_NOVO_MODELO_DADOS.md` §3.1/§5).
 
-#### 4.1.9 `OrcamentoPrograma` — 941 nós
+#### 4.1.9 `OrcamentoPrograma` — removido do modelo
 
-Fonte: `Dados/orcamento/{periodo}/*_previsto_e_empenhado_por_programa_e_secretaria_*.csv`. Dado **novo**, que não existia no modelo antigo — permite análise de execução orçamentária (previsto vs. realizado).
+Os CSVs `*_previsto_e_empenhado_por_programa_e_secretaria_*.csv` (previsto × realizado por programa/secretaria) deixaram de ser carregados, e os 941 nós foram removidos do Neo4j. Motivos: o grão é o bloco plurianual do arquivo (sem coluna de ano, então não entra no cruzamento anual com os indicadores); os textos de programa/ação não batem com os de `ProgramaGoverno`/`Acao` dos empenhos (a ligação exigiria fuzzy-matching); e nenhum agente consumia o dado.
 
-| Propriedade | Observação |
-|---|---|
-| `programa`, `acao`, `orgao` | Texto livre do CSV (não vinculado aos nós `ProgramaGoverno`/`Acao` de §4.1.6 — formatos de texto não batem entre os dois CSVs, ligação exigiria fuzzy-matching não implementado) |
-| `periodoOrigem` | `"2015-2019"` \| `"2020-2022"` \| `"2023-2025"` — **grão é o bloco inteiro, não ano individual** (o CSV de origem não tem coluna de ano) |
-| `valorPrevisto`, `valorRealizado` | |
-
-943 linhas no CSV → 941 nós (2 pares de linhas com chave idêntica colapsaram via MERGE — comportamento esperado, não é perda de dado).
+Os CSVs continuam em `Dados/orcamento/` e `load()` os ignora explicitamente (o nome contém `empenhado`, então o ramo de ignorar precisa vir antes do de `Empenho`). O código de leitura/persistência está no histórico do git, caso a análise de previsto × realizado volte ao escopo.
 
 #### 4.1.10 Constraints do domínio orçamento
 
@@ -218,7 +212,7 @@ acao_codigo              UNIQUE (Acao.codigo)
 unidade_orcamentaria_nome UNIQUE (UnidadeOrcamentaria.nome)
 empenho_id               UNIQUE (Empenho.id)
 ```
-(mais 2 índices compostos não-unique: `DespesaAnual(subfuncaoCodigo, ano)` e `OrcamentoPrograma(periodoOrigem)` — Neo4j Community Edition não suporta constraint de unicidade composta, só single-property)
+(mais 1 índice composto não-unique: `DespesaAnual(subfuncaoCodigo, ano)` — Neo4j Community Edition não suporta constraint de unicidade composta, só single-property)
 
 ---
 
@@ -332,7 +326,7 @@ tipo_equipamento_chave        UNIQUE (TipoEquipamento.chave)
 
 1. Garante as constraints (§4.1.9) via `CREATE CONSTRAINT IF NOT EXISTS`.
 2. Itera `Dados/orcamento/{2015-2019,2020-2022,2023-2025}/*.csv`.
-3. Para cada arquivo, decide o tipo pelo nome (`"previsto_e_empenhado"` no nome → `OrcamentoPrograma`; senão → `Empenho`).
+3. Para cada arquivo, decide o tipo pelo nome (`"previsto_e_empenhado"` no nome → ignorado, não é carregado; senão → `Empenho`).
 4. Lê com pandas (`sep="|"`, `encoding="latin-1"` — os CSVs usam pipe como delimitador e não são UTF-8).
 5. Para `Empenho`: filtra a janela 2016-2025, mapeia subfunção/fonte de recurso/fornecedor/ação, monta os registros, persiste em lotes de 2.000 via `UNWIND` (todas as dimensões + o nó `Empenho` + todos os relacionamentos numa única query Cypher por lote).
 6. Ao final, roda **uma agregação Cypher** (`MATCH (e:Empenho)... WITH ... MERGE (d:DespesaAnual)...`) que recalcula `DespesaAnual` inteiro a partir do que está em `Empenho` — não é acumulado incrementalmente durante a leitura do CSV, é uma passada de agregação sobre o grafo já carregado.
@@ -347,7 +341,7 @@ tipo_equipamento_chave        UNIQUE (TipoEquipamento.chave)
 
 ### 5.3 Idempotência
 
-Todo o loader usa `MERGE`, nunca `CREATE`. Rodar `run_etl.py` várias vezes seguidas produz exatamente os mesmos nós/relacionamentos — **validado nesta sessão** (rodei duas vezes, contagem de nós idêntica: 52.904/941/53).
+Todo o loader usa `MERGE`, nunca `CREATE`. Rodar `run_etl.py` várias vezes seguidas produz exatamente os mesmos nós/relacionamentos — **validado nesta sessão** (rodei duas vezes, contagem de nós idêntica: 52.904 `Empenho` / 53 `DespesaAnual`).
 
 ---
 
@@ -396,7 +390,7 @@ Quando um sistema tem mais de uma planilha que descreve o **mesmo** fato (ex. SI
 
 | # | Validação | Resultado |
 |---|---|---|
-| 1 | ETL roda sem exceção (parsing isolado, sem gravar no banco) | 52.904 empenhos + 943 previsto/realizado processados, zero warning de mapeamento não coberto |
+| 1 | ETL roda sem exceção (parsing isolado, sem gravar no banco) | 52.904 empenhos processados (o previsto/realizado deixou de ser carregado), zero warning de mapeamento não coberto |
 | 2 | ETL completo contra Neo4j real | 57.951 nós, 321.127 relacionamentos, sem erro |
 | 3 | Idempotência (rodar 2x) | Contagens idênticas na segunda execução |
 | 4 | Soma `valorProcessado` (Empenho) bate com soma dos `tipoRecurso` em `DespesaAnual` | Diferença = 0,0000 em toda a base |
@@ -411,14 +405,12 @@ Quando um sistema tem mais de uma planilha que descreve o **mesmo** fato (ex. SI
 
 ## 8. Limitações conhecidas (permanecem em aberto)
 
-1. **`OrcamentoPrograma` não é filtrável com precisão pela janela 2016-2025** — grão é o bloco plurianual do arquivo de origem, sem coluna de ano por linha.
-2. **`FaixaEtaria` não é comparável entre sistemas** — decisão deliberada (ver §4.2.2), mas significa que "faixa etária X" em SIM e em SINASC não são a mesma coisa e não devem ser somadas/comparadas ingenuamente.
-3. **`OrcamentoPrograma.programa`/`.acao` não estão ligados aos nós `ProgramaGoverno`/`Acao`** de `Empenho` — os textos não batem entre os dois CSVs de origem; uma ligação exigiria fuzzy-matching, não implementado.
-4. **Classificação de `emenda_parlamentar`** como própria vs. federal não foi resolvida — ficou como categoria própria em vez de forçar uma classificação incerta (ver §4.1.3).
-5. **`VARIACAO_ANUAL`** (relacionamento entre anos consecutivos de `DespesaAnual` com variação percentual pré-calculada) foi desenhado mas não implementado — guardado para execução futura.
-6. **CNES mensal foi agregado para dezembro** — quem precisar de granularidade mensal completa de equipes de saúde, tipo de atendimento, leitos/consultórios ou equipamentos vai precisar reprocessar a partir do xlsx original (o dado mensal não está no Neo4j, só o snapshot de dezembro).
-7. **Dados de 2025 são preliminares** em SIM, SIH, SINASC e Rede Assistencial CNES (3ª prévia oficial do DATASUS, sujeita a atualização) — carregados no Neo4j como estão, mas qualquer conclusão do TCC que dependa fortemente do ano 2025 nesses 4 sistemas deve sinalizar essa ressalva (ver §1.1.2).
-8. **SI-PNI 2015-2022 não pôde ser validado/atualizado de forma automatizada na extração de origem** — veio de exportação manual porque o cubo TabNet legado estava indisponível na sessão de extração original, e a nomenclatura de vacina não é a mesma entre 2015-2022 e 2023-2026 (ver §1.1.2) — qualquer série temporal de SI-PNI que cruze 2022/2023 deve tratar os dois blocos como séries distintas, não contínuas.
+1. **`FaixaEtaria` não é comparável entre sistemas** — decisão deliberada (ver §4.2.2), mas significa que "faixa etária X" em SIM e em SINASC não são a mesma coisa e não devem ser somadas/comparadas ingenuamente.
+2. **Classificação de `emenda_parlamentar`** como própria vs. federal não foi resolvida — ficou como categoria própria em vez de forçar uma classificação incerta (ver §4.1.3).
+3. **`VARIACAO_ANUAL`** (relacionamento entre anos consecutivos de `DespesaAnual` com variação percentual pré-calculada) foi desenhado mas não implementado — guardado para execução futura.
+4. **CNES mensal foi agregado para dezembro** — quem precisar de granularidade mensal completa de equipes de saúde, tipo de atendimento, leitos/consultórios ou equipamentos vai precisar reprocessar a partir do xlsx original (o dado mensal não está no Neo4j, só o snapshot de dezembro).
+5. **Dados de 2025 são preliminares** em SIM, SIH, SINASC e Rede Assistencial CNES (3ª prévia oficial do DATASUS, sujeita a atualização) — carregados no Neo4j como estão, mas qualquer conclusão do TCC que dependa fortemente do ano 2025 nesses 4 sistemas deve sinalizar essa ressalva (ver §1.1.2).
+6. **SI-PNI 2015-2022 não pôde ser validado/atualizado de forma automatizada na extração de origem** — veio de exportação manual porque o cubo TabNet legado estava indisponível na sessão de extração original, e a nomenclatura de vacina não é a mesma entre 2015-2022 e 2023-2026 (ver §1.1.2) — qualquer série temporal de SI-PNI que cruze 2022/2023 deve tratar os dois blocos como séries distintas, não contínuas.
 
 ## 9. Como reproduzir
 

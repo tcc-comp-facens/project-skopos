@@ -70,6 +70,11 @@ def build_indicador_cypher(
     (propriedade do relacionamento) e `dimensao_valor` (nome/código do nó
     de dimensão).
 
+    Só o grão anual (`i.mes IS NULL`). A COVID é o único sistema com nós
+    mensais, do mesmo subtipo e ano que o nó anual; sem o filtro eles
+    voltavam junto e, como o cruzamento indexa por (ano, dimensão), o
+    valor de um mês qualquer sobrescrevia o total do ano.
+
     Raises:
         DimensaoInvalida: se `dimensao` não é válida para `sistema`.
     """
@@ -84,7 +89,7 @@ def build_indicador_cypher(
         query = """
         MATCH (i:IndicadorSaude)
         WHERE i.sistema = $sistema AND i.subtipo IN $subtipos
-          AND i.ano >= $dateFrom AND i.ano <= $dateTo
+          AND i.ano >= $dateFrom AND i.ano <= $dateTo AND i.mes IS NULL
         RETURN i.subtipo AS tipo, i.ano AS ano, i.valorTotal AS valor
         ORDER BY i.ano, i.subtipo
         """
@@ -102,7 +107,7 @@ def build_indicador_cypher(
     query = f"""
     MATCH (i:IndicadorSaude)-[r:{dimensao}]->(dim)
     WHERE i.sistema = $sistema AND i.subtipo IN $subtipos
-      AND i.ano >= $dateFrom AND i.ano <= $dateTo
+      AND i.ano >= $dateFrom AND i.ano <= $dateTo AND i.mes IS NULL
     RETURN i.subtipo AS tipo, i.ano AS ano, r.valor AS valor,
            coalesce(dim.nome, dim.codigo) AS dimensao_valor
     ORDER BY i.ano, i.subtipo, dimensao_valor

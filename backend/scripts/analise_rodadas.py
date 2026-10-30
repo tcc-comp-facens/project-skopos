@@ -9,15 +9,14 @@ recalculado a partir do sistema: o script só agrega o que as rodadas mediram.
 O que sai em `--out`:
 
   analise.json   todos os números (o texto do capítulo cita este arquivo)
-  analise.xlsx   as mesmas tabelas, mais a planilha por pergunta (p e A12)
+  analise.xlsx   as mesmas tabelas, mais a planilha por pergunta (valores das duas topologias)
   fig_*.png      figuras
 
-Tratamento estatístico (seção 3.6 da monografia): mediana e amplitude
-interquartil; Mann-Whitney bilateral por pergunta (as repetições de uma
-topologia contra as da outra) com o tamanho de efeito A12 de Vargha-Delaney;
-teste exato de Fisher para desfechos dicotômicos. Como complemento, que
-aproveita o pareamento, Wilcoxon de postos sinalizados sobre as medianas por
-pergunta. Sem correção para comparações múltiplas; todos os p são gravados.
+Tratamento estatístico: média, mediana e quartis por topologia; contagem das
+perguntas em que a hierárquica ficou acima, igual ou abaixo da estrela; e o
+teste de postos sinalizados de Wilcoxon sobre as diferenças pareadas por
+pergunta (com mais de uma execução, sobre as medianas de cada pergunta). Sem
+correção para comparações múltiplas; todos os p são gravados.
 
 Uso (na raiz do repositório; requer numpy, scipy, matplotlib e openpyxl):
 
@@ -43,29 +42,38 @@ from scipy import stats
 
 TOPOS = ("star", "hierarchical")
 NOME_TOPO = {"star": "Estrela", "hierarchical": "Hierárquica"}
-LIMIAR_SISTEMA = 0.05  # core.quality_metrics.FAITHFULNESS_TIE_THRESHOLD
+# Limiar de indiferença: diferença de fidelidade abaixo da qual o próprio
+# avaliador não distingue os textos. Serve de régua para a análise do ruído.
+LIMIAR_INDIFERENCA = 0.05
 
 # (chave no jsonl, rótulo, casas decimais)
 METRICAS = [
     ("wall_clock_ms", "Tempo de parede (ms)", 0),
+    ("tempo_total_ms", "Tempo até o texto (ms)", 0),
     ("overhead_ms", "Custo de coordenação (ms)", 2),
     ("overhead_percent", "Custo de coordenação (%)", 2),
+    ("overhead_deliberacao_ms", "Coordenação: deliberação LLM (ms)", 0),
+    ("overhead_estrutural_ms", "Coordenação: estrutura (ms)", 2),
     ("total_tokens", "Tokens totais", 0),
     ("prompt_tokens", "Tokens de entrada", 0),
     ("completion_tokens", "Tokens de saída", 0),
     ("llm_call_count", "Chamadas ao modelo", 0),
     ("agent_invocations", "Agentes acionados", 0),
     ("message_count", "Mensagens", 0),
+    ("mensagens_texto", "Mensagens de texto", 0),
+    ("ferramentas_acionadas", "Ferramentas acionadas", 0),
     ("payload_records", "Registros transportados", 0),
     ("texto_analise_len", "Tamanho do laudo (caracteres)", 0),
     ("completude", "Completude", 3),
     ("ragas_faithfulness", "Fidelidade", 3),
     ("ragas_answer_relevancy", "Relevância da resposta", 3),
     ("ragas_context_relevance", "Relevância do contexto", 3),
+    ("fidelidade_numerica", "Fidelidade numérica", 3),
 ]
 METRICAS_TESTE = [
-    "wall_clock_ms", "total_tokens", "completion_tokens", "message_count",
+    "wall_clock_ms", "tempo_total_ms", "total_tokens", "completion_tokens", "message_count",
     "texto_analise_len", "completude", "ragas_faithfulness", "ragas_answer_relevancy",
+    "fidelidade_numerica",
 ]
 
 
@@ -128,19 +136,6 @@ def quartis(xs: list[float]) -> dict:
             "min": float(xs[0]), "max": float(xs[-1]), "media": float(st.mean(xs))}
 
 
-def mann_whitney(hier: list[float], star: list[float]) -> dict | None:
-    """p bilateral e A12 = P(hier > estrela) + 0,5·P(iguais)."""
-    hier = [x for x in hier if x is not None]
-    star = [x for x in star if x is not None]
-    if len(hier) < 3 or len(star) < 3:
-        return None
-    if len(set(hier) | set(star)) == 1:
-        return {"p": 1.0, "a12": 0.5, "n_hier": len(hier), "n_star": len(star)}
-    u = stats.mannwhitneyu(hier, star, alternative="two-sided")
-    return {"p": float(u.pvalue), "a12": float(u.statistic / (len(hier) * len(star))),
-            "n_hier": len(hier), "n_star": len(star)}
-
-
 def wilcoxon_pareado(difs: list[float]) -> float | None:
     difs = [d for d in difs if d is not None]
     if len(difs) < 6 or all(d == 0 for d in difs):
@@ -148,41 +143,8 @@ def wilcoxon_pareado(difs: list[float]) -> float | None:
     return float(stats.wilcoxon(difs, zero_method="wilcox").pvalue)
 
 
-def _soma_dif2(x: np.ndarray) -> float:
-    """Soma de (xi - xj)^2 sobre todos os pares ordenados i != j."""
-    return float(2 * len(x) * np.sum(x ** 2) - 2 * np.sum(x) ** 2)
-
-
-def alfa_krippendorff(matriz: list[list[float | None]]) -> float | None:
-    """Alfa de Krippendorff para dados intervalares (unidades × repetições)."""
-    unidades = [np.array([v for v in linha if v is not None], dtype=float) for linha in matriz]
-    unidades = [u for u in unidades if len(u) >= 2]
-    n = sum(len(u) for u in unidades)
-    if n < 3:
-        return None
-    d_obs = sum(_soma_dif2(u) / (len(u) - 1) for u in unidades) / n
-    d_esp = _soma_dif2(np.concatenate(unidades)) / (n * (n - 1))
-    return None if d_esp == 0 else float(1 - d_obs / d_esp)
-
-
-def icc_1_1(matriz: list[list[float | None]]) -> float | None:
-    """ICC(1,1), ANOVA de um fator, só com unidades completas."""
-    completas = np.array([l for l in matriz if all(v is not None for v in l)], dtype=float)
-    if len(completas) < 3:
-        return None
-    n, k = completas.shape
-    medias = completas.mean(axis=1)
-    msb = k * np.sum((medias - completas.mean()) ** 2) / (n - 1)
-    msw = np.sum((completas - medias[:, None]) ** 2) / (n * (k - 1))
-    return float((msb - msw) / (msb + (k - 1) * msw)) if (msb + (k - 1) * msw) > 0 else None
-
-
 def percentis(xs: list[float], ps=(50, 75, 90, 95)) -> dict:
     return {f"p{p}": float(np.percentile(xs, p)) for p in ps} if xs else {}
-
-
-def criterio_base(criterio: str | None) -> str:
-    return (criterio or "").split(" (")[0]
 
 
 # --- análise ---------------------------------------------------------------
@@ -283,7 +245,10 @@ def analisar(rodadas: list[Rodada]) -> dict:
         m = {
             "rotulo": rotulo,
             "star": quartis(agrup["star"]), "hierarchical": quartis(agrup["hierarchical"]),
-            "mediana_das_medianas": {t: float(st.median([v for v in med[t].values() if v is not None])) for t in TOPOS},
+            "mediana_das_medianas": {
+                t: (float(st.median(vs)) if (vs := [v for v in med[t].values() if v is not None]) else None)
+                for t in TOPOS
+            },
             "perguntas_hier_maior": sum(1 for d in difs if d > 0),
             "perguntas_hier_menor": sum(1 for d in difs if d < 0),
             "perguntas_iguais": sum(1 for d in difs if d == 0),
@@ -295,25 +260,8 @@ def analisar(rodadas: list[Rodada]) -> dict:
             "dif_mediana_por_analise": float(st.median(dif_analise)) if dif_analise else None,
         }
         if chave in METRICAS_TESTE:
-            testes = {c: mann_whitney(vals(c, "hierarchical", chave), vals(c, "star", chave)) for c in Q}
-            validos = {c: t for c, t in testes.items() if t}
-            ps = [t["p"] for t in validos.values()]
-            a12 = [t["a12"] for t in validos.values()]
-            m["mann_whitney"] = {
-                "perguntas_testadas": len(validos),
-                "p_menor_que_0_05": sum(1 for p in ps if p < 0.05),
-                "esperado_por_acaso": round(0.05 * len(ps), 1),
-                "p_minimo": min(ps) if ps else None,
-                "p_mediano": float(st.median(ps)) if ps else None,
-                "a12": quartis(a12),
-                "significativas": {c: validos[c] for c in validos if validos[c]["p"] < 0.05},
-            }
             for c in Q:
-                por_pergunta[c][chave] = {
-                    "star": med["star"][c], "hierarchical": med["hierarchical"][c],
-                    "p": testes[c]["p"] if testes[c] else None,
-                    "a12": testes[c]["a12"] if testes[c] else None,
-                }
+                por_pergunta[c][chave] = {"star": med["star"][c], "hierarchical": med["hierarchical"][c]}
         metricas[chave] = m
     out["metricas"] = metricas
     out["por_pergunta"] = por_pergunta
@@ -445,15 +393,10 @@ def analisar(rodadas: list[Rodada]) -> dict:
                     entre_rep_est += d
         ruido[chave] = {
             "entre_topologias": {**quartis(entre_topo), **percentis(entre_topo),
-                                 "acima_do_limiar_do_sistema": sum(1 for d in entre_topo if d >= LIMIAR_SISTEMA)},
+                                 "acima_do_limiar_de_indiferenca": sum(1 for d in entre_topo if d >= LIMIAR_INDIFERENCA)},
             "entre_repeticoes": {**quartis(entre_rep), **percentis(entre_rep),
-                                 "acima_do_limiar_do_sistema": sum(1 for d in entre_rep if d >= LIMIAR_SISTEMA)},
+                                 "acima_do_limiar_de_indiferenca": sum(1 for d in entre_rep if d >= LIMIAR_INDIFERENCA)},
             "entre_repeticoes_resolucao_estavel": {**quartis(entre_rep_est), **percentis(entre_rep_est)},
-            "mann_whitney_p": (float(stats.mannwhitneyu(entre_topo, entre_rep, alternative="two-sided").pvalue)
-                               if entre_topo and entre_rep else None),
-            "alfa_krippendorff": {t: alfa_krippendorff([vals(c, t, chave) for c in Q]) for t in TOPOS},
-            "alfa_krippendorff_resolucao_estavel": {t: alfa_krippendorff([vals(c, t, chave) for c in estaveis]) for t in TOPOS},
-            "icc_1_1": {t: icc_1_1([vals(c, t, chave) for c in Q]) for t in TOPOS},
             "_entre_topo": entre_topo, "_entre_rep": entre_rep,
         }
     out["ruido"] = ruido
@@ -474,44 +417,6 @@ def analisar(rodadas: list[Rodada]) -> dict:
                     if p["star"].get("ragas_context_relevance") == p["hierarchical"].get("ragas_context_relevance"))
     out["relevancia_do_contexto"] = {"iguais_entre_topologias": cr_iguais, "analises": len(analises)}
 
-    # ---- veredito ----
-    venc_rodada = [Counter(pares[c][i]["star"]["vencedor"] for c in Q) for i in range(R)]
-    crit = Counter((p["star"]["vencedor"], criterio_base(p["star"]["criterio_veredito"])) for _, _, p in analises)
-    vit_star = {c: sum(1 for p in pares[c] if p["star"]["vencedor"] == "star") for c in Q}
-    dist = Counter(vit_star.values())
-    esperado = [len(Q) * stats.binom.pmf(k, R, 0.5) for k in range(R + 1)]
-    maioria_star = sum(1 for v in vit_star.values() if v > R / 2)
-    # qui-quadrado de aderência à binomial(R; 0,5), agrupando as caudas
-    grupos = [(0, 1), tuple(range(2, R - 1)), (R - 1, R)] if R >= 4 else [tuple(range(R + 1))]
-    obs_g = [sum(dist.get(k, 0) for k in g) for g in grupos]
-    esp_g = [sum(esperado[k] for k in g) for g in grupos]
-    qui = stats.chisquare(obs_g, esp_g) if len(grupos) > 1 else None
-    decididos_fid = [p for _, _, p in analises if criterio_base(p["star"]["criterio_veredito"]) == "fidelidade"]
-    difs_fid = [abs(p["hierarchical"]["ragas_faithfulness"] - p["star"]["ragas_faithfulness"]) for p in decididos_fid]
-    p90 = ruido["ragas_faithfulness"]["entre_repeticoes"].get("p90")
-    p50 = ruido["ragas_faithfulness"]["entre_repeticoes"].get("p50")
-    out["veredito"] = {
-        "por_rodada": [{"star": v.get("star", 0), "hierarchical": v.get("hierarchical", 0)} for v in venc_rodada],
-        "total": {t: sum(v.get(t, 0) for v in venc_rodada) for t in TOPOS},
-        "por_criterio": {f"{v}|{c}": n for (v, c), n in sorted(crit.items())},
-        "criterios": dict(Counter(c for (_, c), n in crit.items() for _ in range(n))),
-        "vitorias_da_estrela_por_pergunta": {str(k): dist.get(k, 0) for k in range(R + 1)},
-        "esperado_binomial": [round(e, 2) for e in esperado],
-        "unanimes": dist.get(0, 0) + dist.get(R, 0),
-        "unanimes_esperados": round(esperado[0] + esperado[R], 2),
-        "aderencia_binomial": ({"grupos": [list(g) for g in grupos], "observado": obs_g,
-                                "esperado": [round(e, 2) for e in esp_g], "p": float(qui.pvalue)} if qui else None),
-        "maioria_estrela": maioria_star, "maioria_hierarquica": len(Q) - maioria_star,
-        "teste_binomial_maioria_p": float(stats.binomtest(maioria_star, len(Q), 0.5).pvalue) if Q else None,
-        "decididos_sem_fidelidade_medida": sum(
-            1 for _, _, p in analises if "não medida" in (p["star"]["criterio_veredito"] or "")),
-        "decididos_por_fidelidade": len(decididos_fid),
-        "decididos_por_fidelidade_abaixo_da_mediana_do_ruido": sum(1 for d in difs_fid if p50 is not None and d < p50),
-        "decididos_por_fidelidade_abaixo_do_p90_do_ruido": sum(1 for d in difs_fid if p90 is not None and d < p90),
-        "perguntas_unanimes": {c: ("star" if v == R else "hierarchical") for c, v in vit_star.items() if v in (0, R)},
-        "_vit_star": vit_star,
-    }
-
     # ---- amplitude temporal × amplitude de escopo ----
     def moda(xs):
         return Counter(xs).most_common(1)[0][0]
@@ -519,7 +424,9 @@ def analisar(rodadas: list[Rodada]) -> dict:
     anos = {c: moda([p["star"]["resolved_date_to"] - p["star"]["resolved_date_from"] + 1 for p in pares[c]]) for c in Q}
     faixa_t = lambda a: "curta (2 a 3 anos)" if a <= 3 else ("média (4 a 6 anos)" if a <= 6 else "longa (7 a 10 anos)")
     faixa_e = lambda n: "focal (1 indicador)" if n == 1 else ("intermediário (2 a 4)" if n <= 4 else "amplo (todos os sistemas)")
-    medq = lambda c, t, m: st.median([v for v in vals(c, t, m) if v is not None])
+    def medq(c, t, m):
+        vs = [v for v in vals(c, t, m) if v is not None]
+        return st.median(vs) if vs else None
     celulas = defaultdict(list)
     for c in Q:
         celulas[(faixa_t(anos[c]), faixa_e(n_ind[c]))].append(c)
@@ -546,7 +453,8 @@ def analisar(rodadas: list[Rodada]) -> dict:
         for m in ("wall_clock_ms", "total_tokens", "llm_call_count", "message_count", "payload_records",
                   "ragas_faithfulness", "completude"):
             for t in TOPOS:
-                r = stats.spearmanr([x[c] for c in Q], [medq(c, t, m) for c in Q])
+                xy = [(x[c], y) for c in Q if (y := medq(c, t, m)) is not None]
+                r = stats.spearmanr([a for a, _ in xy], [b for _, b in xy])
                 corr[f"{nome}|{m}|{t}"] = {"rho": float(r.statistic), "p": float(r.pvalue)}
     out["escopo"] = {
         "distribuicao_indicadores": {str(k): v for k, v in sorted(Counter(n_ind.values()).items())},
@@ -561,8 +469,7 @@ def analisar(rodadas: list[Rodada]) -> dict:
         cats[categoria[c]].append(c)
     out["por_categoria"] = []
     for cat, cs in cats.items():
-        linha = {"categoria": cat, "perguntas": len(cs), "analises": len(cs) * R,
-                 "vitorias_estrela": sum(vit_star[c] for c in cs)}
+        linha = {"categoria": cat, "perguntas": len(cs), "analises": len(cs) * R}
         for m in ("wall_clock_ms", "total_tokens", "ragas_faithfulness", "ragas_answer_relevancy", "completude"):
             for t in TOPOS:
                 linha[f"{m}|{t}"] = float(st.median([v for c in cs for v in vals(c, t, m) if v is not None]))
@@ -573,8 +480,7 @@ def analisar(rodadas: list[Rodada]) -> dict:
     for i, rd in enumerate(rodadas):
         ps = [pares[c][i] for c in Q]
         linha = {"rodada": rd.numero, "arquivo": os.path.basename(rd.path),
-                 "admitidas": out["admissao"]["admitidas_por_rodada"][i],
-                 "vitorias": out["veredito"]["por_rodada"][i]}
+                 "admitidas": out["admissao"]["admitidas_por_rodada"][i]}
         for m in ("wall_clock_ms", "total_tokens", "ragas_faithfulness", "ragas_answer_relevancy", "completude"):
             for t in TOPOS:
                 linha[f"{m}|{t}"] = float(st.median([p[t][m] for p in ps if p[t].get(m) is not None]))
@@ -597,56 +503,6 @@ def analisar(rodadas: list[Rodada]) -> dict:
         "tokens_interpretacao": sum(l["tokens_interpretacao"] for l in out["por_rodada"]),
     }
 
-    # ---- resiliência ----
-    falhas = defaultdict(lambda: defaultdict(list))
-    for rd in rodadas:
-        for r in rd.rows:
-            if r.get("topology") not in TOPOS:
-                continue
-            if r["fault"] != "nenhuma":
-                falhas[r["fault"]][r["topology"]].append(r)
-            elif r.get("fault_base"):
-                falhas["nenhuma"][r["topology"]].append(r)
-    res = {}
-    for f, d in falhas.items():
-        res[f] = {}
-        for t in TOPOS:
-            rs = d.get(t, [])
-            res[f][t] = {
-                "execucoes": len(rs),
-                "componentes": [r.get("r1_completed") for r in rs],
-                "texto_gerado": sum(r.get("texto_gerado") or 0 for r in rs),
-                "eventos_de_erro": [r.get("error_events") for r in rs],
-                "quebrou": sum(1 for r in rs if r.get("run_error")),
-                "tempo_ms": quartis([r.get("wall_clock_ms") for r in rs]),
-                "tokens": quartis([r.get("total_tokens") for r in rs]),
-                "chamadas": quartis([r.get("llm_call_count") for r in rs]),
-                "fidelidade": quartis([r.get("ragas_faithfulness") for r in rs]),
-                "tamanho_do_laudo": quartis([r.get("texto_analise_len") for r in rs]),
-                "sucesso": sum(r.get("sucesso") or 0 for r in rs),
-                "tempos_ms": [r.get("wall_clock_ms") for r in rs],
-                "fidelidades": [r.get("ragas_faithfulness") for r in rs],
-                "tamanhos_do_laudo": [r.get("texto_analise_len") for r in rs],
-                "criterios_do_veredito": dict(Counter(f"{r.get('vencedor')}|{r.get('criterio_veredito')}" for r in rs)),
-            }
-            presentes = None
-            for rd in rodadas:
-                for cen, pl in rd.payloads.items():
-                    eh_falha = cen.startswith(f"falha__{f}__")
-                    eh_base = f == "nenhuma" and any(r["scenario"] == cen and r.get("fault_base") for r in rd.rows)
-                    if not (eh_falha or eh_base):
-                        continue
-                    comps = pl["quality"]["resilience"][t]["components"]
-                    atual = {k for k, v in comps.items() if v}
-                    presentes = atual if presentes is None else (presentes & atual)
-            res[f][t]["componentes_sempre_presentes"] = sorted(presentes) if presentes is not None else None
-        s, h = res[f]["star"], res[f]["hierarchical"]
-        if s["execucoes"] and h["execucoes"]:
-            tabela = [[h["texto_gerado"], h["execucoes"] - h["texto_gerado"]],
-                      [s["texto_gerado"], s["execucoes"] - s["texto_gerado"]]]
-            res[f]["fisher_texto_gerado_p"] = float(stats.fisher_exact(tabela).pvalue)
-            res[f]["mann_whitney_tempo"] = mann_whitney(h["tempos_ms"], s["tempos_ms"])
-    out["resiliencia"] = res
     return out
 
 
@@ -670,47 +526,33 @@ def gravar_xlsx(a: dict, path: str) -> None:
     ws.title = "Resumo"
     ws.append(["Métrica", "Estrela: mediana", "Estrela: Q1", "Estrela: Q3", "Hierárquica: mediana",
                "Hierárquica: Q1", "Hierárquica: Q3", "Perguntas hier > estrela", "Perguntas hier < estrela",
-               "Perguntas iguais", "Wilcoxon p", "MW: perguntas p<0,05", "MW: esperado ao acaso", "A12 mediano"])
+               "Perguntas iguais", "Wilcoxon p"])
     for chave, rotulo, _ in METRICAS:
         m = a["metricas"][chave]
-        mw = m.get("mann_whitney") or {}
         ws.append([rotulo, m["star"].get("mediana"), m["star"].get("q1"), m["star"].get("q3"),
                    m["hierarchical"].get("mediana"), m["hierarchical"].get("q1"), m["hierarchical"].get("q3"),
-                   m["perguntas_hier_maior"], m["perguntas_hier_menor"], m["perguntas_iguais"], m["wilcoxon_p"],
-                   mw.get("p_menor_que_0_05"), mw.get("esperado_por_acaso"), (mw.get("a12") or {}).get("mediana")])
+                   m["perguntas_hier_maior"], m["perguntas_hier_menor"], m["perguntas_iguais"], m["wilcoxon_p"]])
     ws = wb.create_sheet("PorPergunta")
     cab = ["Pergunta", "Categoria"]
     for chave in METRICAS_TESTE:
         rot = next(r for k, r, _ in METRICAS if k == chave)
-        cab += [f"{rot}: estrela", f"{rot}: hierárquica", f"{rot}: p", f"{rot}: A12"]
+        cab += [f"{rot}: estrela", f"{rot}: hierárquica"]
     ws.append(cab)
     for c, d in a["por_pergunta"].items():
         linha = [c, d["categoria"]]
         for chave in METRICAS_TESTE:
             x = d.get(chave) or {}
-            linha += [x.get("star"), x.get("hierarchical"), x.get("p"), x.get("a12")]
+            linha += [x.get("star"), x.get("hierarchical")]
         ws.append(linha)
     ws = wb.create_sheet("Admissao")
     ws.append(["Pergunta", "Categoria"] + [f"Rodada {i + 1}" for i in range(a["rodadas"])])
     for c, v in a["admissao"]["por_pergunta"].items():
         ws.append([c, a["admissao"]["categoria"][c]] + v)
     ws = wb.create_sheet("PorRodada")
-    chaves = [k for k in a["por_rodada"][0] if k != "vitorias"]
-    ws.append(chaves + ["vitórias estrela", "vitórias hierárquica"])
+    chaves = list(a["por_rodada"][0])
+    ws.append(chaves)
     for l in a["por_rodada"]:
-        ws.append([l[k] for k in chaves] + [l["vitorias"]["star"], l["vitorias"]["hierarchical"]])
-    ws = wb.create_sheet("Veredito")
-    ws.append(["Rodadas vencidas pela estrela", "Perguntas (observado)", "Perguntas (binomial 0,5)"])
-    for k, n in a["veredito"]["vitorias_da_estrela_por_pergunta"].items():
-        ws.append([int(k), n, a["veredito"]["esperado_binomial"][int(k)]])
-    ws = wb.create_sheet("Resiliencia")
-    ws.append(["Falha", "Topologia", "Execuções", "Componentes (de 7)", "Laudo gerado", "Eventos de erro",
-               "Tempo mediano (ms)", "Tokens medianos"])
-    for f, d in a["resiliencia"].items():
-        for t in TOPOS:
-            x = d[t]
-            ws.append([f, NOME_TOPO[t], x["execucoes"], ", ".join(map(str, x["componentes"])), x["texto_gerado"],
-                       ", ".join(map(str, x["eventos_de_erro"])), x["tempo_ms"].get("mediana"), x["tokens"].get("mediana")])
+        ws.append([l[k] for k in chaves])
     wb.save(path)
 
 
@@ -727,7 +569,6 @@ def gravar_figuras(a: dict, rodadas: list[Rodada], pasta: str) -> None:
         "axes.grid": True, "grid.color": grade, "grid.linewidth": 0.6, "axes.axisbelow": True,
         "legend.frameon": False, "figure.dpi": 100, "savefig.dpi": 300, "savefig.bbox": "tight",
     })
-    R = a["rodadas"]
     Q = list(a["por_pergunta"])
     n_ind = a["escopo"]["_n_ind"]
     pares = {c: [rd.par(c) for rd in rodadas] for c in Q}
@@ -765,8 +606,8 @@ def gravar_figuras(a: dict, rodadas: list[Rodada], pasta: str) -> None:
     ys = [a["por_pergunta"][c]["ragas_faithfulness"]["hierarchical"] for c in Q]
     fig, ax = plt.subplots(figsize=(4.4, 4.2))
     lo, hi = 0.3, 1.0
-    ax.fill_between([lo, hi], [lo - LIMIAR_SISTEMA, hi - LIMIAR_SISTEMA], [lo + LIMIAR_SISTEMA, hi + LIMIAR_SISTEMA],
-                    color=grade, zorder=0, linewidth=0)
+    ax.fill_between([lo, hi], [lo - LIMIAR_INDIFERENCA, hi - LIMIAR_INDIFERENCA],
+                    [lo + LIMIAR_INDIFERENCA, hi + LIMIAR_INDIFERENCA], color=grade, zorder=0, linewidth=0)
     ax.plot([lo, hi], [lo, hi], color=cinza, linewidth=0.8, linestyle="--", zorder=1)
     ax.scatter(xs, ys, s=22, color=tinta, alpha=0.75, linewidths=0.6, edgecolors="white", zorder=2)
     ax.set_xlim(lo, hi); ax.set_ylim(lo, hi); ax.set_aspect("equal")
@@ -788,8 +629,8 @@ def gravar_figuras(a: dict, rodadas: list[Rodada], pasta: str) -> None:
     if len(et):
         ax.step(et, np.arange(1, len(et) + 1) / len(et), where="post", color=tinta, linewidth=2,
                 label="Topologias diferentes, mesma rodada")
-    ax.axvline(LIMIAR_SISTEMA, color=cinza, linewidth=0.8, linestyle=":")
-    ax.text(LIMIAR_SISTEMA + 0.004, 0.04, "limiar de empate\ndo sistema (0,05)", color=cinza, fontsize=8)
+    ax.axvline(LIMIAR_INDIFERENCA, color=cinza, linewidth=0.8, linestyle=":")
+    ax.text(LIMIAR_INDIFERENCA + 0.004, 0.04, "limiar de\nindiferença (0,05)", color=cinza, fontsize=8)
     ax.set_xlim(0, 0.5); ax.set_ylim(0, 1)
     ax.set_xlabel("Diferença absoluta de fidelidade")
     ax.set_ylabel("Proporção acumulada")
@@ -798,49 +639,6 @@ def gravar_figuras(a: dict, rodadas: list[Rodada], pasta: str) -> None:
     fig.savefig(os.path.join(pasta, "fig_ruido_da_fidelidade.png"))
     plt.close(fig)
 
-    # 4) estabilidade do veredito
-    obs = [a["veredito"]["vitorias_da_estrela_por_pergunta"][str(k)] for k in range(R + 1)]
-    esp = a["veredito"]["esperado_binomial"]
-    fig, ax = plt.subplots(figsize=(6.3, 3.1))
-    ax.bar(range(R + 1), obs, width=0.6, color=cinza, label="Observado")
-    ax.plot(range(R + 1), esp, color=tinta, marker="o", markersize=5, linewidth=1.2, linestyle="--",
-            label="Esperado se o veredito fosse um sorteio")
-    for k, v in enumerate(obs):
-        ax.text(k, max(v, esp[k]) + 0.9, str(v), ha="center", fontsize=8, color=tinta)
-    ax.set_xticks(range(R + 1))
-    ax.set_xlabel(f"Rodadas em que a estrela foi declarada vencedora (de {R})")
-    ax.set_ylabel("Número de perguntas")
-    ax.grid(axis="x", visible=False)
-    ax.legend(loc="upper right")
-    ax.set_ylim(0, max(max(obs), max(esp)) * 1.4)
-    fig.savefig(os.path.join(pasta, "fig_estabilidade_do_veredito.png"))
-    plt.close(fig)
-
-    # 5) resiliência
-    ordem = [f for f in ("nenhuma", "saude_todos", "supervisor_analitico", "llm_fora") if f in a["resiliencia"]]
-    rot = {"nenhuma": "sem falha", "saude_todos": "agentes de saúde\nindisponíveis",
-           "supervisor_analitico": "supervisor analítico\nindisponível", "llm_fora": "modelo de linguagem\nindisponível"}
-    fig, ax = plt.subplots(figsize=(6.3, 3.3))
-    for j, (t, cor) in enumerate((("star", azul), ("hierarchical", laranja))):
-        for i, f in enumerate(ordem):
-            x = a["resiliencia"][f][t]
-            if not x["execucoes"]:
-                continue
-            media = float(np.mean(x["componentes"]))
-            b = ax.bar(i + (j - 0.5) * 0.36, media, width=0.32, color=cor,
-                       hatch="////" if t == "hierarchical" else None, edgecolor="white", linewidth=0.5)
-            ax.text(i + (j - 0.5) * 0.36, media + 0.12, f"laudo\n{x['texto_gerado']}/{x['execucoes']}",
-                    ha="center", fontsize=7.5, color=tinta)
-    ax.set_xticks(range(len(ordem)))
-    ax.set_xticklabels([rot[f] for f in ordem], fontsize=8)
-    ax.set_ylabel("Componentes presentes (de 7)")
-    ax.set_ylim(0, 8.6); ax.set_yticks(range(0, 8))
-    ax.grid(axis="x", visible=False)
-    ax.legend(handles=[Patch(facecolor=azul, label="Estrela"),
-                       Patch(facecolor=laranja, hatch="////", edgecolor="white", label="Hierárquica")],
-              loc="upper center", ncol=2, bbox_to_anchor=(0.5, 1.12))
-    fig.savefig(os.path.join(pasta, "fig_resiliencia.png"))
-    plt.close(fig)
 
 
 def main() -> int:

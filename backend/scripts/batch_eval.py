@@ -5,29 +5,45 @@ de chat — e mede com as mesmas métricas que o código produz.
 Fluxo (o mesmo de `api/chat_websocket.py` + `api/websocket.py`):
 
   1. Recusa mensagens acima de `MAX_MESSAGE_LENGTH`, como o chat.
-  2. `AgenteInterpretacaoIntencao.parse()` com `TokenBucket`, com a memória
-     episódica ligada (a UI a liga; `--no-episodic` desliga).
+  2. `AgenteInterpretacaoIntencao.parse()` com `TokenBucket`, **sem** memória
+     episódica: cada cenário é interpretado sem o histórico de análises do
+     banco, para a campanha ser reprodutível. É a única diferença de
+     comportamento em relação à UI, que consulta esse histórico.
   3. Se a pergunta é aceita, `run_chat_analysis()` → `dispatch_analysis()`: as
      duas topologias rodam em threads concorrentes, com os runners reais.
   4. Leitura da fila como o WebSocket faz (eventos `metric`, `error`, `done`).
-  5. `compute_all_quality_metrics()`, RAGAS (`_run_ragas_evaluation`) e o
-     veredito (`_decide_winner`: fidelidade > completude > tempo).
+  5. `compute_all_quality_metrics()` e RAGAS (`_run_ragas_evaluation`).
+
+A bateria registra as grandezas de cada topologia, eixo a eixo, e a
+comparação fica para a análise das rodadas (`scripts.analise_rodadas`).
 
 Nada é reimplementado aqui: as métricas do relatório são as do payload de
 `/api/analysis/{id}/quality`. Única diferença deliberada: o nó `Analise` não é
 gravado no Neo4j (`_SemGravacao`), então o lote não deixa dados nem altera a
 memória episódica usada pelo chat. O payload completo de cada análise (qualidade,
-RAGAS, relatório comparativo) vai para `<saida>.payloads.jsonl`.
+RAGAS e os achados de cada topologia) vai para `<saida>.payloads.jsonl`.
 
-Aviso de custo: cada cenário aceito dispara as duas topologias e o RAGAS
-(chamadas LLM reais). Comece com `--limit` ou `--categories`.
+As duas topologias revisam as entregas dos agentes de dados antes de cruzá-las
+(`agents/revisao_entregas.py`). Cada linha registra o resumo dessa revisão.
+
+Experimento de revisão (`--experimento-revisao`): roda só cenários com a falha
+semântica `dados_corrompidos` (`scripts/falhas_semanticas.py`), em que um
+agente de saúde por vez entrega cerca de 20% dos registros com valor errado,
+como o AutoInject de Huang et al. (2025). O gabarito da corrupção permite medir
+o que a revisão detectou, o que corrigiu e se os achados finais coincidem com
+os que os dados limpos produziriam. A consolidação fica em
+`scripts.analise_revisao`.
+
+Aviso de custo: cada cenário aceito dispara as duas topologias, a revisão das
+entregas e o RAGAS (chamadas LLM reais). Comece com `--limit` ou `--categories`.
 
 Uso (na raiz do backend, com o .env carregado):
 
     python -m scripts.batch_eval --limit 5
     python -m scripts.batch_eval --categories obvio_explicito,ambiguo_periodo
     python -m scripts.batch_eval --no-ragas --out resultados.xlsx
-    python -m scripts.batch_eval --categories falha_injetada --no-ragas   # só resiliência (falhas injetadas)
+    python -m scripts.batch_eval --experimento-revisao --no-ragas --out revisao_rodada1.xlsx
+    python -m scripts.batch_eval --experimento-revisao dados_corrompidos_persistente --no-ragas --out ...
 """
 
 from __future__ import annotations
@@ -56,34 +72,31 @@ from agents.intent.agente_interpretacao_intencao import (  # noqa: E402
     AnalysisIntent,
 )
 from agents.analytical.analitico import AgenteAnalitico  # noqa: E402
-from agents.context.contexto_orcamentario import AgenteContextoOrcamentario  # noqa: E402
+from agents.data_crossing import cross_domain_data  # noqa: E402
 from agents.domain.agente_cnes import AgenteCNES  # noqa: E402
 from agents.domain.agente_covid import AgenteCOVID  # noqa: E402
-from agents.domain.agente_orcamento import AgenteOrcamentoSubfuncao  # noqa: E402
 from agents.domain.agente_sia import AgenteSIA  # noqa: E402
 from agents.domain.agente_sih import AgenteSIH  # noqa: E402
 from agents.domain.agente_sim import AgenteSIM  # noqa: E402
 from agents.domain.agente_sinan import AgenteSINAN  # noqa: E402
 from agents.domain.agente_sinasc import AgenteSINASC  # noqa: E402
 from agents.domain.agente_sipni import AgenteSIPNI  # noqa: E402
-from agents.hierarchical.supervisors import SupervisorAnalitico, SupervisorSaude  # noqa: E402
 from api.chat_runner import run_chat_analysis  # noqa: E402
 from api.chat_websocket import MAX_MESSAGE_LENGTH  # noqa: E402
 from api.dispatch import get_available_year_range  # noqa: E402
 from api.state import active_queues, active_results, active_threads  # noqa: E402
 from api.websocket import _run_ragas_evaluation  # noqa: E402
-import core.llm_client as llm_client_module  # noqa: E402
 from core import quality_metrics, ragas_metrics  # noqa: E402
-from core.llm_client import PROVIDERS, TokenBucket, has_api_key  # noqa: E402
+from core.llm_client import MODELO_ANALISE, TokenBucket, has_api_key  # noqa: E402
 from scripts import batch_report  # noqa: E402
-from db.neo4j_client import Neo4jClient  # noqa: E402
+from scripts.falhas_semanticas import InjetorCorrupcao, avaliar_contra_gabarito  # noqa: E402
 
 
-@dataclass
-class ModelSpec:
-    label: str
-    provider: str  # "deepseek" ou "openai" (chaves de core.llm_client.PROVIDERS)
-    model: str | None = None  # None = default do provedor
+# Ano de referência fixo da bateria: "últimos 3 anos", "este ano" etc. resolvem
+# sempre a partir de 2025, último ano com dados na base. Sem isso a
+# interpretação usa o ano corrente e o resultado muda conforme a data em que a
+# bateria roda.
+ANO_REFERENCIA = 2025
 
 
 @dataclass
@@ -91,18 +104,9 @@ class Scenario:
     scenario_id: str
     category: str
     question: str
-    reference_year: int | None = None  # None = ano corrente (ver AgenteInterpretacaoIntencao.parse)
+    reference_year: int = ANO_REFERENCIA
     fault: str | None = None  # id em FAULT_SPECS: falha injetada durante a execução das topologias
-
-
-# --- Modelos a comparar ----------------------------------------------------
-
-MODELS: list[ModelSpec] = [
-    # Modelo de produção: usa o OPENAI_MODEL do .env (hoje gpt-5.6-luna), como a UI.
-    ModelSpec("openai-default", "openai"),
-    # ModelSpec("deepseek-default", "deepseek"),
-    # ModelSpec("openai-mini", "openai", "gpt-5-mini"),
-]
+    alvo_falha: str | None = None  # agente de saúde defeituoso nas falhas semânticas (ex.: "sinan")
 
 
 # --- Cenários ---------------------------------------------------------------
@@ -114,8 +118,8 @@ MODELS: list[ModelSpec] = [
 # O guardrail continua coberto pelos testes unitários.
 #
 # Os dados cobrem 2016-2025 e a interpretação exige ano inicial < ano final.
-# Perguntas com data relativa ("últimos 5 anos") usam o ano corrente, como a UI:
-# com dados só até 2025, elas podem ser recusadas — é o comportamento real.
+# Perguntas com data relativa ("últimos 5 anos") resolvem a partir de
+# ANO_REFERENCIA (2025), o último ano com dados.
 
 SCENARIOS: list[Scenario] = [
     # -- objetivas e explícitas: tema e período claros ----------------------
@@ -357,13 +361,13 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
-# --- Falhas injetadas (resiliência) ----------------------------------------
-# Cada cenário-base abaixo (BASES_FALHA) é repetido uma vez por falha ativa, com a MESMA pergunta
-# (a interpretação é reaproveitada do cenário-base, então os parâmetros
-# resolvidos são idênticos e a comparação é pareada). A falha só vale durante
-# a execução das topologias, depois da interpretação. As classes de folha
-# são as mesmas nas duas topologias, então um patch na classe vale para ambas.
-# Falhas marcadas `apenas="hierarchical"` não têm equivalente na estrela.
+# --- Falha semântica (resiliência) ----------------------------------------
+# A resiliência é medida só com a falha semântica de Huang et al. (2025): um
+# agente de saúde continua respondendo, mas entrega ~20% dos registros com valor
+# errado (scripts/falhas_semanticas.py). Roda em execução própria, com
+# `--experimento-revisao`. As antigas falhas por queda (agente, supervisor ou LLM
+# lançando erro) foram retiradas: mediam degradação graciosa, não o que as
+# referências descrevem, e uma delas nem tinha equivalente na estrela.
 
 _SAUDE_CLASSES = (
     AgenteSINAN, AgenteSIH, AgenteSIM, AgenteSIPNI,
@@ -371,115 +375,78 @@ _SAUDE_CLASSES = (
 )
 
 FAULT_SPECS: dict[str, dict] = {
-    "saude_um": {"descricao": "1º agente de saúde invocado falha (os demais seguem)", "apenas": None},
-    "saude_todos": {"descricao": "todos os agentes de saúde falham", "apenas": None},
-    "orcamento_todos": {"descricao": "todos os agentes orçamentários falham", "apenas": None},
-    "contexto": {"descricao": "agente de contexto orçamentário falha", "apenas": None},
-    "analitico": {"descricao": "agente analítico (correlação/anomalias) falha", "apenas": None},
-    "neo4j_fora": {"descricao": "Neo4j indisponível (consultas lançam erro)", "apenas": None},
-    "llm_fora": {"descricao": "LLM indisponível após a interpretação (generate/generate_stream)", "apenas": None},
-    "supervisor_saude": {"descricao": "SupervisorSaude inteiro falha", "apenas": "hierarchical"},
-    "supervisor_analitico": {"descricao": "SupervisorAnalitico inteiro falha", "apenas": "hierarchical"},
+    "dados_corrompidos": {
+        "descricao": "1 agente de saúde entrega ~20% dos registros com valor errado na 1ª entrega (reenvio limpo)",
+        "apenas": None,
+    },
+    "dados_corrompidos_persistente": {
+        "descricao": "1 agente de saúde entrega ~20% dos registros com valor errado em toda entrega",
+        "apenas": None,
+    },
 }
-
-# Bateria de falhas enxuta: 1 pergunta-base × 3 falhas escolhidas. O catálogo
-# FAULT_SPECS acima tem mais tipos (disponíveis para quem quiser ampliar), mas
-# estes três bastam para a comparação:
-#   saude_todos          falha de folha (controle: as duas topologias degradam igual)
-#   supervisor_analitico falha de ramo (a única que separa as topologias: leva o texto junto)
-#   llm_fora             LLM cai depois da interpretação (fallback determinístico)
-BASES_FALHA = ("obvio_dengue_periodo",)
-FALHAS_ATIVAS = ("saude_todos", "supervisor_analitico", "llm_fora")
+FALHAS_SEMANTICAS = {"dados_corrompidos": False, "dados_corrompidos_persistente": True}  # id -> persistente
 
 _por_id = {s.scenario_id: s for s in SCENARIOS}
-SCENARIOS += [
-    Scenario(
-        f"falha__{fault_id}__{base_id}", "falha_injetada",
-        _por_id[base_id].question, _por_id[base_id].reference_year, fault=fault_id,
-    )
-    for base_id in BASES_FALHA
-    for fault_id in FALHAS_ATIVAS
+
+# Experimento de revisão das entregas (`--experimento-revisao`): 12 perguntas,
+# 4 por amplitude de escopo, cada uma com um agente-alvo diferente que esteja
+# entre os acionados pela pergunta. Escopo é o número de indicadores que a
+# interpretação resolveu na campanha (focal = 1, intermediário = 2 a 4,
+# amplo = todos).
+EXPERIMENTO_REVISAO: list[tuple[str, str, str]] = [
+    ("obvio_mortalidade_periodo", "sim", "focal"),
+    ("obvio_tuberculose_periodo", "sinan", "focal"),
+    ("obvio_covid_periodo", "covid", "focal"),
+    ("obvio_nascidos_vivos_periodo", "sinasc", "focal"),
+    ("multi_sistema_internacao_mortalidade_profissionais", "sih", "intermediario"),
+    ("multi_sistema_doencas_negligenciadas", "sinan", "intermediario"),
+    ("multi_sistema_arboviroses", "sinan", "intermediario"),
+    ("ambiguo_periodo_mortalidade_internacoes", "sim", "intermediario"),
+    ("ambiguo_total_investimento", "sinan", "amplo"),
+    ("ambiguo_total_melhora", "sim", "amplo"),
+    ("pouco_objetiva_sei_la", "sih", "amplo"),
+    ("ambiguo_sistema_saude_geral", "sipni", "amplo"),
 ]
+ESCOPO_EXPERIMENTO = {base_id: escopo for base_id, _, escopo in EXPERIMENTO_REVISAO}
 
 
-def _boom(nome: str):
-    def _raise(*args, **kwargs):
-        raise RuntimeError(f"falha injetada: {nome}")
-    return _raise
+def _cenarios_experimento_revisao(fault_id: str) -> list[Scenario]:
+    return [
+        Scenario(
+            f"falha__{fault_id}__{base_id}", "falha_injetada",
+            _por_id[base_id].question, _por_id[base_id].reference_year,
+            fault=fault_id, alvo_falha=alvo,
+        )
+        for base_id, alvo, _ in EXPERIMENTO_REVISAO
+    ]
 
 
-def _fault_stack(fault: str) -> ExitStack:
-    """ExitStack com os patches da falha `fault`; use como context manager."""
-    stack = ExitStack()
-    if fault == "saude_um":
-        estado = {"falhar": True}
-        for cls in _SAUDE_CLASSES:
-            original = cls.query
+def _fault_stack(fault: str, alvo: str | None = None) -> ExitStack:
+    """ExitStack com a falha semântica `fault`; use como context manager.
 
-            def _wrapper(self, *args, __orig=original, **kwargs):
-                if estado["falhar"]:
-                    estado["falhar"] = False
-                    raise RuntimeError("falha injetada: saude_um")
-                return __orig(self, *args, **kwargs)
-
-            stack.enter_context(mock.patch.object(cls, "query", _wrapper))
-    elif fault == "saude_todos":
-        for cls in _SAUDE_CLASSES:
-            stack.enter_context(mock.patch.object(cls, "query", _boom("saude_todos")))
-    elif fault == "orcamento_todos":
-        stack.enter_context(mock.patch.object(AgenteOrcamentoSubfuncao, "query", _boom("orcamento_todos")))
-    elif fault == "contexto":
-        stack.enter_context(mock.patch.object(AgenteContextoOrcamentario, "analyze_trends", _boom("contexto")))
-    elif fault == "analitico":
-        stack.enter_context(mock.patch.object(AgenteAnalitico, "analisar", _boom("analitico")))
-    elif fault == "neo4j_fora":
-        for nome in ("get_despesas_por_subfuncao", "get_indicadores_por_sistema", "get_variacao_anual"):
-            stack.enter_context(mock.patch.object(Neo4jClient, nome, _boom("neo4j_fora")))
-    elif fault == "llm_fora":
-        stack.enter_context(mock.patch.object(llm_client_module, "generate", _boom("llm_fora")))
-        stack.enter_context(mock.patch.object(llm_client_module, "generate_stream", _boom("llm_fora")))
-    elif fault == "supervisor_saude":
-        stack.enter_context(mock.patch.object(SupervisorSaude, "run", _boom("supervisor_saude")))
-    elif fault == "supervisor_analitico":
-        stack.enter_context(mock.patch.object(SupervisorAnalitico, "run", _boom("supervisor_analitico")))
-    else:
+    O injetor (com o gabarito da corrupção) fica em `stack.injetor`.
+    """
+    if fault not in FALHAS_SEMANTICAS:
         raise ValueError(f"falha desconhecida: {fault}")
+    if not alvo:
+        raise ValueError(f"falha {fault} exige alvo_falha")
+    stack = ExitStack()
+    stack.injetor = InjetorCorrupcao(alvo, persistente=FALHAS_SEMANTICAS[fault])
+    stack.injetor.aplicar(stack, _SAUDE_CLASSES)
     return stack
 
 
 # ---------------------------------------------------------------------------
 
 
-_MODEL_ENV_ORIGINAL = {p.model_env: os.environ.get(p.model_env, "") for p in PROVIDERS.values()}
-
-
-def _set_model_env(spec: ModelSpec) -> None:
-    """Troca o provedor/modelo ativo via env var — lido a cada chamada por
-    `core.llm_client.get_provider()`/`resolve_model()`, então basta setar
-    antes de cada `.parse()`/`.run()`; os agentes chamam
-    `llm_client.generate()` sem passar provider/model explícito, então o
-    env var é o único lever."""
-    os.environ["LLM_PROVIDER"] = spec.provider
-    provider_cfg = PROVIDERS[spec.provider]
-    if spec.model:
-        os.environ[provider_cfg.model_env] = spec.model
-    elif _MODEL_ENV_ORIGINAL.get(provider_cfg.model_env):
-        # Sem override no ModelSpec: usa o modelo do .env, como a UI faz.
-        os.environ[provider_cfg.model_env] = _MODEL_ENV_ORIGINAL[provider_cfg.model_env]
-    else:
-        os.environ.pop(provider_cfg.model_env, None)
-
-
-def _run_intent(
-    scenario: Scenario, min_year: int | None, max_year: int | None,
-    neo4j_client: Neo4jClient | None,
-) -> dict:
+def _run_intent(scenario: Scenario, min_year: int | None, max_year: int | None) -> dict:
     """Interpretação igual à do chat (`api/chat_websocket.py`): mesmo agente,
-    mesmo `TokenBucket` ao redor de `parse()`."""
+    mesmo `TokenBucket` ao redor de `parse()`, sem memória episódica (sem
+    Neo4jClient), para que nenhum cenário dependa do histórico do banco."""
     interpreter = AgenteInterpretacaoIntencao(
         agent_id=f"batch-intent-{uuid.uuid4().hex[:8]}",
         min_year=min_year, max_year=max_year,
-        neo4j_client=neo4j_client,
+        neo4j_client=None,
     )
     bucket = TokenBucket()
     inicio = time.time()
@@ -549,13 +516,14 @@ def _run_analysis_like_ui(
     """Dispara a análise pelo caminho do chat (`run_chat_analysis` →
     `dispatch_analysis` → threads concorrentes de estrela e hierárquica) e
     calcula as métricas com as mesmas funções do handler `api/websocket.py`:
-    `compute_all_quality_metrics`, RAGAS (`_run_ragas_evaluation`) e o veredito
-    (`_decide_winner`, via `generate_comparative_report`)."""
+    `compute_all_quality_metrics` e RAGAS (`_run_ragas_evaluation`)."""
     resultado = intent_run["result"]
+    injetor = None
     with ExitStack() as stack:
         stack.enter_context(mock.patch("api.dispatch.get_neo4j_client", return_value=_SemGravacao()))
         if fault:
-            stack.enter_context(_fault_stack(fault))
+            falha = stack.enter_context(_fault_stack(fault, scenario.alvo_falha))
+            injetor = falha.injetor
         analysis_id, _confirmacao = run_chat_analysis(
             params=resultado.params,
             use_llm=True,
@@ -574,7 +542,10 @@ def _run_analysis_like_ui(
     resultados = active_results.get(analysis_id, {})
     star_result = resultados.get("star", {})
     hier_result = resultados.get("hierarchical", {})
-    saida = {"analysis_id": analysis_id, "erros": erros, "relogio": relogio, "resultados": resultados}
+    saida = {
+        "analysis_id": analysis_id, "erros": erros, "relogio": relogio, "resultados": resultados,
+        "gabarito": injetor.gabarito(analysis_id) if injetor else None,
+    }
     try:
         if not (star_result and hier_result):
             # A UI também não calcula métricas quando falta o resultado de uma topologia.
@@ -594,28 +565,20 @@ def _run_analysis_like_ui(
         )
         ragas = None
         if not args.no_ragas:
+            # `_run_ragas_evaluation` grava o custo do juiz em
+            # `quality_metrics["cost"]["ragas"]` da análise, como no chat.
+            active_results.setdefault(analysis_id, resultados)["quality_metrics"] = quality
             _texto_ragas, ragas = asyncio.run(_run_ragas_evaluation(
                 analysis_id=analysis_id, results=resultados,
                 star_result=star_result, hier_result=hier_result,
             ))
-        star_total = relogio["star"] if relogio["star"] > 0 else quality["efficiency"]["star"]["latency_breakdown"]["total_ms"]
-        hier_total = relogio["hierarchical"] if relogio["hierarchical"] > 0 else quality["efficiency"]["hierarchical"]["latency_breakdown"]["total_ms"]
-        vencedor, criterio = quality_metrics._decide_winner(quality, ragas, star_total, hier_total)
-        relatorio = quality_metrics.generate_comparative_report(
-            quality=quality,
-            star_agent_metrics=metricas["star"],
-            hier_agent_metrics=metricas["hierarchical"],
-            data_coverage=star_result.get("data_coverage"),
-            star_wall_clock_ms=relogio["star"],
-            hier_wall_clock_ms=relogio["hierarchical"],
-            star_result=star_result,
-            hier_result=hier_result,
-            ragas=ragas,
-        )
-        saida.update({
-            "quality": quality, "ragas": ragas, "vencedor": vencedor,
-            "criterio": criterio, "relatorio": relatorio,
-        })
+        # Achados de cada topologia, para auditar divergências sem repetir a análise
+        # (a consistência determinística só guarda as contagens).
+        achados = {
+            topo: {"correlacoes": res.get("correlacoes", []), "anomalias": res.get("anomalias", [])}
+            for topo, res in (("star", star_result), ("hierarchical", hier_result))
+        }
+        saida.update({"quality": quality, "ragas": ragas, "achados": achados})
         return saida
     finally:
         active_queues.pop(analysis_id, None)
@@ -623,10 +586,85 @@ def _run_analysis_like_ui(
         active_results.pop(analysis_id, None)
 
 
+def _analisar_limpo(dados_cruzados: list[dict]) -> dict:
+    """Achados que os dados limpos produziriam (mesmo agente das topologias)."""
+    return AgenteAnalitico(f"batch-gabarito-{uuid.uuid4().hex[:8]}").analisar(dados_cruzados)
+
+
+def _campos_da_revisao(resultado: dict, gabarito: dict | None, com_gabarito: bool) -> dict:
+    """Resumo da revisão das entregas e, nas falhas semânticas, a medida
+    contra o gabarito da corrupção (scripts/falhas_semanticas.py)."""
+    rev = resultado.get("revisao") or {}
+    campos = {
+        "revisao_chamadas": rev.get("chamadas", 0),
+        "revisao_registros": rev.get("registros_revisados", 0),
+        "revisao_sinalizados": len(rev.get("sinalizados") or []),
+        "revisao_confirmados": rev.get("confirmados", 0),
+        "revisao_corrigidos": rev.get("corrigidos", 0),
+        "revisao_descartados": rev.get("descartados", 0),
+        "revisao_nao_verificados": rev.get("nao_verificados", 0),
+        "revisao_reenvios": rev.get("reenvios", 0),
+        "revisao_falhou": 1 if rev.get("falhou") else 0,
+    }
+    if com_gabarito:
+        campos.update(avaliar_contra_gabarito(
+            resultado, gabarito,
+            analisar=_analisar_limpo,
+            cruzar=cross_domain_data,
+            consistencia=quality_metrics.compute_deterministic_consistency,
+        ))
+    return campos
+
+
+def _campos_do_plano(resultado: dict) -> dict:
+    """Resumo do planejamento por LLM (agents/planejamento.py) e da redação.
+
+    A estrela tem um nó que planeja; a hierárquica, o coordenador e os
+    supervisores de saúde e de orçamento. A origem lista cada nó."""
+    planos = resultado.get("plano") or {}
+    redacao = resultado.get("redacao") or {}
+    return {
+        "plano_nos": len(planos),
+        "plano_origem": ", ".join(f"{no}:{p.get('origem')}" for no, p in planos.items()),
+        "plano_acrescimos": sum(len(p.get("acrescimos") or []) for p in planos.values()),
+        "plano_retiradas": sum(len(p.get("retiradas") or []) for p in planos.values()),
+        "redacao_modo": redacao.get("modo"),
+        "redacao_ramos": len(redacao.get("ramos") or []),
+        "redacao_falhas": len(redacao.get("falhas") or []),
+    }
+
+
+def _payload_da_analise(scenario: Scenario, analise: dict, juiz: str | None) -> dict:
+    """Payload completo de uma análise, para auditar depois sem repeti-la."""
+    def por_topologia(campo: str) -> dict:
+        return {
+            topo: (analise["resultados"].get(topo) or {}).get(campo)
+            for topo in ("star", "hierarchical")
+        }
+
+    return {
+        "model": MODELO_ANALISE, "ragas_juiz": juiz,
+        "scenario": scenario.scenario_id, "fault": scenario.fault,
+        "quality": analise["quality"], "ragas": analise["ragas"],
+        "achados": analise["achados"],
+        "revisao": por_topologia("revisao"),
+        # Texto final de cada topologia: sem ele não dá para conferir uma nota
+        # do RAGAS nem citar um laudo depois da campanha.
+        "texto_analise": por_topologia("texto_analise"),
+        # Decisões de planejamento e redação de cada topologia, para rastrear
+        # até a decisão qualquer diferença de dados entre elas.
+        "plano": por_topologia("plano"),
+        "redacao": por_topologia("redacao"),
+        "textos_parciais": por_topologia("textos_parciais"),
+        "gabarito": analise.get("gabarito"),
+    }
+
+
 def _linhas_da_analise(base_row: dict, analise: dict) -> list[dict]:
     """Uma linha por topologia, só com campos que o código do sistema produz."""
     rows = []
     quality, ragas, resultados = analise.get("quality"), analise.get("ragas"), analise["resultados"]
+    gabaritos = analise.get("gabarito")
     for topo in ("star", "hierarchical"):
         row = dict(base_row)
         row["topology"] = topo
@@ -641,11 +679,17 @@ def _linhas_da_analise(base_row: dict, analise: dict) -> list[dict]:
         comp = quality["quality"][topo]["completeness"]
         r1, cost = quality["resilience"][topo], quality["cost"][topo]
         com, out = quality["communication"][topo], quality["outcome"][topo]
-        texto = (resultados.get(topo) or {}).get("texto_analise", "") or ""
+        custo_juiz = ((quality.get("cost") or {}).get("ragas") or {}).get(topo) or {}
+        resultado = resultados.get(topo) or {}
+        texto = resultado.get("texto_analise", "") or ""
+        fid = quality["quality"][topo].get("numeric_fidelity") or {}
         row.update({
             "wall_clock_ms": round(analise["relogio"][topo], 1),
+            "tempo_total_ms": resultado.get("tempo_total_ms"),
             "overhead_ms": overhead["supervisor_time_ms"],
             "overhead_percent": overhead["overhead_percent"],
+            "overhead_deliberacao_ms": overhead.get("deliberation_time_ms"),
+            "overhead_estrutural_ms": overhead.get("structural_time_ms"),
             "fase_dominio_ms": lat["dominio"]["time_ms"],
             "fase_analitico_ms": lat["analitico"]["time_ms"],
             "fase_contexto_ms": lat["contexto"]["time_ms"],
@@ -657,6 +701,12 @@ def _linhas_da_analise(base_row: dict, analise: dict) -> list[dict]:
             "ragas_faithfulness": _score_ragas(ragas, topo, "faithfulness"),
             "ragas_answer_relevancy": _score_ragas(ragas, topo, "answer_relevancy"),
             "ragas_context_relevance": _score_ragas(ragas, topo, "context_relevance"),
+            "ragas_prompt_tokens": custo_juiz.get("prompt_tokens"),
+            "ragas_completion_tokens": custo_juiz.get("completion_tokens"),
+            "ragas_total_tokens": custo_juiz.get("total_tokens"),
+            "fidelidade_numerica": fid.get("score"),
+            "numeros_texto": fid.get("numeros_no_texto", 0),
+            "numeros_nao_verificados": len(fid.get("nao_verificados") or []),
             "r1_score": r1["score"],
             "r1_completed": r1["completed"],
             "texto_gerado": 1 if r1["components"].get("texto_analise") else 0,
@@ -666,20 +716,31 @@ def _linhas_da_analise(base_row: dict, analise: dict) -> list[dict]:
             "llm_call_count": cost["call_count"],
             "agent_invocations": com["agent_invocations"],
             "message_count": com["message_count"],
+            "mensagens_dados": com.get("mensagens_dados"),
+            "mensagens_texto": com.get("mensagens_texto"),
+            "caracteres_texto": com.get("caracteres_texto"),
+            "ferramentas_acionadas": com.get("ferramentas_acionadas"),
             "payload_records": com["payload_records"],
             "sucesso": 1 if out["success"] else 0,
             "dentro_do_orcamento_de_tempo": 1 if out["within_time_budget"] else 0,
             "consistencia_identica": 1 if quality["quality"]["deterministic_consistency"]["all_identical"] else 0,
-            "vencedor": analise["vencedor"],
-            "criterio_veredito": analise["criterio"],
             "texto_analise_len": len(texto),
         })
+        row.update(_campos_do_plano(resultado))
+        row.update(_campos_da_revisao(
+            resultados.get(topo) or {},
+            (gabaritos or {}).get(topo),
+            com_gabarito=gabaritos is not None,
+        ))
         rows.append(row)
     return rows
 
 
 def _select_scenarios(args: argparse.Namespace) -> list[Scenario]:
-    scenarios = SCENARIOS
+    if args.experimento_revisao:
+        scenarios = _cenarios_experimento_revisao(args.experimento_revisao)
+    else:
+        scenarios = SCENARIOS
     if args.categories:
         wanted = {c.strip() for c in args.categories.split(",") if c.strip()}
         scenarios = [s for s in scenarios if s.category in wanted]
@@ -702,15 +763,16 @@ def main() -> int:
              "útil para conferir quantos cenários passam antes da bateria completa",
     )
     parser.add_argument("--use-self-check", action="store_true", help="liga a verificação pós-síntese (Etapa 4)")
-    parser.add_argument(
-        "--no-episodic", action="store_true",
-        help="não passa o Neo4jClient à interpretação (a UI passa, habilitando a memória episódica "
-             "de análises anteriores); use para cenários independentes do histórico do banco.",
-    )
     parser.add_argument("--timeout", type=float, default=900, help="segundos máximos por análise (default 900)")
     parser.add_argument("--categories", default=None, help="filtra por categoria(s), separadas por vírgula")
     parser.add_argument("--scenario-ids", default=None, help="filtra por scenario_id(s), separados por vírgula")
     parser.add_argument("--limit", type=int, default=None, help="roda só os N primeiros cenários (após filtros)")
+    parser.add_argument(
+        "--experimento-revisao", nargs="?", const="dados_corrompidos", default=None,
+        choices=sorted(FALHAS_SEMANTICAS),
+        help="roda só os 12 cenários do experimento de revisão das entregas, com a falha semântica "
+             "indicada (default: dados_corrompidos, corrupção só na 1ª entrega)",
+    )
     parser.add_argument(
         "--out", default=None,
         help="arquivo de saída: .xlsx (relatório com tabelas e gráficos; grava também um .jsonl "
@@ -728,18 +790,13 @@ def main() -> int:
     min_year, max_year = year_range if year_range else (None, None)
     print(f"Intervalo de dados disponível: {min_year}-{max_year}")
 
-    modelos = []
-    for spec in MODELS:
-        if has_api_key(PROVIDERS[spec.provider]):
-            modelos.append(spec)
-        else:
-            print(f"AVISO: {PROVIDERS[spec.provider].api_key_env} ausente — modelo '{spec.label}' ignorado.")
-    if not modelos:
-        print("Nenhum modelo com chave de API configurada.")
+    if not has_api_key():
+        print("OPENAI_API_KEY ausente.")
         return 1
-    print(f"Rodando {len(scenarios)} cenário(s) × {len(modelos)} modelo(s); estrela e hierárquica concorrentes, como na UI\n")
+    juiz = None if args.no_ragas else ragas_metrics.MODELO_JUIZ
+    print(f"Modelos fixos: análises={MODELO_ANALISE}, juiz RAGAS={juiz or 'desligado'}")
+    print(f"Rodando {len(scenarios)} cenário(s); estrela e hierárquica concorrentes, como na UI\n")
 
-    neo4j_client = Neo4jClient()  # só para a memória episódica da interpretação (leitura)
     rows: list[dict] = []
     jsonl_path = payloads_path = None
     if args.out:
@@ -755,98 +812,92 @@ def main() -> int:
             with open(jsonl_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    for model_spec in modelos:
-        _set_model_env(model_spec)
-        from core.llm_client import get_provider, resolve_model
-        print(f"Modelo efetivo: provedor={get_provider().name} modelo={resolve_model()}")
-        intent_cache: dict[tuple, dict] = {}
-        for scenario in scenarios:
-            print(f"=== {model_spec.label} | {scenario.scenario_id} ({scenario.category}) ===")
-            base_row: dict = {
-                "model": model_spec.label,
-                "scenario": scenario.scenario_id,
-                "category": scenario.category,
-                "question_len": len(scenario.question),
-                "question": scenario.question[:500],
-                "fault": scenario.fault or "nenhuma",
-                "fault_base": scenario.scenario_id in BASES_FALHA,
-            }
+    intent_cache: dict[tuple, dict] = {}
+    for scenario in scenarios:
+        print(f"=== {scenario.scenario_id} ({scenario.category}) ===")
+        base_row: dict = {
+            "model": MODELO_ANALISE,
+            "ragas_juiz": juiz,
+            "scenario": scenario.scenario_id,
+            "category": scenario.category,
+            "question_len": len(scenario.question),
+            "question": scenario.question[:500],
+            "reference_year": scenario.reference_year,
+            "fault": scenario.fault or "nenhuma",
+        }
+        if scenario.alvo_falha:
+            base_id = scenario.scenario_id.rsplit("__", 1)[-1]
+            base_row.update({"alvo_falha": scenario.alvo_falha, "escopo": ESCOPO_EXPERIMENTO.get(base_id)})
 
-            if len(scenario.question) > MAX_MESSAGE_LENGTH:
-                # A UI recusa antes de qualquer chamada ao LLM (api/chat_websocket.py).
-                base_row.update({
-                    "topology": "-", "intent_success": False, "intent_missing": "rejeitada_tamanho_ui",
-                    "clarification_message": f"Mensagem muito longa (máximo {MAX_MESSAGE_LENGTH} caracteres).",
-                })
-                registrar(base_row)
-                continue
-
-            cache_key = (scenario.question, scenario.reference_year)
-            intent_reused = cache_key in intent_cache
-            if intent_reused:
-                intent_run = intent_cache[cache_key]
-            else:
-                intent_run = _run_intent(
-                    scenario, min_year, max_year,
-                    None if args.no_episodic else neo4j_client,
-                )
-                intent_cache[cache_key] = intent_run
-            intent_result = intent_run["result"]
-            intent_cost = quality_metrics.compute_token_cost(intent_run["token_usage"])
+        if len(scenario.question) > MAX_MESSAGE_LENGTH:
+            # A UI recusa antes de qualquer chamada ao LLM (api/chat_websocket.py).
             base_row.update({
-                "intent_success": intent_result.success,
-                "intent_missing": ",".join(intent_result.missing),
-                "intent_interpreted_via": intent_result.interpreted_via,
-                "intent_elapsed_ms": round(intent_run["elapsed_ms"], 1),
-                "intent_tokens": intent_cost["total_tokens"],
-                "intent_reused": intent_reused,
+                "topology": "-", "intent_success": False, "intent_missing": "rejeitada_tamanho_ui",
+                "clarification_message": f"Mensagem muito longa (máximo {MAX_MESSAGE_LENGTH} caracteres).",
             })
+            registrar(base_row)
+            continue
 
-            if not intent_result.success or intent_result.params is None:
-                base_row["topology"] = "-"
-                base_row["clarification_message"] = intent_result.clarification_message[:200]
-                registrar(base_row)
-                continue
+        cache_key = (scenario.question, scenario.reference_year)
+        intent_reused = cache_key in intent_cache
+        if intent_reused:
+            intent_run = intent_cache[cache_key]
+        else:
+            intent_run = _run_intent(scenario, min_year, max_year)
+            intent_cache[cache_key] = intent_run
+        intent_result = intent_run["result"]
+        intent_cost = quality_metrics.compute_token_cost(intent_run["token_usage"])
+        base_row.update({
+            "intent_success": intent_result.success,
+            "intent_missing": ",".join(intent_result.missing),
+            "intent_interpreted_via": intent_result.interpreted_via,
+            "intent_elapsed_ms": round(intent_run["elapsed_ms"], 1),
+            "intent_tokens": intent_cost["total_tokens"],
+            "intent_reused": intent_reused,
+        })
 
-            p = intent_result.params
-            base_row.update({
-                "health_params_inferred": p.health_params_inferred,
-                "date_range_inferred": p.date_range_inferred,
-                "resolved_date_from": p.date_from,
-                "resolved_date_to": p.date_to,
-                "resolved_health_params": ",".join(p.health_params),
-                "resolved_health_params_count": len(p.health_params),
-            })
-            if args.intent_only:
-                base_row["topology"] = "-"
-                registrar(base_row)
-                continue
+        if not intent_result.success or intent_result.params is None:
+            base_row["topology"] = "-"
+            base_row["clarification_message"] = intent_result.clarification_message[:200]
+            registrar(base_row)
+            continue
 
-            try:
-                analise = _run_analysis_like_ui(scenario, intent_run, args, scenario.fault)
-            except Exception as exc:  # noqa: BLE001 — um cenário que quebra não derruba a bateria
-                for topo in ("star", "hierarchical"):
-                    registrar({**base_row, "topology": topo,
-                               "run_error": f"{type(exc).__name__}: {exc}"[:300],
-                               "r1_score": 0.0, "r1_completed": 0, "texto_gerado": 0})
-                continue
+        p = intent_result.params
+        base_row.update({
+            "health_params_inferred": p.health_params_inferred,
+            "date_range_inferred": p.date_range_inferred,
+            "resolved_date_from": p.date_from,
+            "resolved_date_to": p.date_to,
+            "resolved_health_params": ",".join(p.health_params),
+            "resolved_health_params_count": len(p.health_params),
+        })
+        if args.intent_only:
+            base_row["topology"] = "-"
+            registrar(base_row)
+            continue
 
-            if payloads_path and analise.get("quality") is not None:
-                with open(payloads_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps({
-                        "model": model_spec.label, "scenario": scenario.scenario_id, "fault": scenario.fault,
-                        "quality": analise["quality"], "ragas": analise["ragas"],
-                        "vencedor": analise["vencedor"], "criterio": analise["criterio"],
-                        "relatorio": analise["relatorio"],
-                    }, ensure_ascii=False, default=str) + "\n")
-            for row in _linhas_da_analise(base_row, analise):
-                registrar(row)
+        try:
+            analise = _run_analysis_like_ui(scenario, intent_run, args, scenario.fault)
+        except Exception as exc:  # noqa: BLE001 — um cenário que quebra não derruba a bateria
+            for topo in ("star", "hierarchical"):
+                registrar({**base_row, "topology": topo,
+                           "run_error": f"{type(exc).__name__}: {exc}"[:300],
+                           "r1_score": 0.0, "r1_completed": 0, "texto_gerado": 0})
+            continue
+
+        if payloads_path and analise.get("quality") is not None:
+            with open(payloads_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(
+                    _payload_da_analise(scenario, analise, juiz), ensure_ascii=False, default=str,
+                ) + "\n")
+        for row in _linhas_da_analise(base_row, analise):
+            registrar(row)
 
     if args.out:
         if args.out.lower().endswith(".xlsx"):
             batch_report.write_xlsx(rows, args.out, meta={
-                "models": [m.label for m in modelos],
-                "faults": [{"id": k, **FAULT_SPECS[k]} for k in FALHAS_ATIVAS],
+                "models": [MODELO_ANALISE],
+                "faults": [{"id": k, **FAULT_SPECS[k]} for k in sorted({s.fault for s in scenarios if s.fault})],
                 "scenarios": [
                     {"id": s.scenario_id, "category": s.category, "question": s.question, "len": len(s.question)}
                     for s in scenarios

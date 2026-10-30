@@ -40,7 +40,7 @@ Duas conexões WebSocket distintas cobrem o ciclo: `/ws/chat/{session_id}` (turn
 
 `chat_websocket.py` recebe `{"type": "user_message", "payload": {"text"}}`, valida tamanho e uma rodada por vez por sessão, e delega a interpretação a `AgenteInterpretacaoIntencao.parse(texto)` — único ponto do sistema que decide se uma mensagem está dentro do escopo (dados de saúde/orçamento de Sorocaba) antes de qualquer outro processamento acontecer. Se fora do escopo, o usuário recebe uma mensagem de esclarecimento e nenhuma análise é disparada. O mecanismo de classificação, extração de parâmetros e chamada ao LLM está detalhado em [agente-coala-e-llm.md](agente-coala-e-llm.md#exemplo-completo-agenteinterpretacaointencao).
 
-Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_analysis()` chama `dispatch_analysis()` (mesma função usada pelo endpoint REST legado `POST /api/analysis`, garantindo que os dois caminhos de entrada produzam análises idênticas em estrutura).
+Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_analysis()` chama `dispatch_analysis()` — hoje o **único** caminho de disparo de análise; o antigo endpoint REST `POST /api/analysis` (formulário estruturado) foi removido.
 
 ## 3. `dispatch_analysis()` — ponto de entrada compartilhado
 
@@ -49,7 +49,7 @@ Quando o resultado é bem-sucedido (`result.success`), `chat_runner.run_chat_ana
 def dispatch_analysis(date_from, date_to, health_params, use_llm,
                        source_question=None, interpreted_via=None, intent_summary=None) -> str:
     analysis_id = str(uuid.uuid4())
-    # persiste Analise + relaciona DespesaSIOPS/IndicadorDataSUS do período no Neo4j
+    # persiste Analise no Neo4j (dados consultados via DespesaAnual/IndicadorSaude pelos agentes)
     ws_queue = Queue()
     active_queues[analysis_id] = ws_queue
     params = {date_from, date_to, health_params, use_llm, intent_summary}
@@ -89,16 +89,21 @@ Enviado ao cliente como um evento `quality_metrics`. Internamente calcula E1 (ov
 
 ### Avaliação RAGAS (opcional, pós-relatório)
 
-O servidor envia um evento `ragas` (sinaliza ao frontend que uma avaliação adicional está em andamento) e chama `evaluate_architecture()` uma vez para cada arquitetura — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e precisão do contexto entregue ao sintetizador. O juiz roda num provedor fixo (`RAGAS_PROVIDER`, default OpenAI), independente do `LLM_PROVIDER` do pipeline, para que os scores sejam comparáveis entre execuções. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` e transmitido em chunks pelos eventos `ragas`/`ragas_done`, do mesmo jeito que o relatório comparativo. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
+O servidor envia um evento `ragas` (sinaliza ao frontend que uma avaliação adicional está em andamento) e chama `evaluate_architecture()` uma vez para cada arquitetura — essa é a única etapa do ciclo completo em que o próprio **avaliador** usa um LLM (papel de "juiz", não de agente do pipeline). São três métricas da biblioteca [RAGAS](https://github.com/explodinggradients/ragas) (Es et al., 2024): fidelidade do texto aos dados, relevância da resposta em relação à pergunta e precisão do contexto entregue ao sintetizador. O juiz é o `gpt-5-mini`, fixo no código e diferente do `gpt-5.6-luna` que escreve os textos: assim os scores são comparáveis entre execuções e o juiz não avalia o próprio texto. O resultado é anexado a `quality_metrics["quality"][arch]["ragas"]` e transmitido em chunks pelos eventos `ragas`/`ragas_done`, do mesmo jeito que o relatório comparativo. Detalhamento completo em [metricas-de-avaliacao.md](metricas-de-avaliacao.md#fidelidade-e-relevância--a-biblioteca-ragas).
 
 ## Onde o LLM entra, em ordem cronológica de uma análise via chat
 
 | # | Etapa | Componente | Obrigatório? |
 |---|-------|------------|---------------|
-| 1 | Classificação de escopo + extração de parâmetros | `AgenteInterpretacaoIntencao` | Sempre (é a única via de interpretação — sem fallback regex) |
-| 2 | Planejamento de consulta (busca) | Agentes de domínio (`planejar_consulta`) | Só se `USE_LLM_QUERY_PLANNING=true` **e** a base tiver crescido além do mapeamento estático conhecido — fast-path determinístico por padrão |
+| 1 | Classificação de escopo (3 vias) + extração de parâmetros | `AgenteInterpretacaoIntencao` | Sempre (é a única via de interpretação — sem fallback regex) |
+| 2 | Arbitragem de dimensão de consulta | Agentes de saúde/orçamento com dimensões válidas | Só se `use_llm=True` na análise (fallback: maior score determinístico) |
 | 3 | Escolha do ângulo de ênfase | `AgentePriorizacaoAnalitica` | Só se `use_llm=True` na análise |
 | 4 | Geração do texto de análise | `TextSynthesizer` | Só se `use_llm=True`; senão usa `generate_fallback()` determinístico |
-| 5 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (exige a chave de `RAGAS_PROVIDER`; sem ela reporta indisponível) |
+| 5 | Self-check pós-síntese (Etapa 4, opcional) | `core/claim_verifier.py` (3 chamadas) | Só se `use_self_check=True` **e** `use_llm=True` |
+| 6 | Avaliação da resposta (juiz) | `core/ragas_metrics.py` (biblioteca RAGAS) | Sempre (juiz fixo `gpt-5-mini`; sem `OPENAI_API_KEY` reporta indisponível) |
 
-Etapas 1 e 5 rodam uma única vez por análise (a interpretação de intenção acontece antes de qualquer topologia começar); etapas 2–4 rodam **duas vezes** — uma para a execução estrela, outra para a hierárquica — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.
+Também condicional, process-wide e independente de `use_llm` da análise: o planejamento de consulta fast-path/cache/LLM single-shot (`agents/domain/query_planning.py::plan_query`), ativado só por `USE_LLM_QUERY_PLANNING=true` — mecanismo diferente da arbitragem de dimensão (etapa 2), preparado para quando o mapeamento sistema→subtipo deixar de ser trivial.
+
+Na hierárquica, nenhum supervisor chama o LLM por conta própria — é uma árvore estrita, o `CoordenadorGeral` só repassa dados já coletados (retorno de um supervisor → argumento do próximo), sem gerar nem transportar resumo textual algum entre eles.
+
+Etapas 1 e 6 rodam uma única vez por análise (a interpretação de intenção acontece antes de qualquer topologia começar); etapas 2–5 rodam **duas vezes** — uma para a execução estrela, outra para a hierárquica — de forma independente e paralela, o que é justamente o que permite comparar as duas arquiteturas sobre a mesma entrada.

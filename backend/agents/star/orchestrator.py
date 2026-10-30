@@ -15,18 +15,23 @@ executada pelo ciclo CoALA da classe base):
      (ativação condicional conforme health_params)
   2. Fase de Orçamento: agentes AgenteOrcamentoSubfuncao (até 7,
      ativação condicional conforme health_params — ver _SUBFUNCAO_TOKENS)
+  2b. Revisão das entregas: o orquestrador, que recebe as entregas de todos
+     os agentes de dados, revisa saúde e orçamento numa única chamada ao LLM
+     (ver agents/revisao_entregas.py)
   3. Cruzamento de dados: despesas × indicadores por subfunção
   4. Detecção de lacunas de dados
   5. Fase Analítica: contexto orçamentário, correlação, anomalias, síntese
   6. Persistência de métricas
 
-Nota arquitetural (CoALA): diferente dos agentes-folha (domínio,
-analíticos, contexto), aqui `propose_actions()` não arbitra entre
-candidatos concorrentes — a ordem das macro-ações é imposta por
-dependência de dados (cruzamento só pode ocorrer depois do domínio,
-síntese só depois de correlação/anomalias/contexto). `evaluate_and_select`
-portanto colapsa num passthrough, por decisão intencional documentada
-aqui, não por omissão. O `run()` público delega inteiramente ao ciclo
+Nota arquitetural (CoALA): a ordem das macro-ações é imposta por
+dependência de dados (cruzamento só depois da coleta, síntese só depois
+de correlação, anomalias e contexto), mas a escolha de quais agentes de
+dados acionar é uma decisão do orquestrador. `propose_actions()` deriva a
+proposta determinística a partir do mapeamento entre indicadores e
+agentes, e `evaluate_and_select()` a submete ao LLM numa única chamada,
+que pode retirar agentes da proposta ou acrescentar agentes do catálogo,
+com justificativa (`agents/planejamento.py`). É o planejamento
+centralizado da estrela. O `run()` público delega inteiramente ao ciclo
 `run_coala_cycle()` da base — cada etapa do pipeline hoje vive como um
 método `_act_*` registrado em `procedural_memory`, o que preserva
 exatamente a mesma degradação graciosa, coleta de métricas por agente e
@@ -45,6 +50,7 @@ import uuid
 from queue import Queue
 from typing import Any, TYPE_CHECKING
 
+from agents import planejamento, revisao_entregas
 from agents.base import ActionFailure, AgenteCoALA
 from agents.data_crossing import cross_domain_data, deduplicate_despesas, detect_data_gaps
 from agents.domain.agente_covid import AgenteCOVID
@@ -62,6 +68,8 @@ from agents.analytical.sintetizador import TextSynthesizer
 from agents.context.contexto_orcamentario import AgenteContextoOrcamentario
 from core import claim_verifier
 from core.metrics import MetricsCollector
+from core.contextos_avaliacao import linhas_series
+from core.quality_metrics import papel_de
 from core.streaming_adapter import StreamingAdapter
 
 if TYPE_CHECKING:
@@ -234,6 +242,7 @@ class OrquestradorEstrela(AgenteCoALA):
         self.procedural_memory = {
             "consultar_saude": [self._act_consultar_saude],
             "consultar_orcamento": [self._act_consultar_orcamento],
+            "revisar_entregas": [self._act_revisar_entregas],
             "cruzar_dados": [self._act_cruzar_dados],
             "detectar_gaps": [self._act_detectar_gaps],
             "analisar_contexto": [self._act_analisar_contexto],
@@ -298,6 +307,10 @@ class OrquestradorEstrela(AgenteCoALA):
                 "goal": "consultar_orcamento", "subfuncao_codigo": codigo, "subfuncao_nome": nome
             })
 
+        # Revisão sempre que houver agente de dados a consultar; independe de
+        # use_llm (se o LLM não responder, os dados seguem como chegaram).
+        if actions:
+            actions.append({"goal": "revisar_entregas"})
         actions.append({"goal": "cruzar_dados"})
         actions.append({"goal": "detectar_gaps"})
         actions.append({"goal": "analisar_contexto"})
@@ -311,6 +324,60 @@ class OrquestradorEstrela(AgenteCoALA):
             actions.append({"goal": "verificar_afirmacoes"})
         actions.append({"goal": "persistir_metricas"})
         return actions
+
+    def evaluate_and_select(self, candidates: list[dict]) -> list[dict]:
+        """Planeja a coleta com o LLM e devolve as ações a executar.
+
+        Os candidatos de coleta (`consultar_saude` e `consultar_orcamento`)
+        são a proposta. O LLM decide sobre o catálogo completo de agentes de
+        dados, numa única chamada (`planejamento.planejar`). A revisão das
+        entregas entra depois da coleta sempre que algum agente de dados
+        ficar no plano. As demais ações seguem na ordem proposta.
+        """
+        coleta = {"consultar_saude", "consultar_orcamento"}
+        proposta = [
+            f"saude:{c['agent_key']}" if c["goal"] == "consultar_saude"
+            else f"orcamento:{c['subfuncao_codigo']}"
+            for c in candidates if c["goal"] in coleta
+        ]
+        catalogo = planejamento.catalogo_saude(
+            _SAUDE_AGENT_KEY_ORDER, self.semantic_memory["indicador_to_agent"]
+        ) + planejamento.catalogo_orcamento(_ORCAMENTO_SUBFUNCOES)
+        plano = self._deliberar(
+            planejamento.planejar,
+            agent_id=self.agent_id,
+            papel="o orquestrador central, que aciona diretamente todos os agentes de dados",
+            objetivo=planejamento.objetivo_da_analise(
+                self.working_memory.get("intent_summary"),
+                self.working_memory.get("health_params"),
+                self.working_memory.get("date_from"),
+                self.working_memory.get("date_to"),
+            ),
+            candidatos=catalogo,
+            proposta=proposta,
+            use_llm=self.working_memory.get("use_llm", True),
+            observacoes=planejamento.OBS_CRUZAMENTO,
+        )
+        self.working_memory["plano"] = {"orquestrador": plano}
+
+        nomes = dict(_ORCAMENTO_SUBFUNCOES)
+        selecionadas: list[dict] = []
+        for escolhido in plano["escolhidos"]:
+            tipo, chave = escolhido.split(":", 1)
+            if tipo == "saude":
+                selecionadas.append({"goal": "consultar_saude", "agent_key": chave})
+            else:
+                codigo = int(chave)
+                selecionadas.append({
+                    "goal": "consultar_orcamento", "subfuncao_codigo": codigo,
+                    "subfuncao_nome": nomes[codigo],
+                })
+        if selecionadas:
+            selecionadas.append({"goal": "revisar_entregas"})
+        selecionadas.extend(
+            c for c in candidates if c["goal"] not in coleta | {"revisar_entregas"}
+        )
+        return [dict(c, status="pending") for c in selecionadas]
 
     # -- Ações (grounding/reasoning) -----------------------------------------
 
@@ -357,7 +424,11 @@ class OrquestradorEstrela(AgenteCoALA):
         mc.start()
         try:
             log_start = len(self.neo4j_client.query_log)
-            result = agent.query(analysis_id, date_from, date_to, **query_kwargs)
+            result = self._delegar(
+                agent_type, agent_id_str,
+                lambda: agent.query(analysis_id, date_from, date_to, **query_kwargs),
+                pedido={"periodo": [date_from, date_to], "intencao": intent_summary},
+            )
             mc.stop()
             queries = self.neo4j_client.query_log[log_start:]
             self.working_memory.setdefault("agent_queries", []).append({
@@ -367,6 +438,9 @@ class OrquestradorEstrela(AgenteCoALA):
             })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
             self.working_memory.setdefault("indicadores", []).extend(result.get("indicadores", []))
+            revisao_entregas.registrar_entrega(
+                self.working_memory, agent_type, agent, result, campos=("indicadores",)
+            )
             logger.info(
                 "[%s] OrquestradorEstrela: %s (agent_id=%s) returned %d despesas, %d indicadores",
                 self.agent_id,
@@ -406,10 +480,14 @@ class OrquestradorEstrela(AgenteCoALA):
         mc.start()
         try:
             log_start = len(self.neo4j_client.query_log)
-            result = agent.query(
+            result = self._delegar(
+                "orcamento_subfuncao", agent_id_str,
+                lambda: agent.query(
                 analysis_id, date_from, date_to,
                 intent_summary=self.working_memory.get("intent_summary"),
                 use_llm=self.working_memory.get("use_llm", True),
+            ),
+                pedido={"subfuncao": codigo, "periodo": [date_from, date_to]}, natureza_resposta="dados", extrair=None,
             )
             mc.stop()
             queries = self.neo4j_client.query_log[log_start:]
@@ -419,6 +497,9 @@ class OrquestradorEstrela(AgenteCoALA):
                 "queries": queries,
             })
             self.working_memory.setdefault("despesas", []).extend(result.get("despesas", []))
+            revisao_entregas.registrar_entrega(
+                self.working_memory, "orcamento_subfuncao", agent, result, campos=("despesas",)
+            )
             self.working_memory.setdefault("tendencias", {})[codigo] = result.get("tendencia", {})
             self.working_memory.setdefault("variacao_anual", {})[codigo] = result.get(
                 "variacao_anual", []
@@ -441,6 +522,25 @@ class OrquestradorEstrela(AgenteCoALA):
                 (agent_id_str, "orcamento_subfuncao", mc)
             )
             raise ActionFailure(action, str(exc)) from exc
+
+    def _act_revisar_entregas(self, action: dict) -> None:
+        """Ação interna (reasoning): revisa as entregas dos agentes de dados.
+
+        O orquestrador recebe as entregas de todos os agentes de saúde e de
+        orçamento, então as revisa numa única chamada ao LLM, com todo esse
+        contexto junto (`agents/revisao_entregas.py`). Valores sinalizados
+        são contestados por reenvio do agente de origem. Roda antes de
+        `capturar_wallclock`: o tempo entra no relógio e, por não ser de
+        agente-folha, no custo de coordenação. Uma falha aqui deixa os
+        dados como chegaram.
+        """
+        self._deliberar(
+            revisao_entregas.revisar_memoria_do_no,
+            self.working_memory,
+            revisor="orquestrador_estrela",
+            caller=f"{self.agent_id}:revisar_entregas",
+            no=self,
+        )
 
     def _act_cruzar_dados(self, action: dict) -> None:
         """Ação interna (reasoning): deduplica e cruza despesas × indicadores (Req 9.4)."""
@@ -573,8 +673,12 @@ class OrquestradorEstrela(AgenteCoALA):
             intent_summary = self.working_memory.get("intent_summary")
             use_llm = self.working_memory.get("use_llm", True)
 
-            achados_priorizados = agente_priorizacao.prioritize(
+            achados_priorizados = self._delegar(
+                "priorizacao", prior_id,
+                lambda: agente_priorizacao.prioritize(
                 correlacoes, anomalias, contexto_orcamentario, intent_summary, use_llm=use_llm
+            ),
+                pedido={"correlacoes": correlacoes, "anomalias": anomalias}, natureza_resposta="dados", extrair=None,
             )
             mc.stop()
             self.working_memory["achados_priorizados"] = achados_priorizados
@@ -639,6 +743,10 @@ class OrquestradorEstrela(AgenteCoALA):
                         date_from=date_from,
                         date_to=date_to,
                         pergunta_usuario=pergunta_usuario,
+                        series=linhas_series(
+                            self.working_memory.get("despesas", []),
+                            self.working_memory.get("indicadores", []),
+                        ),
                     )
                     texto_analise = adapter.stream_tokens(token_gen)
                     if not texto_analise:
@@ -768,6 +876,7 @@ class OrquestradorEstrela(AgenteCoALA):
                     m = mc.collect()
                     agent_metrics.append({
                         "agentName": agent_type,
+                        "papel": papel_de(agent_type),
                         "executionTimeMs": m["executionTimeMs"],
                         "cpuPercent": m["cpuPercent"],
                     })
@@ -779,10 +888,15 @@ class OrquestradorEstrela(AgenteCoALA):
             orch_end = self.working_memory.get("_orch_end", time.time())
             wall_clock_ms = round((orch_end - orch_start) * 1000, 2)
             overhead_ms = round(max(0, wall_clock_ms - workers_time_ms), 2)
+            # Parte do overhead gasta esperando o LLM do orquestrador
+            # (planejamento e revisão); o restante é custo estrutural.
+            deliberacao_ms = round(min(self.deliberacao_ms, overhead_ms), 2)
 
             agent_metrics.append({
                 "agentName": "orquestrador_estrela",
+                "papel": "agente",
                 "executionTimeMs": overhead_ms,
+                "deliberacaoMs": deliberacao_ms,
                 "cpuPercent": 0.0,
             })
 
@@ -796,6 +910,7 @@ class OrquestradorEstrela(AgenteCoALA):
                     "totalExecutionTimeMs": wall_clock_ms,
                     "workersTimeMs": round(workers_time_ms, 2),
                     "overheadTimeMs": overhead_ms,
+                    "deliberationTimeMs": deliberacao_ms,
                     "agentMetrics": agent_metrics,
                 },
             })
@@ -861,8 +976,12 @@ class OrquestradorEstrela(AgenteCoALA):
             "despesas": [],
             "indicadores": [],
             "_collectors": [],
+            "_entregas": [],
         })
 
+        # Registro das trocas com os agentes desta topologia (FIPA-ACL).
+        self.registro_mensagens = []
+        self.deliberacao_ms = 0.0
         self.run_coala_cycle()
 
         result = {
@@ -876,6 +995,17 @@ class OrquestradorEstrela(AgenteCoALA):
             "data_coverage": self.working_memory.get("data_coverage", {}),
             "self_check": self.working_memory.get("self_check"),
             "agent_queries": self.working_memory.get("agent_queries", []),
+            "revisao": self.working_memory.get(
+                "revisao", revisao_entregas.resumo_vazio(["orquestrador_estrela"])
+            ),
+            # Do início do run() até o texto final, redação incluída — o
+            # tempo de parede do evento `metric` para antes da redação.
+            "mensagens": list(self.registro_mensagens),
+            "plano": self.working_memory.get("plano", {}),
+            "redacao": {"modo": "unica"},
+            "tempo_total_ms": round(
+                (time.time() - self.working_memory["_orch_start"]) * 1000, 1
+            ),
         }
 
         self.working_memory["result"] = result

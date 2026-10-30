@@ -47,11 +47,10 @@ ALL_HEALTH_PARAMS = ["dengue", "covid", "internacoes", "vacinacao", "mortalidade
 SUBFUNCOES = [301, 302, 303, 304, 305]
 
 # ALL_HEALTH_PARAMS ativa 5 agentes de saúde (covid, sih, sipni, sim,
-# sinan) — cada um consulta um nº fixo de subtipos por ano. sinan
-# consulta os 9 subtipos SINAN de uma vez, covid os 2 (casos+obitos),
-# sipni os 2 (cobertura_vacinal+doses_aplicadas) — nenhum é filtrável
-# por health_params nesta fase (ver agents/domain/agente_*.py).
-INDICADORES_POR_ANO = 1 + 2 + 2 + 1 + 9  # sih+covid+sipni+sim(mortalidade)+9 SINAN
+# sinan), e cada um consulta só os subtipos pedidos
+# (`data_crossing.subtipos_pedidos`): sinan só dengue, covid os 2
+# (casos+obitos), sipni os 2 (cobertura_vacinal+doses_aplicadas).
+INDICADORES_POR_ANO = 1 + 2 + 2 + 1 + 1  # sih+covid+sipni+sim(mortalidade)+dengue
 
 
 def _synthetic_neo4j_client(n_years: int) -> MagicMock:
