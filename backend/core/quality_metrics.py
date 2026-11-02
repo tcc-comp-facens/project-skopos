@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,31 @@ def compute_deterministic_consistency(
     }
 
 
+def _normalizar(texto: str) -> str:
+    """Minúsculas, sem acento e com "_" lido como espaço, para comparar o
+    texto do redator com os identificadores dos achados (o tipo
+    "internacoes" precisa casar com "internações" e "cobertura_vacinal"
+    com "cobertura vacinal")."""
+    decomposto = unicodedata.normalize("NFKD", texto)
+    sem_acento = "".join(c for c in decomposto if not unicodedata.combining(c))
+    return sem_acento.lower().replace("_", " ")
+
+
+def _nomes_subfuncao(codigo: int) -> list[str]:
+    """Nomes normalizados pelos quais o texto pode citar uma subfunção.
+
+    Além do nome técnico, aceita a tradução para linguagem comum que o
+    sintetizador manda usar (`TRADUCAO_SUBFUNCOES`), sem o "investimento
+    em" inicial e sem o parêntese, que o redator costuma omitir."""
+    from agents.analytical.sintetizador import TRADUCAO_SUBFUNCOES
+
+    nomes = [SUBFUNCAO_NOMES.get(codigo, str(codigo))]
+    traducao = TRADUCAO_SUBFUNCOES.get(codigo)
+    if traducao:
+        nomes.append(re.sub(r"^investimento em ", "", traducao).split(" (")[0])
+    return [_normalizar(n) for n in nomes]
+
+
 def compute_completeness(
     correlacoes: list[dict],
     anomalias: list[dict],
@@ -260,6 +286,13 @@ def compute_completeness(
     Diferente da fidelidade medida pelo RAGAS (que verifica se o que está
     no texto é sustentado pelos dados), completeness verifica se TUDO que
     deveria estar no texto está lá — e faz isso sem chamar o LLM.
+
+    A busca continua literal, mas sem acento e aceitando a tradução das
+    subfunções para linguagem comum (`_nomes_subfuncao`). Sem isso, um texto
+    que fala em "internações" ou em "hospitais e atendimentos
+    especializados", como o redator é instruído a fazer, contava como se
+    não citasse o achado. Mesmo assim a métrica não reconhece paráfrase
+    livre, e por isso é relatada apenas de forma descritiva.
 
     Args:
         correlacoes: Lista de correlações calculadas.
@@ -279,7 +312,7 @@ def compute_completeness(
             "details": {},
         }
 
-    texto_lower = texto.lower()
+    texto_norm = _normalizar(texto)
 
     # 1. Cobertura de correlações (todas, não só as fortes)
     corr_total = len(correlacoes)
@@ -287,11 +320,10 @@ def compute_completeness(
     for c in correlacoes:
         subfuncao = c.get("subfuncao", 0)
         tipo = c.get("tipo_indicador", "")
-        subfuncao_nome = SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao))
         if (
             str(subfuncao) in texto
-            or subfuncao_nome.lower() in texto_lower
-            or tipo.lower() in texto_lower
+            or any(n in texto_norm for n in _nomes_subfuncao(subfuncao))
+            or (tipo and _normalizar(tipo) in texto_norm)
         ):
             corr_found += 1
 
@@ -310,11 +342,10 @@ def compute_completeness(
         subfuncao = a.get("subfuncao", 0)
         tipo = a.get("tipo_indicador", "")
         ano = a.get("ano", 0)
-        subfuncao_nome = SUBFUNCAO_NOMES.get(subfuncao, str(subfuncao))
         if str(ano) in texto and (
             str(subfuncao) in texto
-            or subfuncao_nome.lower() in texto_lower
-            or (tipo and tipo.lower() in texto_lower)
+            or any(n in texto_norm for n in _nomes_subfuncao(subfuncao))
+            or (tipo and _normalizar(tipo) in texto_norm)
         ):
             anom_found += 1
 
@@ -322,13 +353,10 @@ def compute_completeness(
     ctx_total = len(contexto_orcamentario)
     ctx_found = 0
     for subfuncao_key in contexto_orcamentario:
-        subfuncao_nome = SUBFUNCAO_NOMES.get(
-            int(subfuncao_key) if str(subfuncao_key).isdigit() else 0,
-            str(subfuncao_key),
-        )
+        codigo = int(subfuncao_key) if str(subfuncao_key).isdigit() else 0
         if (
             str(subfuncao_key) in texto
-            or subfuncao_nome.lower() in texto_lower
+            or any(n in texto_norm for n in _nomes_subfuncao(codigo))
         ):
             ctx_found += 1
 

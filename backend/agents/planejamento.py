@@ -19,6 +19,15 @@ vem com uma justificativa curta. Assim nenhum agente fora da lista
 permitida é acionado, e toda diferença de dados entre as topologias fica
 rastreável até a decisão que a causou.
 
+Quem escolhe subfunções orçamentárias (o orquestrador e o supervisor de
+orçamento) recebe também o mapa de cruzamento, isto é, com quais
+indicadores pedidos cada subfunção cruza. Um plano que acrescente uma
+subfunção sem cruzamento com os indicadores do plano, ou que retire a
+última subfunção que cruzava com um indicador pedido, é recusado e vale a
+proposta. Sem isso o LLM decidia pelo nome da subfunção, consultava
+despesas que nunca entram no cruzamento (covid levava às sete subfunções)
+ou deixava um indicador pedido sem despesa para comparar.
+
 Na estrela, o orquestrador planeja numa única chamada, sobre todos os
 agentes de dados (planejamento centralizado). Na hierárquica, o
 planejamento é decomposto pelos níveis da árvore, como nos sistemas
@@ -51,6 +60,13 @@ REGRA_ESCOPO = (
     "indicador dele. Uma relação indireta com o tema da pergunta (por exemplo, uma "
     "doença que também gera internações, óbitos ou vacinação) não justifica "
     "acréscimo, porque mudaria a pergunta respondida. Na dúvida, mantenha a proposta."
+)
+
+REGRA_CRUZAMENTO = (
+    "A despesa de uma subfunção só é comparada com os indicadores com que ela cruza, "
+    "indicados na lista. Não acrescente subfunção que não cruze com nenhum indicador "
+    "pedido, e não retire a última subfunção que cruza com um indicador pedido, porque "
+    "esse indicador ficaria sem despesa para comparar."
 )
 
 
@@ -101,12 +117,26 @@ def catalogo_saude(chaves: list[str], indicador_to_agent: dict[str, str]) -> lis
     return catalogo
 
 
-def catalogo_orcamento(subfuncoes: list[tuple[int, str]]) -> list[dict[str, str]]:
-    """Catálogo dos agentes orçamentários, um por subfunção."""
-    return [
-        {"id": f"orcamento:{codigo}", "descricao": f"despesas da subfunção {codigo} ({nome})"}
-        for codigo, nome in subfuncoes
-    ]
+def catalogo_orcamento(
+    subfuncoes: list[tuple[int, str]],
+    cruzamentos: dict[str, set[str]] | None = None,
+    pedidos: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Catálogo dos agentes orçamentários, um por subfunção.
+
+    Com `cruzamentos` (id → indicadores com que a subfunção cruza) e
+    indicadores pedidos, cada descrição diz com quais deles a subfunção
+    cruza."""
+    catalogo = []
+    for codigo, nome in subfuncoes:
+        cid = f"orcamento:{codigo}"
+        descricao = f"despesas da subfunção {codigo} ({nome})"
+        if cruzamentos is not None and pedidos:
+            comuns = [p for p in pedidos if p in cruzamentos.get(cid, set())]
+            descricao += (f", cruza com os indicadores pedidos {', '.join(comuns)}" if comuns
+                          else ", não cruza com nenhum indicador pedido")
+        catalogo.append({"id": cid, "descricao": descricao})
+    return catalogo
 
 
 def plano_fixo(
@@ -141,6 +171,9 @@ def planejar(
     use_llm: bool,
     subobjetivos_padrao: dict[str, str] | None = None,
     observacoes: str = "",
+    cruzamentos: dict[str, set[str]] | None = None,
+    pedidos: list[str] | None = None,
+    fornece: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """Decide quais subordinados acionar.
 
@@ -158,6 +191,13 @@ def planejar(
             aqui; os que faltarem na resposta usam o padrão.
         observacoes: Restrições do nó que o LLM precisa saber (por exemplo,
             dependências entre ramos).
+        cruzamentos: Para cada id de subfunção, os indicadores (vocabulário
+            de `health_params`) com que ela cruza. Ativa a regra de
+            cruzamento, verificada em `_checar_cruzamentos`.
+        pedidos: Indicadores identificados na pergunta.
+        fornece: Para cada id de agente de saúde no catálogo, os indicadores
+            que ele traz. Só a estrela, onde o mesmo plano escolhe saúde e
+            orçamento, passa este mapa.
 
     Returns:
         Plano com "proposta", "escolhidos" (na ordem do catálogo),
@@ -175,10 +215,14 @@ def planejar(
     try:
         import core.llm_client as llm_client
 
+        if cruzamentos is not None and pedidos:
+            observacoes = f"{REGRA_CRUZAMENTO}\n{observacoes}".strip()
         prompt = _build_prompt(papel, objetivo, candidatos, proposta,
                                list(subobjetivos_padrao or {}), observacoes)
         raw = llm_client.generate(prompt, caller=f"{agent_id}:planejar")
         plano = _parse_plano(raw, ordem, proposta, subobjetivos_padrao)
+        if cruzamentos is not None:
+            _checar_cruzamentos(plano, cruzamentos, pedidos or [], fornece)
     except Exception as exc:
         logger.warning("Agent %s: planejamento via LLM falhou (%s), vale a proposta", agent_id, exc)
         return plano_fixo(agent_id, papel, objetivo, proposta, "llm_failed_fallback", padrao)
@@ -189,6 +233,37 @@ def planejar(
         len(plano["escolhidos"]), len(plano["acrescimos"]), len(plano["retiradas"]),
     )
     return plano
+
+
+def _checar_cruzamentos(
+    plano: dict[str, Any],
+    cruzamentos: dict[str, set[str]],
+    pedidos: list[str],
+    fornece: dict[str, set[str]] | None,
+) -> None:
+    """Recusa (ValueError) um plano que quebra a regra de cruzamento.
+
+    Os indicadores que contam são os pedidos e, na estrela, só os pedidos
+    cujo agente de saúde ficou no plano, mais os dos agentes de saúde que o
+    LLM acrescentou. Uma subfunção acrescentada precisa cruzar com algum
+    deles, e cada indicador pedido que cruzava com a proposta precisa
+    continuar cruzando com o plano."""
+    escolhidos = plano["escolhidos"]
+    acrescidos = {m["id"] for m in plano["acrescimos"]}
+    vivos = set(pedidos)
+    indicadores = set(vivos)
+    if fornece is not None:
+        no_plano = set().union(*(fornece.get(i, set()) for i in escolhidos))
+        vivos &= no_plano
+        indicadores = vivos | set().union(*(fornece.get(i, set()) for i in acrescidos))
+
+    for i in acrescidos:
+        if i in cruzamentos and not cruzamentos[i] & indicadores:
+            raise ValueError(f"'{i}' acrescentada sem cruzamento com os indicadores do plano")
+    for indicador in sorted(vivos):
+        cruzava = any(indicador in cruzamentos.get(i, set()) for i in plano["proposta"])
+        if cruzava and not any(indicador in cruzamentos.get(i, set()) for i in escolhidos):
+            raise ValueError(f"o indicador pedido '{indicador}' ficou sem subfunção para cruzar")
 
 
 def _build_prompt(

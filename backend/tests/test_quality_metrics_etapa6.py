@@ -153,6 +153,31 @@ class TestCompletenessAnomalyCoverage:
         assert result["anomalias_coverage"] == 1.0
 
 
+class TestCompletenessNormalizacao:
+    """A busca ignora acento e "_" e aceita a tradução das subfunções para
+    linguagem comum que o sintetizador manda usar."""
+
+    def test_acento_e_sublinhado_nao_impedem_a_cobertura(self):
+        correlacoes = [{"subfuncao": 999, "tipo_indicador": "internacoes"},
+                       {"subfuncao": 999, "tipo_indicador": "cobertura_vacinal"}]
+        texto = "As internações e a cobertura vacinal acompanharam o gasto."
+        result = compute_completeness(correlacoes, [], {}, texto)
+        assert result["details"]["correlacoes"] == {"found": 2, "total": 2}
+
+    def test_traducao_da_subfuncao_conta_como_citacao(self):
+        anomalias = [{"subfuncao": 302, "tipo_indicador": "obitos", "ano": 2021}]
+        texto = "Em 2021 o investimento em hospitais e atendimentos especializados subiu."
+        result = compute_completeness([], anomalias, {"302": {}}, texto)
+        assert result["details"]["anomalias"] == {"found": 1, "total": 1}
+        assert result["details"]["contexto"] == {"found": 1, "total": 1}
+
+    def test_parafrase_livre_continua_sem_contar(self):
+        correlacoes = [{"subfuncao": 302, "tipo_indicador": "internacoes"}]
+        texto = "O dinheiro dos hospitais andou junto com as hospitalizações."
+        result = compute_completeness(correlacoes, [], {}, texto)
+        assert result["details"]["correlacoes"]["found"] == 0
+
+
 class TestComputeAnalysisSuccess:
     def _resultado_completo(self, **overrides):
         base = {

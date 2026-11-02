@@ -189,6 +189,15 @@ _SUBFUNCAO_TOKENS: dict[int, set[str]] = {
 _MORTALIDADE_SUBFUNCOES: set[int] = {301, 302, 303, 305}
 _MORTALIDADE_TOKENS: set[str] = _tokens_for_agent("sim")
 
+# Indicadores (vocabulário de health_params) com que cada subfunção cruza,
+# pela mesma regra de `_subfuncao_ativa`. O planejamento por LLM usa este
+# mapa para não acrescentar subfunção sem cruzamento nem retirar o único
+# cruzamento de um indicador pedido (ver agents/planejamento.py).
+_CRUZAMENTOS: dict[str, set[str]] = {
+    f"orcamento:{codigo}": tokens | (_MORTALIDADE_TOKENS if codigo in _MORTALIDADE_SUBFUNCOES else set())
+    for codigo, tokens in _SUBFUNCAO_TOKENS.items()
+}
+
 
 def _subfuncao_ativa(codigo: int, health_params: set[str]) -> bool:
     """Decide se a subfunção orçamentária deve ser consultada nesta
@@ -340,9 +349,10 @@ class OrquestradorEstrela(AgenteCoALA):
             else f"orcamento:{c['subfuncao_codigo']}"
             for c in candidates if c["goal"] in coleta
         ]
+        health_params = self.working_memory.get("health_params")
         catalogo = planejamento.catalogo_saude(
             _SAUDE_AGENT_KEY_ORDER, self.semantic_memory["indicador_to_agent"]
-        ) + planejamento.catalogo_orcamento(_ORCAMENTO_SUBFUNCOES)
+        ) + planejamento.catalogo_orcamento(_ORCAMENTO_SUBFUNCOES, _CRUZAMENTOS, health_params)
         plano = self._deliberar(
             planejamento.planejar,
             agent_id=self.agent_id,
@@ -357,6 +367,9 @@ class OrquestradorEstrela(AgenteCoALA):
             proposta=proposta,
             use_llm=self.working_memory.get("use_llm", True),
             observacoes=planejamento.OBS_CRUZAMENTO,
+            cruzamentos=_CRUZAMENTOS,
+            pedidos=health_params,
+            fornece={f"saude:{k}": _tokens_for_agent(k) for k in _SAUDE_AGENT_KEY_ORDER},
         )
         self.working_memory["plano"] = {"orquestrador": plano}
 

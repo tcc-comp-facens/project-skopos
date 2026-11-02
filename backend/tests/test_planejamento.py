@@ -91,6 +91,81 @@ class TestPlanejar:
         assert sem == planejamento.objetivo_da_analise("covid?", ["covid"], 2016, 2025)
 
 
+# Mini mapa de cruzamento: x cruza com dengue, y com dengue e covid, z com leitos.
+CATALOGO_ORC = [{"id": f"orcamento:{k}", "descricao": k} for k in ("x", "y", "z")]
+CRUZA = {"orcamento:x": {"dengue"}, "orcamento:y": {"dengue", "covid"}, "orcamento:z": {"leitos"}}
+
+
+def _planejar_orc(resposta, proposta, pedidos, catalogo=CATALOGO_ORC, **kw):
+    with patch("core.llm_client.generate", return_value=json.dumps(resposta)):
+        return planejamento.planejar(
+            agent_id="n", papel="p", objetivo="o", candidatos=catalogo, proposta=proposta,
+            use_llm=True, cruzamentos=CRUZA, pedidos=pedidos, **kw,
+        )
+
+
+class TestCruzamento:
+    """O planejador conhece o mapa de cruzamento: não acrescenta subfunção que
+    não cruza com nenhum indicador do plano nem retira o único cruzamento de um
+    indicador pedido."""
+
+    def test_catalogo_diz_com_que_indicadores_pedidos_cada_subfuncao_cruza(self):
+        cat = planejamento.catalogo_orcamento([(305, "Vig. Epid."), (122, "Adm.")],
+                                              {"orcamento:305": {"covid", "dengue"}}, ["covid"])
+        assert cat[0]["descricao"] == "despesas da subfunção 305 (Vig. Epid.), cruza com os indicadores pedidos covid"
+        assert cat[1]["descricao"].endswith("não cruza com nenhum indicador pedido")
+        sem = planejamento.catalogo_orcamento([(305, "Vig. Epid.")])
+        assert sem[0]["descricao"] == "despesas da subfunção 305 (Vig. Epid.)"
+
+    def test_prompt_traz_a_regra_quando_ha_indicadores_pedidos(self):
+        prompts = []
+        with patch("core.llm_client.generate", side_effect=lambda p, **k: prompts.append(p) or "{}"):
+            for pedidos in (["covid"], []):
+                planejamento.planejar(agent_id="n", papel="p", objetivo="o", candidatos=CATALOGO_ORC,
+                                      proposta=["orcamento:y"], use_llm=True, cruzamentos=CRUZA,
+                                      pedidos=pedidos)
+        assert planejamento.REGRA_CRUZAMENTO in prompts[0]
+        assert planejamento.REGRA_CRUZAMENTO not in prompts[1]
+
+    def test_acrescimo_sem_cruzamento_vale_a_proposta(self):
+        # o caso covid: a hierárquica acrescentava todas as subfunções
+        plano = _planejar_orc({"acrescentar": [{"id": "orcamento:x", "justificativa": "gasto da pandemia"}]},
+                              ["orcamento:y"], ["covid"])
+        assert plano["origem"] == "llm_failed_fallback" and plano["escolhidos"] == ["orcamento:y"]
+
+    def test_acrescimo_que_cruza_com_indicador_pedido_e_aceito(self):
+        plano = _planejar_orc({"acrescentar": [{"id": "orcamento:x", "justificativa": "dengue"}]},
+                              ["orcamento:y"], ["dengue"])
+        assert plano["origem"] == "llm" and plano["escolhidos"] == ["orcamento:x", "orcamento:y"]
+
+    def test_retirar_o_unico_cruzamento_vale_a_proposta(self):
+        plano = _planejar_orc({"retirar": [{"id": "orcamento:z", "justificativa": "irrelevante"}]},
+                              ["orcamento:y", "orcamento:z"], ["covid", "leitos"])
+        assert plano["origem"] == "llm_failed_fallback"
+        assert plano["escolhidos"] == ["orcamento:y", "orcamento:z"]
+
+    def test_retirar_mantendo_outro_cruzamento_e_aceito(self):
+        plano = _planejar_orc({"retirar": [{"id": "orcamento:x", "justificativa": "y basta"}]},
+                              ["orcamento:x", "orcamento:y"], ["dengue"])
+        assert plano["origem"] == "llm" and plano["escolhidos"] == ["orcamento:y"]
+
+    def test_estrela_conta_os_indicadores_dos_agentes_de_saude_do_plano(self):
+        catalogo = [{"id": "saude:cnes", "descricao": "CNES"}, {"id": "saude:sinan", "descricao": "SINAN"}]
+        catalogo += CATALOGO_ORC
+        fornece = {"saude:cnes": {"leitos"}, "saude:sinan": {"dengue"}}
+        # acrescentar o agente de saúde e a subfunção que cruza com ele é aceito
+        plano = _planejar_orc({"acrescentar": [{"id": "saude:cnes", "justificativa": "j"},
+                                               {"id": "orcamento:z", "justificativa": "j"}]},
+                              ["saude:sinan", "orcamento:x"], ["dengue"], catalogo, fornece=fornece)
+        assert plano["origem"] == "llm" and "orcamento:z" in plano["escolhidos"]
+        # sem o agente de saúde do indicador, a subfunção dele pode sair
+        plano = _planejar_orc({"retirar": [{"id": "saude:cnes", "justificativa": "j"},
+                                           {"id": "orcamento:z", "justificativa": "j"}]},
+                              ["saude:cnes", "saude:sinan", "orcamento:x", "orcamento:z"],
+                              ["dengue", "leitos"], catalogo, fornece=fornece)
+        assert plano["origem"] == "llm" and plano["escolhidos"] == ["saude:sinan", "orcamento:x"]
+
+
 @pytest.fixture
 def neo4j_client():
     client = MagicMock()
@@ -146,6 +221,24 @@ class TestNasTopologias:
         pedidos = [m for m in r["mensagens"] if m["performativa"] == "request" and m["remetente"] == "c"]
         assert any(m["natureza"] == "texto" and m["conteudo"] == "Trazer os casos de dengue." for m in pedidos)
         assert not any(m["destinatario"].startswith("hier-sup-contexto") for m in pedidos)
+
+    def test_supervisor_de_orcamento_nao_amplia_covid_para_todas_as_subfuncoes(self, neo4j_client):
+        todas = [{"id": f"orcamento:{c}", "justificativa": "pode ter gasto com covid"}
+                 for c in (122, 301, 302, 303, 304, 306)]
+
+        def gerar(prompt, caller="", **k):
+            if caller.endswith(":planejar") and "supervisor de orçamento" in prompt:
+                assert "subfunção 305 (Vigilância Epidemiológica), cruza com os indicadores pedidos covid" in prompt
+                return json.dumps({"acrescentar": todas})
+            if caller.endswith(":planejar"):
+                return "{}"
+            raise RuntimeError("sem LLM")
+
+        with patch("core.llm_client.generate", side_effect=gerar):
+            r = CoordenadorGeral("c", neo4j_client).run(
+                "a4", dict(PARAMS, health_params=["covid"], use_llm=True), Queue())
+        plano = r["plano"]["supervisor_orcamento"]
+        assert plano["origem"] == "llm_failed_fallback" and plano["escolhidos"] == ["orcamento:305"]
 
 
 def _metrica(fila: Queue) -> dict:

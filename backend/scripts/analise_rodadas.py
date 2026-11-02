@@ -72,7 +72,7 @@ METRICAS = [
 ]
 METRICAS_TESTE = [
     "wall_clock_ms", "tempo_total_ms", "total_tokens", "completion_tokens", "message_count",
-    "texto_analise_len", "completude", "ragas_faithfulness", "ragas_answer_relevancy",
+    "texto_analise_len", "ragas_faithfulness", "ragas_answer_relevancy",
     "fidelidade_numerica",
 ]
 

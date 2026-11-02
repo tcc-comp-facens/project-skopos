@@ -156,6 +156,15 @@ _SUBFUNCAO_TOKENS: dict[int, set[str]] = {
 _MORTALIDADE_SUBFUNCOES: set[int] = {301, 302, 303, 305}
 _MORTALIDADE_TOKENS: set[str] = _tokens_for_agent("sim")
 
+# Indicadores (vocabulário de health_params) com que cada subfunção cruza,
+# pela mesma regra de `_subfuncao_ativa`. O planejamento por LLM usa este
+# mapa para não acrescentar subfunção sem cruzamento nem retirar o único
+# cruzamento de um indicador pedido (ver agents/planejamento.py).
+_CRUZAMENTOS: dict[str, set[str]] = {
+    f"orcamento:{codigo}": tokens | (_MORTALIDADE_TOKENS if codigo in _MORTALIDADE_SUBFUNCOES else set())
+    for codigo, tokens in _SUBFUNCAO_TOKENS.items()
+}
+
 
 def _subfuncao_ativa(codigo: int, health_params: set[str]) -> bool:
     """Decide se a subfunção orçamentária deve ser consultada nesta
@@ -253,12 +262,16 @@ class SupervisorOrcamento(AgenteCoALA):
             agent_id=self.agent_id,
             papel="o supervisor de orçamento, que coordena um agente de despesas por subfunção",
             objetivo=self._objetivo(),
-            candidatos=planejamento.catalogo_orcamento(_ORCAMENTO_SUBFUNCOES),
+            candidatos=planejamento.catalogo_orcamento(
+                _ORCAMENTO_SUBFUNCOES, _CRUZAMENTOS, self.working_memory.get("health_params")
+            ),
             proposta=[
                 f"orcamento:{c['subfuncao_codigo']}" for c in candidates
                 if c["goal"] == "consultar_orcamento"
             ],
             use_llm=self.working_memory.get("use_llm", True),
+            cruzamentos=_CRUZAMENTOS,
+            pedidos=self.working_memory.get("health_params"),
         )
         self.working_memory["plano"] = plano
         nomes = dict(_ORCAMENTO_SUBFUNCOES)
