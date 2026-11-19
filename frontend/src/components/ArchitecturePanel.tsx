@@ -20,7 +20,8 @@ export function ArchitecturePanel({
   agentData,
 }: ArchitecturePanelProps) {
   const textBoxRef = useRef<HTMLDivElement>(null);
-  const isHier = title.toLowerCase().includes('hierárquica') || title.toLowerCase().includes('hierarquica');
+  const lowerTitle = title.toLowerCase();
+  const isHier = ['árvore', 'arvore', 'hierárquica', 'hierarquica'].some((t) => lowerTitle.includes(t));
 
   useEffect(() => {
     if (textBoxRef.current) {
@@ -71,16 +72,13 @@ export function ArchitecturePanel({
               <tr>
                 <th>Agente</th>
                 <th>Tempo (ms)</th>
-                <th>CPU (%)</th>
               </tr>
             </thead>
             <tbody>
               {benchmarks.agentMetrics?.map((agent, idx) => (
                 <tr key={agent.agentName || idx} data-testid={`agent-row-${agent.agentName || idx}`}>
                   <td>{agent.agentName || '—'}</td>
-                  <td>{agent.executionTimeMs ?? '—'}</td>
-                  <td>{agent.cpuPercent != null ? agent.cpuPercent.toFixed(1) : '—'}</td>
-                </tr>
+                  <td>{agent.executionTimeMs ?? '—'}</td>                </tr>
               ))}
             </tbody>
           </table>

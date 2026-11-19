@@ -26,7 +26,7 @@ export function ScoreCard({ id, label, starValue, hierValue }: ScoreCardProps): 
         <span className="score-card-value-star" title="Estrela">
           ⭐ {formatValue(starValue)}
         </span>
-        <span className="score-card-value-hier" title="Hierárquica">
+        <span className="score-card-value-hier" title="Árvore">
           🏛 {formatValue(hierValue)}
         </span>
       </div>

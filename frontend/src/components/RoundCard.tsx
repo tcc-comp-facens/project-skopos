@@ -23,7 +23,7 @@ function formatTime(iso: string): string {
 
 const WINNER_LABEL: Record<'star' | 'hierarchical', string> = {
   star: '⭐ Estrela',
-  hierarchical: '🏛 Hierárquica',
+  hierarchical: '🏛 Árvore',
 };
 
 /**

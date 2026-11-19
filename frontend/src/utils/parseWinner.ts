@@ -32,7 +32,7 @@ export function parseWinner(report: string): WinnerArchitecture {
   if (lastArrow) {
     const lower = lastArrow.toLowerCase();
     if (lower.includes('estrela')) return 'star';
-    if (lower.includes('hierárquica') || lower.includes('hierarquica')) {
+    if (['árvore', 'arvore', 'hierárquica', 'hierarquica'].some((t) => lower.includes(t))) {
       return 'hierarchical';
     }
   }

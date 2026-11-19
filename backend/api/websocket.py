@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ARCH_LABELS = [("star", "★ Estrela"), ("hierarchical", "◆ Hierárquica")]
+ARCH_LABELS = [("star", "★ Estrela"), ("hierarchical", "◆ Árvore")]
 
 # Rótulos legíveis das métricas da RAGAS, na ordem dos três aspectos de
 # qualidade do paper (Es et al., 2024): fidelidade, relevância da

@@ -18,7 +18,7 @@ export function RoundDetail({ snapshot }: RoundDetailProps): JSX.Element {
     <div className="round-detail" data-testid="round-detail">
       <div className="panels-container" data-testid="panels-container">
         <ArchitecturePanel
-          title="Hierárquica"
+          title="Árvore"
           text={snapshot.hierText}
           benchmarks={snapshot.hierBenchmarks}
           isLoading={snapshot.hierLoading}

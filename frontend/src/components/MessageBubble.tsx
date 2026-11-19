@@ -36,7 +36,7 @@ export function MessageBubble({ message }: MessageBubbleProps): JSX.Element {
         <span
           className={`message-bubble-winner-badge ${message.architecture}`}
           data-testid="message-bubble-winner-badge"
-          aria-label={message.architecture === 'star' ? 'Arquitetura Estrela' : 'Arquitetura Hierárquica'}
+          aria-label={message.architecture === 'star' ? 'Arquitetura Estrela' : 'Arquitetura Árvore'}
         >
           {message.architecture === 'star' ? '⭐' : '🏛'}
         </span>
